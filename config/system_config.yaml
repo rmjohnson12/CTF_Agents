@@ -1,0 +1,71 @@
+# System Configuration
+
+system:
+  name: "CTF Multi-Agent System"
+  version: "1.0.0"
+  environment: "development"  # development, staging, production
+  
+  # Concurrent challenge limits
+  max_concurrent_challenges: 5
+  max_agents_per_challenge: 3
+  
+  # Logging configuration
+  log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_format: "json"  # json, text
+  
+  # Timeouts (in seconds)
+  challenge_timeout: 1800  # 30 minutes
+  agent_response_timeout: 300  # 5 minutes
+  tool_execution_timeout: 600  # 10 minutes
+
+coordinator:
+  # Coordinator agent settings
+  strategy: "hierarchical"  # hierarchical, collaborative, competitive
+  decision_threshold: 0.7  # Minimum confidence to proceed
+  max_retries: 3
+  enable_parallel_solving: true
+  
+  # Agent selection
+  prefer_specialists: true
+  allow_multi_agent: true
+  support_agent_threshold: 0.5
+
+agents:
+  # Global agent settings
+  heartbeat_interval: 30  # seconds
+  status_report_interval: 60  # seconds
+  
+  # Resource limits per agent
+  max_memory_mb: 2048
+  max_cpu_percent: 80
+  max_processes: 10
+
+performance:
+  # Performance and optimization
+  enable_caching: true
+  cache_ttl: 3600  # seconds
+  parallel_execution: true
+  max_threads: 10
+  enable_learning: true
+  
+communication:
+  # Message queue settings
+  queue_type: "memory"  # memory, redis, rabbitmq
+  max_queue_size: 1000
+  message_retention: 86400  # 24 hours in seconds
+
+knowledge_base:
+  # Knowledge base configuration
+  storage_type: "sqlite"  # sqlite, postgresql, mongodb
+  enable_versioning: true
+  auto_backup: true
+  backup_interval: 3600  # seconds
+
+security:
+  # Security settings
+  enable_sandboxing: true
+  network_isolation: true
+  file_system_isolation: true
+  allowed_networks:
+    - "ctf.local"
+    - "localhost"

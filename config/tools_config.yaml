@@ -1,0 +1,195 @@
+# Tools Configuration
+
+# Web Exploitation Tools
+web:
+  dirb:
+    enabled: true
+    path: "/usr/bin/dirb"
+    timeout: 300
+    wordlist: "shared/wordlists/web/common.txt"
+    
+  sqlmap:
+    enabled: true
+    path: "/usr/bin/sqlmap"
+    timeout: 600
+    options:
+      - "--batch"
+      - "--random-agent"
+      
+  burpsuite:
+    enabled: false
+    api_url: "http://localhost:8080"
+    api_key: "${BURP_API_KEY}"
+    
+  nikto:
+    enabled: true
+    path: "/usr/bin/nikto"
+    timeout: 300
+
+# Cryptography Tools
+crypto:
+  john:
+    enabled: true
+    path: "/usr/sbin/john"
+    timeout: 600
+    wordlist: "shared/wordlists/passwords/rockyou.txt"
+    
+  hashcat:
+    enabled: true
+    path: "/usr/bin/hashcat"
+    timeout: 600
+    
+  openssl:
+    enabled: true
+    path: "/usr/bin/openssl"
+    
+  sage:
+    enabled: false
+    path: "/usr/bin/sage"
+
+# Reverse Engineering Tools
+reverse:
+  ghidra:
+    enabled: false
+    path: "/opt/ghidra/ghidraRun"
+    headless: true
+    
+  radare2:
+    enabled: true
+    path: "/usr/bin/r2"
+    
+  ida:
+    enabled: false
+    path: "/opt/ida/idat"
+    
+  gdb:
+    enabled: true
+    path: "/usr/bin/gdb"
+    plugins:
+      - "peda"
+      - "pwndbg"
+      
+  objdump:
+    enabled: true
+    path: "/usr/bin/objdump"
+    
+  strings:
+    enabled: true
+    path: "/usr/bin/strings"
+
+# Forensics Tools
+forensics:
+  volatility:
+    enabled: true
+    path: "/usr/bin/volatility"
+    timeout: 600
+    
+  binwalk:
+    enabled: true
+    path: "/usr/bin/binwalk"
+    
+  foremost:
+    enabled: true
+    path: "/usr/bin/foremost"
+    
+  exiftool:
+    enabled: true
+    path: "/usr/bin/exiftool"
+    
+  wireshark:
+    enabled: true
+    path: "/usr/bin/tshark"  # Command-line version
+    
+  steghide:
+    enabled: true
+    path: "/usr/bin/steghide"
+
+# Binary Exploitation Tools
+binary:
+  pwntools:
+    enabled: true
+    python_module: "pwn"
+    
+  ropper:
+    enabled: true
+    path: "/usr/bin/ropper"
+    
+  checksec:
+    enabled: true
+    path: "/usr/bin/checksec"
+    
+  one_gadget:
+    enabled: true
+    path: "/usr/local/bin/one_gadget"
+
+# Network Tools
+network:
+  nmap:
+    enabled: true
+    path: "/usr/bin/nmap"
+    timeout: 300
+    options:
+      - "-T4"
+      
+  wireshark:
+    enabled: true
+    path: "/usr/bin/tshark"
+    
+  scapy:
+    enabled: true
+    python_module: "scapy"
+    
+  tcpdump:
+    enabled: true
+    path: "/usr/sbin/tcpdump"
+
+# Common Utilities
+common:
+  python:
+    enabled: true
+    path: "/usr/bin/python3"
+    version: "3.8+"
+    
+  bash:
+    enabled: true
+    path: "/bin/bash"
+    
+  curl:
+    enabled: true
+    path: "/usr/bin/curl"
+    
+  wget:
+    enabled: true
+    path: "/usr/bin/wget"
+    
+  git:
+    enabled: true
+    path: "/usr/bin/git"
+    
+  docker:
+    enabled: true
+    path: "/usr/bin/docker"
+    socket: "/var/run/docker.sock"
+
+# External APIs and Services
+external_services:
+  virustotal:
+    enabled: false
+    api_key: "${VIRUSTOTAL_API_KEY}"
+    rate_limit: 4  # requests per minute
+    
+  shodan:
+    enabled: false
+    api_key: "${SHODAN_API_KEY}"
+    
+  dehashed:
+    enabled: false
+    api_key: "${DEHASHED_API_KEY}"
+
+# Tool execution settings
+execution:
+  sandbox: true
+  network_access: "restricted"  # none, restricted, full
+  filesystem_access: "restricted"  # none, restricted, full
+  max_memory_mb: 1024
+  max_execution_time: 600  # seconds

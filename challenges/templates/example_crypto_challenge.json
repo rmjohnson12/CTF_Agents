@@ -1,0 +1,32 @@
+{
+  "id": "crypto_001",
+  "name": "Example Crypto Challenge",
+  "category": "crypto",
+  "difficulty": "easy",
+  "description": "Decrypt the following message: 'Khoor Zruog'. It seems to be encrypted with a simple cipher.",
+  "points": 100,
+  "files": [
+    "challenges/active/crypto_001/encrypted.txt"
+  ],
+  "hints": [
+    "This is a classic substitution cipher",
+    "Try shifting the letters"
+  ],
+  "tags": [
+    "crypto",
+    "classical",
+    "caesar"
+  ],
+  "url": null,
+  "connection_info": null,
+  "status": "active",
+  "assigned_agents": [],
+  "start_time": null,
+  "completion_time": null,
+  "flag": null,
+  "metadata": {
+    "author": "CTF Team",
+    "created_date": "2024-01-01",
+    "cipher_type": "caesar"
+  }
+}

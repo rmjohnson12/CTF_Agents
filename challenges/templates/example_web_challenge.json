@@ -1,0 +1,32 @@
+{
+  "id": "web_001",
+  "name": "Example Web Challenge",
+  "category": "web",
+  "difficulty": "medium",
+  "description": "Find the hidden flag in this web application. The application has a login page and user profile section.",
+  "points": 200,
+  "files": [
+    "challenges/active/web_001/app.zip"
+  ],
+  "hints": [
+    "Look for SQL injection vulnerabilities",
+    "Check for authentication bypass techniques"
+  ],
+  "tags": [
+    "web",
+    "sqli",
+    "authentication"
+  ],
+  "url": "http://challenge.ctf.local:8080",
+  "connection_info": null,
+  "status": "active",
+  "assigned_agents": [],
+  "start_time": null,
+  "completion_time": null,
+  "flag": null,
+  "metadata": {
+    "author": "CTF Team",
+    "created_date": "2024-01-01",
+    "container": "docker-web-001"
+  }
+}

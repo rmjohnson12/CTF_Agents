@@ -1,0 +1,145 @@
+# Agent Configuration
+
+specialists:
+  web_exploitation:
+    agent_id: "web_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - sql_injection
+      - xss
+      - csrf
+      - ssrf
+      - file_inclusion
+      - command_injection
+      - authentication_bypass
+      - directory_traversal
+    max_concurrent_tasks: 2
+    
+  cryptography:
+    agent_id: "crypto_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - classical_ciphers
+      - modern_encryption
+      - hash_cracking
+      - encoding
+      - rsa
+      - aes
+      - digital_signatures
+    max_concurrent_tasks: 3
+    
+  reverse_engineering:
+    agent_id: "reverse_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - binary_analysis
+      - disassembly
+      - decompilation
+      - debugging
+      - obfuscation_removal
+      - malware_analysis
+    max_concurrent_tasks: 2
+    
+  forensics:
+    agent_id: "forensics_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - memory_analysis
+      - disk_forensics
+      - network_analysis
+      - steganography
+      - file_carving
+      - metadata_analysis
+    max_concurrent_tasks: 2
+    
+  binary_exploitation:
+    agent_id: "binary_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - buffer_overflow
+      - rop_chains
+      - shellcode
+      - format_string
+      - heap_exploitation
+      - race_conditions
+    max_concurrent_tasks: 2
+    
+  osint:
+    agent_id: "osint_agent"
+    enabled: true
+    priority: 2
+    capabilities:
+      - social_media_analysis
+      - domain_enumeration
+      - email_harvesting
+      - metadata_extraction
+      - geolocation
+    max_concurrent_tasks: 3
+    
+  pwn:
+    agent_id: "pwn_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - exploit_development
+      - return_oriented_programming
+      - kernel_exploitation
+      - sandbox_escape
+    max_concurrent_tasks: 2
+    
+  misc:
+    agent_id: "misc_agent"
+    enabled: true
+    priority: 2
+    capabilities:
+      - general_problem_solving
+      - scripting
+      - automation
+      - data_analysis
+    max_concurrent_tasks: 3
+    
+  networking:
+    agent_id: "network_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - packet_analysis
+      - protocol_analysis
+      - network_scanning
+      - traffic_manipulation
+    max_concurrent_tasks: 2
+
+support:
+  reconnaissance:
+    agent_id: "recon_agent"
+    enabled: true
+    priority: 3
+    capabilities:
+      - port_scanning
+      - service_enumeration
+      - vulnerability_detection
+      - information_gathering
+    auto_invoke: true  # Automatically invoke for all challenges
+    
+  exploit_development:
+    agent_id: "exploit_dev_agent"
+    enabled: true
+    priority: 2
+    capabilities:
+      - exploit_writing
+      - payload_generation
+      - exploit_testing
+    
+  vulnerability_scanner:
+    agent_id: "vuln_scanner_agent"
+    enabled: true
+    priority: 2
+    capabilities:
+      - automated_scanning
+      - vulnerability_identification
+      - false_positive_filtering
