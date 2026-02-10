@@ -1,6 +1,4 @@
-"""
-Requirements for the CTF Multi-Agent System
-"""
+# Requirements for the CTF Multi-Agent System
 
 # Core dependencies
 pyyaml>=6.0
