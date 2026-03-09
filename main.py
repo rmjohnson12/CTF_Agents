@@ -2,13 +2,13 @@
 import json
 import sys
 from pathlib import Path
+from typing import List
+
 
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.specialists.cryptography.crypto_agent import CryptographyAgent
 from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
 
-
-from typing import List
 
 def main(argv: List[str]) -> int:
     if len(argv) < 2:

@@ -238,3 +238,32 @@ class BrowserSnapshotTool:
             html_path=str(html_path),
             json_path=str(json_path),
         )
+if __name__ == "__main__":
+    import json
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python tools/web/browser_snapshot_tool.py <url>")
+        raise SystemExit(2)
+
+    tool = BrowserSnapshotTool()
+    result = tool.snapshot(sys.argv[1])
+
+    print(json.dumps(
+        {
+            "title": result.title,
+            "final_url": result.final_url,
+            "http_status": result.http_status,
+            "links": len(result.links),
+            "forms": len(result.forms),
+            "cookies": len(result.cookies),
+            "script_srcs": len(result.script_srcs),
+            "hidden_inputs": len(result.hidden_inputs),
+            "artifacts": {
+                "screenshot_path": result.screenshot_path,
+                "html_path": result.html_path,
+                "json_path": result.json_path,
+            },
+        },
+        indent=2,
+    ))
