@@ -8,7 +8,9 @@ from agents.specialists.cryptography.crypto_agent import CryptographyAgent
 from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
 
 
-def main(argv: list[str]) -> int:
+from typing import List
+
+def main(args: List[str]):
     if len(argv) < 2:
         print("Usage: python main.py <challenge_json_path>")
         return 2

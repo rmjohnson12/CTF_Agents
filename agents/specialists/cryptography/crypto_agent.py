@@ -45,8 +45,7 @@ class CryptographyAgent(BaseAgent):
         Returns:
             Analysis results
         """
-        #description = challenge.get('description', '').lower()
-        #files = challenge.get('files', [])
+       
         description = challenge.get('description', '').lower()
         hints = " ".join(challenge.get('hints', [])).lower()
         metadata = challenge.get('metadata', {})
@@ -54,8 +53,6 @@ class CryptographyAgent(BaseAgent):
         
         # Detect cipher/encoding types
         cipher_types = []
-        #if any(keyword in description for keyword in ['caesar', 'shift', 'rot']):
-         #   cipher_types.append('caesar_cipher')
         if any(keyword in description for keyword in ['caesar', 'shift', 'rot']):
             cipher_types.append('caesar_cipher')
         if any(keyword in hints for keyword in ['shift', 'caesar']):
@@ -117,9 +114,6 @@ class CryptographyAgent(BaseAgent):
             chosen = None
             for shift, plain in candidates:
                 low = plain.lower()
-                #if (" " in plain) and any(v in low for v in [" a", " e", " i", " o", " u"]):
-                    #chosen = (shift, plain)
-                    #break
                 if "hello" in low or "world" in low:
                     chosen = (shift, plain)
                     break
