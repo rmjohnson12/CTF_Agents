@@ -1,13 +1,28 @@
 # CTF_Agents: Autonomous Security Operations
 
-**CTF_Agents** is an advanced, hierarchical multi-agent system designed to autonomously solve Capture The Flag (CTF) challenges. Unlike traditional linear scanners, this system uses an **iterative feedback loop** to reason about artifacts, execute complex tools, and adapt its strategy in real time.
+**CTF_Agents** is an advanced, iterative multi-agent system designed to autonomously solve Capture The Flag (CTF) challenges. Unlike traditional linear scanners, this system uses an **iterative feedback loop** to reason about artifacts, execute complex tools, and adapt its strategy in real time.
+
+## 🔥 Demo
+
+Example: Web → Forensics → Coding → Flag extraction (2 iterations)
+
+**[ROUTER]** target=web_agent action=run_agent  
+→ *Found embedded artifact*
+
+**[ROUTER]** target=forensics_agent action=run_agent  
+→ *Extracted data via binwalk/strings*
+
+**[ROUTER]** target=coding_agent action=run_agent  
+→ *Generated script → executed → corrected*
+
+✅ **Flag recovered:** `HTB{iterative_forensics_master}`
 
 This fork extends the original architecture with standardized tool execution, iterative coordination, deep forensics capabilities, and self-correcting code execution.
 
 ---
 
 ## 🧠 TL;DR
-An iterative, multi-agent CTF system that reasons → acts → observes → adapts → solves in real time.
+An iterative, multi-agent CTF system that reasons → acts → observes → adapts → solves (iteratively).
 
 ---
 
@@ -71,7 +86,7 @@ All external tools run through a unified `BaseTool` interface, providing:
 
 ## 🔥 What Makes This Different?
 
-Most "AI agent" systems follow a linear path:
+Most "AI agent" systems stop after one step:
 > call LLM → run tool → stop
 
 **This system follows a circular evolution:**
