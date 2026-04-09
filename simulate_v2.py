@@ -24,6 +24,8 @@ class SimulatedReasonerV2:
         cid = challenge["id"]
         if cid == "ambiguous_001":
             return ChallengeAnalysis("misc", 0.7, "Ambiguous: contains both web and crypto elements.", "web_agent", "run_agent", ["base64", "url"])
+        if cid == "sim_htb_001":
+            return ChallengeAnalysis("forensics", 0.9, "HTB Forensics task.", "forensics_agent", "run_agent", ["files"])
         if "forensics" in cid or challenge.get("category") == "forensics":
             return ChallengeAnalysis("forensics", 0.9, "Forensics task detected.", "forensics_agent", "run_agent", ["files"])
         return ChallengeAnalysis("misc", 0.5, "Unknown", "none", "stop", [])
@@ -32,6 +34,16 @@ class SimulatedReasonerV2:
         cid = challenge["id"]
         steps = self.step_counts.get(cid, 0)
         self.step_counts[cid] = steps + 1
+
+        if cid == "sim_htb_001":
+            if steps == 0:
+                return {
+                    "next_action": "run_agent",
+                    "target": "forensics_agent",
+                    "reasoning": "First, let's analyze the binary file for strings or metadata."
+                }
+            else:
+                return {"next_action": "stop", "reasoning": "Forensics analysis completed."}
 
         if cid == "ambiguous_001":
             if steps == 0:
@@ -101,5 +113,6 @@ if __name__ == "__main__":
     with open("challenges/active/sim_forensics_001.json", "w") as f:
         json.dump(forensics_challenge, f)
 
+    run_simulation("challenges/active/sim_htb_001.json")
     run_simulation("challenges/active/sim_forensics_001.json")
     run_simulation("challenges/templates/example_ambiguous_001.json")

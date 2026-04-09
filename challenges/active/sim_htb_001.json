@@ -1,0 +1,9 @@
+{
+  "id": "sim_htb_001",
+  "name": "Iterative HTB Challenge",
+  "category": "forensics",
+  "difficulty": "medium",
+  "description": "We found an interesting file. Can you find the flag hidden inside?",
+  "files": ["challenges/active/sim_htb_001/data.bin"],
+  "metadata": {}
+}

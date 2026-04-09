@@ -55,10 +55,12 @@ def test_coding_agent_self_correction_success():
     class MockFixReasoner:
         def __init__(self):
             self.calls = 0
+            self.captured_stdout = None
         def generate_script(self, challenge, task_description):
-            return "print('error')" # Initial bad script
-        def fix_script(self, challenge, script, error):
+            return "print('error_output')" # Initial bad script
+        def fix_script(self, challenge, script, error, stdout=None):
             self.calls += 1
+            self.captured_stdout = stdout
             return "print('CTF{fixed_flag}')" # Fixed script
 
     class MockFailingPythonTool:
@@ -68,7 +70,8 @@ def test_coding_agent_self_correction_success():
             self.calls += 1
             if "fixed_flag" in script_content:
                 return ToolResult(["python"], "CTF{fixed_flag}", "", 0, False, 0.1)
-            return ToolResult(["python"], "no flag here", "some error", 1, False, 0.1)
+            # Fail first time with some stdout
+            return ToolResult(["python"], "error_output", "some error", 1, False, 0.1)
 
     reasoner = MockFixReasoner()
     python_tool = MockFailingPythonTool()
@@ -80,4 +83,5 @@ def test_coding_agent_self_correction_success():
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{fixed_flag}"
     assert reasoner.calls == 1
+    assert reasoner.captured_stdout == "error_output"
     assert python_tool.calls == 2 # 1 fail, 1 success after fix

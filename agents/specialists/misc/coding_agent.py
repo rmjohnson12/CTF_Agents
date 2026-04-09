@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentType
 from tools.common.python_tool import PythonTool
 from core.decision_engine.llm_reasoner import LLMReasoner
+from core.utils.flag_utils import find_first_flag
 import re
 
 class CodingAgent(BaseAgent):
@@ -85,36 +86,38 @@ class CodingAgent(BaseAgent):
 
         for attempt in range(max_retries + 1):
             if attempt > 0:
-                steps.append(f"Attempt {attempt + 1}: Fixing script based on previous error...")
-                script_content = self.reasoner.fix_script(challenge, script_content, last_error)
+                steps.append(f"Attempt {attempt + 1}: Fixing script based on previous failure...")
+                script_content = self.reasoner.fix_script(challenge, script_content, last_error, last_stdout)
 
             steps.append(f"Executing script (Attempt {attempt + 1})...")
+            last_stdout = None
             try:
                 res = self.python_tool.run(script_content)
+                last_stdout = res.stdout
                 
                 if res.timed_out:
                     last_error = "Execution timed out."
                     steps.append(f"  {last_error}")
                 
                 if res.stdout:
-                    # steps.append(f"Stdout: {res.stdout[:500]}") # Too noisy for all attempts?
-                    # Simple flag detection in stdout
-                    flag_match = re.search(r"CTF\{[^}]+\}", res.stdout)
-                    if flag_match:
-                        flag = flag_match.group(0)
+                    # Centralized flag detection
+                    found_flag = find_first_flag(res.stdout)
+                    if found_flag:
+                        flag = found_flag
                         steps.append(f"  Found flag in stdout: {flag}")
                         break
                 
                 if res.stderr:
                     last_error = res.stderr
                     steps.append(f"  Stderr: {res.stderr[:200]}")
+                elif not res.stdout:
+                    last_error = "Script produced no output."
+                    steps.append(f"  {last_error}")
                 else:
-                    last_error = "Script executed but no flag found and no error message."
+                    last_error = "Script executed successfully but no flag was found in stdout."
+                    steps.append("  No flag detected in output.")
 
-                if res.exit_code == 0:
-                    if flag: break
-                    steps.append("  Script executed successfully but no flag detected.")
-                else:
+                if res.exit_code != 0:
                     steps.append(f"  Script failed with exit code {res.exit_code}")
 
             except Exception as e:

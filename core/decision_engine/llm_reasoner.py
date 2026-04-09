@@ -90,29 +90,38 @@ Return ONLY the Python code, with no explanation or markdown blocks.
 """
         return self._call_llm(prompt)
 
-    def fix_script(self, challenge: Dict[str, Any], script: str, error: str) -> str:
+    def fix_script(self, challenge: Dict[str, Any], script: str, error: str, stdout: Optional[str] = None) -> str:
         """
         Use the LLM to fix a Python script that failed.
         """
         if self.client is None:
             return script
 
+        # Provide workspace context (available files)
+        files = challenge.get("files", [])
+        workspace_context = f"Available files in workspace: {', '.join(files)}" if files else "No files provided in challenge context."
+
         prompt = f"""
 You are an expert CTF player and Python programmer.
-The following Python script failed with an error. Please fix it.
+The following Python script failed to solve the challenge. Please fix it.
 
 Original Script:
 ```python
 {script}
 ```
 
-Error Message:
+Error Message / Reason for failure:
 {error}
+
+Stdout from previous attempt:
+{stdout if stdout else "None"}
+
+{workspace_context}
 
 Challenge Context:
 {json.dumps(challenge, indent=2)}
 
-Return ONLY the fixed Python code, with no explanation or markdown blocks.
+CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comments, or markdown blocks.
 """
         return self._call_llm(prompt)
 
