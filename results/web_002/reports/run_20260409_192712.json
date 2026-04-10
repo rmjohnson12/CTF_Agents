@@ -1,0 +1,30 @@
+{
+  "challenge_id": "web_002",
+  "agent_id": "coordinator",
+  "status": "solved",
+  "flag": null,
+  "steps": [
+    "Initial category guess: web",
+    "Initial confidence: 0.91",
+    "Iteration 1 reasoning: SQL injection likely.",
+    "Iteration 1 decision: run_tool -> tony_htb_sql",
+    "  [Exec] Dummy Tony adapter ran",
+    "Challenge solved!"
+  ],
+  "iterations": 1,
+  "history": [
+    {
+      "challenge_id": "web_002",
+      "agent_id": "tony_htb_sql",
+      "status": "solved",
+      "flag": null,
+      "steps": [
+        "Dummy Tony adapter ran"
+      ],
+      "routing": {
+        "selected_target": "tony_htb_sql",
+        "execution_type": "tool"
+      }
+    }
+  ]
+}

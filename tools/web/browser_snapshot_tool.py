@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 _WS_RE = re.compile(r"\s+")
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 DEFAULT_VIEWPORT = {"width": 1280, "height": 720}
 DEFAULT_USER_AGENT = (
@@ -27,6 +27,15 @@ def _truncate(s: str, n: int) -> str:
     if len(s) <= n:
         return s
     return s[:n] + "\n...[truncated]..."
+
+
+def _extract_title_from_html(html: str) -> str:
+    if not html:
+        return ""
+    match = _TITLE_RE.search(html)
+    if not match:
+        return ""
+    return _norm_ws(match.group(1))
 
 
 @dataclass
@@ -153,12 +162,11 @@ class BrowserSnapshotTool:
                 if cookies:
                     from urllib.parse import urlparse
                     parsed_url = urlparse(url)
-                    domain = parsed_url.netloc.split(':')[0] # strip port if present
+                    domain = parsed_url.netloc.split(':')[0]
                     for c in cookies:
                         nc = c.copy()
                         if 'domain' not in nc: nc['domain'] = domain
                         if 'path' not in nc: nc['path'] = '/'
-                        # remove 'url' if present as playwright prefers domain/path
                         if 'url' in nc: del nc['url']
                         processed_cookies.append(nc)
 
@@ -170,13 +178,23 @@ class BrowserSnapshotTool:
                 resp = page.goto(url, wait_until=wait_until, timeout=timeout_s * 1000)
                 if resp is not None: status = int(resp.status)
 
+                # Wait for core DOM content, then a small settle
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=timeout_s * 1000)
+                except:
+                    pass
                 page.wait_for_timeout(1000) 
+
                 captured_cookies = context.cookies()
                 script_srcs = page.eval_on_selector_all("script[src]", "els => els.map(s => s.src).filter(Boolean)")
                 hidden_inputs = page.eval_on_selector_all("input[type=hidden]", "els => els.map(i => ({name: i.name || '', id: i.id || '', value: i.value || ''}))")
                 final_url = page.url
                 title = page.title()
+                
                 html_content = page.content()
+                if not title:
+                    title = _extract_title_from_html(html_content)
+
                 html_path.write_text(html_content, encoding="utf-8")
                 page.screenshot(path=str(screenshot_path), full_page=True)
 
@@ -287,11 +305,17 @@ class BrowserSnapshotTool:
                     else: page.keyboard.press("Enter")
                 except: page.keyboard.press("Enter")
 
-                page.wait_for_load_state(wait_until, timeout=5000)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                except:
+                    pass
                 page.wait_for_timeout(1000)
                 final_url = page.url
                 title = page.title()
                 html_content = page.content()
+                if not title:
+                    title = _extract_title_from_html(html_content)
+
                 html_path.write_text(html_content, encoding="utf-8")
                 page.screenshot(path=str(screenshot_path), full_page=True)
                 captured_cookies = context.cookies()
