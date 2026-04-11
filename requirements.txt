@@ -52,7 +52,7 @@ python-magic>=0.4.27  # File type detection
 pwntools>=4.11.0
 z3-solver>=4.12.0
 capstone>=5.0.0  # Disassembly
-keystone-engine>=0.9.2  # Assembly
+# keystone-engine>=0.9.2  # Assembly (Disabled: build fails on Python 3.13)
 unicorn>=2.0.0  # CPU emulation
 
 # Optional: ML/AI
