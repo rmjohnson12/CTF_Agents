@@ -42,11 +42,8 @@ class CoordinatorAgent(BaseAgent):
         tony_sql_adapter: Optional[Any] = None,
         llm_client: Optional[Any] = None,
         max_iterations: int = 5,
-<<<<<<< Updated upstream
         broker: Optional[MessageBroker] = None,
-=======
         knowledge_store: Optional[KnowledgeStore] = None,
->>>>>>> Stashed changes
     ):
         ks = knowledge_store or KnowledgeStore()
         super().__init__(agent_id, AgentType.COORDINATOR, knowledge_store=ks)
@@ -60,11 +57,8 @@ class CoordinatorAgent(BaseAgent):
         self.reasoner = LLMReasoner(client=llm_client)
         self.max_iterations = max_iterations
         self.result_manager = ResultManager()
-<<<<<<< Updated upstream
         self.broker = broker or MessageBroker()
-=======
         self.task_queue = TaskQueue()
->>>>>>> Stashed changes
 
     def register_agent(self, agent: BaseAgent):
         """Register a specialist or support agent with the coordinator."""
@@ -128,6 +122,31 @@ class CoordinatorAgent(BaseAgent):
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         futures = {}
 
+        def record_completed_future(f, step_prefix: str) -> Optional[Dict[str, Any]]:
+            task_info = futures.pop(f)
+            task_id = task_info["task_id"]
+            try:
+                result = f.result()
+                self.task_queue.complete_task(task_id, result)
+                history.append(result)
+                if result.get("steps"):
+                    all_steps.extend([f"  [{step_prefix}] {s}" for s in result["steps"]])
+
+                self._publish_result(result)
+                if result.get("artifacts"):
+                    self._publish_knowledge(challenge_id, result["artifacts"])
+
+                if result.get("status") == "solved" or result.get("flag"):
+                    final_result["status"] = "solved"
+                    final_result["flag"] = result.get("flag")
+                    all_steps.append(f"Challenge solved by task {task_id}!")
+                    return final_result
+            except Exception as e:
+                all_steps.append(f"Task {task_id} failed: {e}")
+                self.task_queue.fail_task(task_id, str(e))
+
+            return None
+
         try:
             for i in range(self.max_iterations):
                 final_result["iterations"] = i + 1
@@ -137,22 +156,13 @@ class CoordinatorAgent(BaseAgent):
                     futures.keys(), timeout=0.1, return_when=concurrent.futures.FIRST_COMPLETED
                 )
                 for f in done:
-                    task_id = futures.pop(f)
-                    try:
-                        result = f.result()
-                        self.task_queue.complete_task(task_id, result)
-                        history.append(result)
-                        if result.get("steps"):
-                            all_steps.extend([f"  [Async Result] {s}" for s in result["steps"]])
-                        
-                        if result.get("status") == "solved" or result.get("flag"):
-                            final_result["status"] = "solved"
-                            final_result["flag"] = result.get("flag")
-                            all_steps.append(f"Challenge solved by async task {task_id}!")
-                            return final_result
-                    except Exception as e:
-                        all_steps.append(f"Async task {task_id} failed: {e}")
-                        self.task_queue.fail_task(task_id, str(e))
+                    completed_result = record_completed_future(f, "Async Result")
+                    if completed_result is not None:
+                        completed_result["steps"] = all_steps
+                        completed_result["history"] = history
+                        self.active_challenges.pop(challenge_id, None)
+                        self.result_manager.save_run_result(completed_result)
+                        return completed_result
 
                 decision = self.reasoner.choose_next_action(
                     challenge, 
@@ -171,6 +181,10 @@ class CoordinatorAgent(BaseAgent):
                     else:
                         all_steps.append("Reasoner requested to stop, but tasks are still running...")
                         continue
+
+                if any(info["action"] == action and info["target"] == target for info in futures.values()):
+                    all_steps.append(f"Waiting for in-flight task: {action} -> {target}")
+                    continue
 
                 task_id = f"{challenge_id}_step_{i+1}"
                 task = Task(
@@ -196,35 +210,31 @@ class CoordinatorAgent(BaseAgent):
                         agent_challenge['current_task_description'] = decision["inputs"]["task"]
                     
                     f = executor.submit(self._run_selected_agent, agent_challenge, target, [])
-                    futures[f] = task_id
+                    futures[f] = {"task_id": task_id, "action": action, "target": target}
                 elif action == "run_tool":
                     f = executor.submit(self._run_selected_tool, challenge, target, [])
-                    futures[f] = task_id
+                    futures[f] = {"task_id": task_id, "action": action, "target": target}
                 else:
                     all_steps.append(f"Unknown action: {action}")
                     self.task_queue.fail_task(task_id, f"Unknown action: {action}")
+                    continue
+
+                just_done, _ = concurrent.futures.wait([f], timeout=0.01)
+                if f in just_done:
+                    completed_result = record_completed_future(f, "Exec")
+                    if completed_result is not None:
+                        completed_result["steps"] = all_steps
+                        completed_result["history"] = history
+                        self.active_challenges.pop(challenge_id, None)
+                        self.result_manager.save_run_result(completed_result)
+                        return completed_result
 
             # Wait for any remaining tasks
             if futures:
                 all_steps.append(f"Waiting for {len(futures)} remaining tasks...")
                 done, _ = concurrent.futures.wait(futures.keys(), timeout=30)
                 for f in done:
-                    task_id = futures.pop(f)
-                    result = f.result()
-                    history.append(result)
-<<<<<<< Updated upstream
-                    if result.get("steps"):
-                        all_steps.extend([f"  [Exec] {s}" for s in result["steps"]])
-
-                    self._publish_result(result)
-                    if result.get("artifacts"):
-                        self._publish_knowledge(challenge_id, result["artifacts"])
-
-=======
->>>>>>> Stashed changes
-                    if result.get("status") == "solved" or result.get("flag"):
-                        final_result["status"] = "solved"
-                        final_result["flag"] = result.get("flag")
+                    record_completed_future(f, "Exec")
 
             self.active_challenges.pop(challenge_id, None)
             final_result["steps"] = all_steps

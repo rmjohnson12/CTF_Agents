@@ -1,4 +1,5 @@
 import pytest
+import time
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.base_agent import BaseAgent, AgentType, AgentStatus
 from typing import Dict, Any, List
@@ -23,6 +24,11 @@ class MockAgent(BaseAgent):
 
     def get_capabilities(self):
         return []
+
+class SlowMockAgent(MockAgent):
+    def solve_challenge(self, challenge):
+        time.sleep(1)
+        return super().solve_challenge(challenge)
 
 class MockReasoner:
     def __init__(self, decisions):
@@ -91,6 +97,25 @@ def test_coordinator_iterative_loop_stops_on_max_iterations():
     assert result["iterations"] == 3
     assert result["status"] == "attempted"
     assert agent1.solve_called == 3
+
+def test_coordinator_does_not_resubmit_same_in_flight_target():
+    decisions = [
+        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try slow agent"}
+    ] * 10
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent(max_iterations=3)
+    coordinator.reasoner = reasoner
+
+    agent1 = SlowMockAgent("agent_1", status_on_solve="attempted")
+    coordinator.register_agent(agent1)
+
+    challenge = {"id": "test_in_flight", "description": "test duplicate in-flight target"}
+    result = coordinator.solve_challenge(challenge)
+
+    assert result["iterations"] == 3
+    assert result["status"] == "attempted"
+    assert agent1.solve_called == 1
+    assert "Waiting for in-flight task: run_agent -> agent_1" in result["steps"]
 
 def test_coordinator_iterative_loop_stops_on_reasoner_stop():
     decisions = [

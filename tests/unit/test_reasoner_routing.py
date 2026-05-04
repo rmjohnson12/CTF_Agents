@@ -59,3 +59,24 @@ def test_reasoner_routes_web():
     assert analysis.category_guess == "web"
     assert analysis.recommended_target == "browser_snapshot"
     assert analysis.recommended_action == "run_tool"
+
+
+def test_reasoner_routes_auth_log_before_web_login():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "log_001",
+        "name": "Auth incident",
+        "category": "log",
+        "description": "Review this auth log and identify the suspicious login activity.",
+        "hints": [],
+        "tags": [],
+        "files": ["auth.log"],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "log"
+    assert analysis.recommended_target == "log_agent"
+    assert analysis.recommended_action == "run_agent"

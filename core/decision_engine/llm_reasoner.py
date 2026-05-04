@@ -42,9 +42,9 @@ class LLMReasoner:
             self.client = client
             self.model = model or "gpt-4o"
         else:
-<<<<<<< Updated upstream
             nvapi_key = os.getenv("NVAPI_KEY")
             openai_key = os.getenv("OPENAI_API_KEY")
+
             if nvapi_key:
                 self.client = OpenAI(
                     api_key=nvapi_key,
@@ -57,25 +57,6 @@ class LLMReasoner:
             else:
                 self.client = None
                 self.model = model or "none"
-=======
-            # Try OpenAI first
-            openai_key = os.getenv("OPENAI_API_KEY")
-            if openai_key:
-                self.client = OpenAI(api_key=openai_key)
-                self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
-            else:
-                # Fallback to NVIDIA NGC
-                ngc_key = os.getenv("NGC_API_KEY")
-                if ngc_key:
-                    self.client = OpenAI(
-                        base_url="https://integrate.api.nvidia.com/v1",
-                        api_key=ngc_key
-                    )
-                    self.model = model or "meta/llama-3.1-405b-instruct"
-                else:
-                    self.client = None
-                    self.model = model or "none"
->>>>>>> Stashed changes
 
     @property
     def is_available(self) -> bool:
@@ -124,24 +105,14 @@ class LLMReasoner:
 
     def _call_llm(self, prompt: str) -> str:
         try:
-<<<<<<< Updated upstream
+            if not self.client:
+                return ""
+
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.choices[0].message.content or ""
-=======
-            if not self.client:
-                return ""
-                
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=1024
-            )
-            return response.choices[0].message.content
->>>>>>> Stashed changes
         except Exception as e:
             print(f"[LLM ERROR] Falling back to heuristics: {e}")
             return ""
@@ -230,11 +201,7 @@ class LLMReasoner:
 
         # Priority 1: Reverse Engineering (Source/Binary analysis)
         if any(f.endswith('.py') or f.endswith('.exe') or f.endswith('.bin') or f.endswith('.elf') for f in files) or \
-<<<<<<< Updated upstream
            self._kw(text, "reverse", "source code", "analyze program", "authenticate the program"):
-=======
-           any(re.search(r'\b' + re.escape(word) + r'\b', text) for word in ["reverse", "source code", "analyze program", "authenticate the program"]):
->>>>>>> Stashed changes
             indicators.append("reverse_terms")
             return ChallengeAnalysis(
                 category_guess="reverse",
@@ -247,11 +214,7 @@ class LLMReasoner:
 
         # Priority 2: Forensics (if files are present or forensics keywords found)
         if any(f.endswith('.pdf') or f.endswith('.pcap') for f in files) or \
-<<<<<<< Updated upstream
            self._kw(text, "artifact", "extract", "binwalk", "forensics", "metadata", "exiftool"):
-=======
-           any(re.search(r'\b' + re.escape(word) + r'\b', text) for word in ["artifact", "extract", "binwalk", "forensics", "metadata", "exiftool"]):
->>>>>>> Stashed changes
             indicators.append("forensics_terms")
             return ChallengeAnalysis(
                 category_guess="forensics",
@@ -265,11 +228,7 @@ class LLMReasoner:
         # Priority 3: Crypto / Decoding
         # Special check for numerical strings (decimal/octal encoding)
         if re.search(r'\b(?:\d{1,3}[\s,]+){3,}', text) or \
-<<<<<<< Updated upstream
            self._kw(text, "cipher", "decrypt", "decode", "base64", "hex", "xor", "caesar", "password", "rockyou", "crack"):
-=======
-           any(re.search(r'\b' + re.escape(word) + r'\b', text) for word in ["cipher", "decrypt", "decode", "base64", "hex", "xor", "caesar", "password", "rockyou", "crack"]):
->>>>>>> Stashed changes
             indicators.append("crypto_terms")
             return ChallengeAnalysis(
                 category_guess="crypto",
@@ -281,11 +240,7 @@ class LLMReasoner:
             )
 
         # Priority 4: SQLi
-<<<<<<< Updated upstream
         if self._kw(text, "sqli", "sql injection", "login bypass", "union select"):
-=======
-        if any(re.search(r'\b' + re.escape(word) + r'\b', text) for word in ["sqli", "sql injection", "login bypass", "union select"]):
->>>>>>> Stashed changes
             indicators.append("sqli_terms")
             return ChallengeAnalysis(
                 category_guess="web",
@@ -296,22 +251,26 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 5: Web
+        # Priority 5: Log Analysis
+        if any(f.endswith('.log') for f in files) or self._kw(text, "access log", "auth log", "server log"):
+            indicators.append("log_terms")
+            return ChallengeAnalysis(
+                category_guess="log",
+                confidence=0.84,
+                reasoning="Detected log analysis indicators.",
+                recommended_target="log_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
+        # Priority 6: Web
         url = challenge.get("url")
-<<<<<<< Updated upstream
         if url or self._kw(text, "url", "http", "login", "form", "page", "cookie", "endpoint"):
-=======
-        if url or any(re.search(r'\b' + re.escape(word) + r'\b', text) for word in ["url", "http", "login", "form", "page", "cookie", "endpoint"]):
->>>>>>> Stashed changes
             indicators.append("web_terms")
 
             # Heuristic pivot: If "inspect", "form", or "page" are used without specific attack keywords,
             # prefer browser_snapshot tool for initial reconnaissance.
-<<<<<<< Updated upstream
             if self._kw(text, "inspect", "form", "page", "snapshot", "look at"):
-=======
-            if any(re.search(r'\b' + re.escape(k) + r'\b', text) for k in ["inspect", "form", "page", "snapshot", "look at"]):
->>>>>>> Stashed changes
                 return ChallengeAnalysis(
                     category_guess="web",
                     confidence=0.89,
@@ -331,11 +290,7 @@ class LLMReasoner:
             )
 
         # OSINT (Lower priority)
-<<<<<<< Updated upstream
         if self._kw(text, "osint", "whois", "social media", "located"):
-=======
-        if any(re.search(r'\b' + re.escape(k) + r'\b', text) for k in ["osint", "whois", "social media", "located"]):
->>>>>>> Stashed changes
             indicators.append("osint_terms")
             return ChallengeAnalysis(
                 category_guess="osint",
@@ -346,28 +301,8 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Log Analysis (Lower priority)
-<<<<<<< Updated upstream
-        if any(f.endswith('.log') for f in files) or self._kw(text, "access log", "auth log", "server log"):
-=======
-        if any(f.endswith('.log') for f in files) or any(re.search(r'\b' + re.escape(k) + r'\b', text) for k in ["access log", "auth log", "server log"]):
->>>>>>> Stashed changes
-            indicators.append("log_terms")
-            return ChallengeAnalysis(
-                category_guess="log",
-                confidence=0.84,
-                reasoning="Detected log analysis indicators.",
-                recommended_target="log_agent",
-                recommended_action="run_agent",
-                detected_indicators=indicators,
-            )
-
-        # Priority 6: Coding
-<<<<<<< Updated upstream
+        # Priority 7: Coding
         if self._kw(text, "script", "python", "automate", "program", "code", "algorithm"):
-=======
-        if any(re.search(r'\b' + re.escape(word) + r'\b', text) for word in ["script", "python", "automate", "program", "code", "algorithm"]):
->>>>>>> Stashed changes
             indicators.append("coding_terms")
             return ChallengeAnalysis(
                 category_guess="misc",
