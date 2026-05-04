@@ -17,6 +17,10 @@ from core.communication.message import Message, MessageType, MessagePriority
 from core.communication.message_broker import MessageBroker
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.result_manager import ResultManager
+from core.task_manager.task_queue import TaskQueue
+from core.task_manager.task import Task, TaskPriority
+from core.knowledge_base.knowledge_store import KnowledgeStore
+import concurrent.futures
 
 
 class CoordinatorAgent(BaseAgent):
@@ -38,9 +42,14 @@ class CoordinatorAgent(BaseAgent):
         tony_sql_adapter: Optional[Any] = None,
         llm_client: Optional[Any] = None,
         max_iterations: int = 5,
+<<<<<<< Updated upstream
         broker: Optional[MessageBroker] = None,
+=======
+        knowledge_store: Optional[KnowledgeStore] = None,
+>>>>>>> Stashed changes
     ):
-        super().__init__(agent_id, AgentType.COORDINATOR)
+        ks = knowledge_store or KnowledgeStore()
+        super().__init__(agent_id, AgentType.COORDINATOR, knowledge_store=ks)
 
         self.specialist_agents: Dict[str, BaseAgent] = {}
         self.support_agents: Dict[str, BaseAgent] = {}
@@ -51,10 +60,17 @@ class CoordinatorAgent(BaseAgent):
         self.reasoner = LLMReasoner(client=llm_client)
         self.max_iterations = max_iterations
         self.result_manager = ResultManager()
+<<<<<<< Updated upstream
         self.broker = broker or MessageBroker()
+=======
+        self.task_queue = TaskQueue()
+>>>>>>> Stashed changes
 
     def register_agent(self, agent: BaseAgent):
         """Register a specialist or support agent with the coordinator."""
+        # Share knowledge store with the specialist
+        agent.knowledge_store = self.knowledge_store
+        
         if agent.agent_type == AgentType.SPECIALIST:
             self.specialist_agents[agent.agent_id] = agent
         elif agent.agent_type == AgentType.SUPPORT:
@@ -85,16 +101,8 @@ class CoordinatorAgent(BaseAgent):
 
     def solve_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Coordinate the solving of a challenge in an iterative loop.
-
-        Flow:
-        1. Analyze challenge with reasoner (initial triage)
-        2. Loop:
-           a. Choose next action based on history
-           b. Execute action
-           c. Record result in history
-           d. Check for completion
-        3. Return aggregated result
+        Coordinate the solving of a challenge in an iterative loop using TaskQueue.
+        Supports parallel execution of independent tasks.
         """
         challenge_id = challenge.get("id", "unknown_challenge")
         self.active_challenges[challenge_id] = challenge
@@ -116,10 +124,36 @@ class CoordinatorAgent(BaseAgent):
             "iterations": 0,
         }
 
+        # Thread pool for parallel execution
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        futures = {}
+
         try:
             for i in range(self.max_iterations):
                 final_result["iterations"] = i + 1
                 
+                # Check for completed futures
+                done, not_done = concurrent.futures.wait(
+                    futures.keys(), timeout=0.1, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for f in done:
+                    task_id = futures.pop(f)
+                    try:
+                        result = f.result()
+                        self.task_queue.complete_task(task_id, result)
+                        history.append(result)
+                        if result.get("steps"):
+                            all_steps.extend([f"  [Async Result] {s}" for s in result["steps"]])
+                        
+                        if result.get("status") == "solved" or result.get("flag"):
+                            final_result["status"] = "solved"
+                            final_result["flag"] = result.get("flag")
+                            all_steps.append(f"Challenge solved by async task {task_id}!")
+                            return final_result
+                    except Exception as e:
+                        all_steps.append(f"Async task {task_id} failed: {e}")
+                        self.task_queue.fail_task(task_id, str(e))
+
                 decision = self.reasoner.choose_next_action(
                     challenge, 
                     self.reasoner.analyze_challenge(challenge),
@@ -130,28 +164,55 @@ class CoordinatorAgent(BaseAgent):
                 target = decision.get("target", "none")
                 reasoning = decision.get("reasoning", "No reasoning provided.")
 
+                if action == "stop":
+                    if not futures:
+                        all_steps.append("Reasoner requested to stop.")
+                        break
+                    else:
+                        all_steps.append("Reasoner requested to stop, but tasks are still running...")
+                        continue
+
+                task_id = f"{challenge_id}_step_{i+1}"
+                task = Task(
+                    id=task_id,
+                    description=reasoning,
+                    priority=TaskPriority.HIGH,
+                    category=initial_analysis['category'],
+                    metadata={"action": action, "target": target}
+                )
+                self.task_queue.add_task(task)
+                
+                current_task = self.task_queue.get_next_task()
+                if not current_task:
+                    continue
+
                 all_steps.append(f"Iteration {i+1} reasoning: {reasoning}")
                 all_steps.append(f"Iteration {i+1} decision: {action} -> {target}")
 
-                if action == "stop":
-                    all_steps.append("Reasoner requested to stop.")
-                    break
-
-                result = None
+                # Execute action (using thread pool for agents/tools)
                 if action == "run_agent":
-                    # Pass the specific task description from the reasoner to the agent
                     agent_challenge = challenge.copy()
                     if decision.get("inputs", {}).get("task"):
                         agent_challenge['current_task_description'] = decision["inputs"]["task"]
-                    result = self._run_selected_agent(agent_challenge, target, [])
+                    
+                    f = executor.submit(self._run_selected_agent, agent_challenge, target, [])
+                    futures[f] = task_id
                 elif action == "run_tool":
-                    result = self._run_selected_tool(challenge, target, [])
+                    f = executor.submit(self._run_selected_tool, challenge, target, [])
+                    futures[f] = task_id
                 else:
                     all_steps.append(f"Unknown action: {action}")
-                    break
+                    self.task_queue.fail_task(task_id, f"Unknown action: {action}")
 
-                if result:
+            # Wait for any remaining tasks
+            if futures:
+                all_steps.append(f"Waiting for {len(futures)} remaining tasks...")
+                done, _ = concurrent.futures.wait(futures.keys(), timeout=30)
+                for f in done:
+                    task_id = futures.pop(f)
+                    result = f.result()
                     history.append(result)
+<<<<<<< Updated upstream
                     if result.get("steps"):
                         all_steps.extend([f"  [Exec] {s}" for s in result["steps"]])
 
@@ -159,22 +220,17 @@ class CoordinatorAgent(BaseAgent):
                     if result.get("artifacts"):
                         self._publish_knowledge(challenge_id, result["artifacts"])
 
+=======
+>>>>>>> Stashed changes
                     if result.get("status") == "solved" or result.get("flag"):
                         final_result["status"] = "solved"
                         final_result["flag"] = result.get("flag")
-                        all_steps.append("Challenge solved!")
-                        break
-                else:
-                    all_steps.append(f"Failed to execute {action} against {target}")
-                    break
 
             self.active_challenges.pop(challenge_id, None)
             final_result["steps"] = all_steps
             final_result["history"] = history
             
-            # Persist the final result
             self.result_manager.save_run_result(final_result)
-            
             return final_result
 
         except Exception as exc:
@@ -184,6 +240,7 @@ class CoordinatorAgent(BaseAgent):
             self.active_challenges.pop(challenge_id, None)
             return final_result
         finally:
+            executor.shutdown(wait=False)
             if self.get_status() == AgentStatus.ERROR:
                 self.update_status(AgentStatus.IDLE)
 

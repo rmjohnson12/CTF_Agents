@@ -210,3 +210,4 @@ results/browser_snapshot_*/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+.claude/worktrees/

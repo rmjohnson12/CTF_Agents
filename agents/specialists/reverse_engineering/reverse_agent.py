@@ -64,9 +64,11 @@ class ReverseEngineeringAgent(BaseAgent):
                 steps.append("File content read successfully.")
                 
                 # Logic Analysis
-                target_sum_match = re.search(r"builder == (\d+)", content)
-                length_match = re.search(r"len\(password\) == (\d+)", content)
-                fixed_char_match = re.search(r"ord\(password\[(\d+)\]\) == (\d+)", content)
+                target_sum_match = re.search(r"builder\s*==\s*(\d+)", content)
+                length_match = re.search(r"len\(password\)\s*[=!]=\s*(\d+)", content)
+                # Improved regex for index access patterns: password[idx], password[idx], etc.
+                fixed_char_match = re.search(r"password\[(\d+)\]\s*==\s*(\d+)", content) or \
+                                   re.search(r"ord\(password\[(\d+)\]\)\s*==\s*(\d+)", content)
 
                 if target_sum_match and length_match:
                     target_sum = int(target_sum_match.group(1))

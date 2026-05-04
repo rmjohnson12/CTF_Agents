@@ -10,6 +10,8 @@ from enum import Enum
 import subprocess
 import time
 
+from core.knowledge_base.knowledge_store import KnowledgeStore
+
 
 class AgentType(Enum):
     """Types of agents in the system"""
@@ -34,19 +36,21 @@ class BaseAgent(ABC):
     communication and behavior across the system.
     """
     
-    def __init__(self, agent_id: str, agent_type: AgentType):
+    def __init__(self, agent_id: str, agent_type: AgentType, knowledge_store: Optional[KnowledgeStore] = None):
         """
         Initialize the base agent.
         
         Args:
             agent_id: Unique identifier for the agent
             agent_type: Type of agent (coordinator, specialist, support)
+            knowledge_store: Shared intelligence store
         """
         self.agent_id = agent_id
         self.agent_type = agent_type
         self.status = AgentStatus.IDLE
         self.current_task = None
         self.capabilities = []
+        self.knowledge_store = knowledge_store or KnowledgeStore()
         
     @abstractmethod
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:

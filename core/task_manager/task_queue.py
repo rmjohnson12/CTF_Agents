@@ -4,7 +4,7 @@ Priority-based task queue for the CTF Agent system.
 
 import heapq
 import threading
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Any
 
 from core.task_manager.task import Task, TaskPriority, TaskStatus
 
