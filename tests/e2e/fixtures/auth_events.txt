@@ -1,0 +1,25 @@
+Dec 10 06:55:40 server sshd[1000]: Failed password for invalid user admin from 192.168.1.50 port 54321 ssh2
+Dec 10 06:55:41 server sshd[1001]: Failed password for root from 192.168.1.50 port 54322 ssh2
+Dec 10 06:55:42 server sshd[1002]: Failed password for invalid user ubuntu from 192.168.1.50 port 54323 ssh2
+Dec 10 06:55:43 server sshd[1003]: Failed password for invalid user pi from 192.168.1.50 port 54324 ssh2
+Dec 10 06:55:44 server sshd[1004]: Failed password for invalid user test from 192.168.1.50 port 54325 ssh2
+Dec 10 06:55:45 server sshd[1005]: Failed password for invalid user user from 192.168.1.50 port 54326 ssh2
+Dec 10 06:55:46 server sshd[1006]: Failed password for invalid user deploy from 192.168.1.50 port 54327 ssh2
+Dec 10 06:55:47 server sshd[1007]: Failed password for root from 192.168.1.50 port 54328 ssh2
+Dec 10 06:55:48 server sshd[1008]: Failed password for invalid user oracle from 192.168.1.50 port 54329 ssh2
+Dec 10 06:55:49 server sshd[1009]: Failed password for invalid user git from 192.168.1.50 port 54330 ssh2
+Dec 10 06:55:50 server sshd[1010]: Failed password for invalid user admin from 192.168.1.50 port 54331 ssh2
+Dec 10 06:55:51 server sshd[1011]: Failed password for root from 192.168.1.50 port 54332 ssh2
+Dec 10 06:55:52 server sshd[1012]: Failed password for invalid user support from 192.168.1.50 port 54333 ssh2
+Dec 10 06:55:53 server sshd[1013]: Failed password for invalid user postgres from 192.168.1.50 port 54334 ssh2
+Dec 10 06:55:54 server sshd[1014]: Failed password for invalid user www-data from 192.168.1.50 port 54335 ssh2
+Dec 10 06:55:55 server sshd[1015]: Failed password for invalid user ftp from 192.168.1.50 port 54336 ssh2
+Dec 10 06:55:56 server sshd[1016]: Failed password for invalid user mysql from 192.168.1.50 port 54337 ssh2
+Dec 10 06:55:57 server sshd[1017]: Failed password for root from 192.168.1.50 port 54338 ssh2
+Dec 10 06:55:58 server sshd[1018]: Failed password for invalid user admin from 192.168.1.50 port 54339 ssh2
+Dec 10 06:55:59 server sshd[1019]: Failed password for invalid user admin from 192.168.1.50 port 54340 ssh2
+Dec 10 06:56:00 server sshd[1020]: Accepted password for alice from 10.0.0.2 port 12345 ssh2
+Dec 10 06:56:01 server sshd[1021]: Failed password for invalid user vagrant from 203.0.113.7 port 11111 ssh2
+Dec 10 06:56:02 server sshd[1022]: Failed password for invalid user vagrant from 203.0.113.7 port 11112 ssh2
+Dec 10 06:56:03 server sshd[1023]: Failed password for root from 203.0.113.8 port 22222 ssh2
+Dec 10 06:56:04 server sshd[1024]: Accepted password for bob from 10.0.0.3 port 54999 ssh2

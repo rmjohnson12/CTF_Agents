@@ -8,9 +8,13 @@ which specialist agent or tool to run next.
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 from agents.base_agent import BaseAgent, AgentType, AgentStatus
+from core.communication.message import Message, MessageType, MessagePriority
+from core.communication.message_broker import MessageBroker
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.result_manager import ResultManager
 
@@ -34,6 +38,7 @@ class CoordinatorAgent(BaseAgent):
         tony_sql_adapter: Optional[Any] = None,
         llm_client: Optional[Any] = None,
         max_iterations: int = 5,
+        broker: Optional[MessageBroker] = None,
     ):
         super().__init__(agent_id, AgentType.COORDINATOR)
 
@@ -46,6 +51,7 @@ class CoordinatorAgent(BaseAgent):
         self.reasoner = LLMReasoner(client=llm_client)
         self.max_iterations = max_iterations
         self.result_manager = ResultManager()
+        self.broker = broker or MessageBroker()
 
     def register_agent(self, agent: BaseAgent):
         """Register a specialist or support agent with the coordinator."""
@@ -148,7 +154,11 @@ class CoordinatorAgent(BaseAgent):
                     history.append(result)
                     if result.get("steps"):
                         all_steps.extend([f"  [Exec] {s}" for s in result["steps"]])
-                    
+
+                    self._publish_result(result)
+                    if result.get("artifacts"):
+                        self._publish_knowledge(challenge_id, result["artifacts"])
+
                     if result.get("status") == "solved" or result.get("flag"):
                         final_result["status"] = "solved"
                         final_result["flag"] = result.get("flag")
@@ -332,3 +342,27 @@ class CoordinatorAgent(BaseAgent):
             "specialists": list(self.specialist_agents.keys()),
             "support": list(self.support_agents.keys()),
         }
+
+    def _publish_result(self, result: Dict[str, Any]) -> None:
+        """Broadcast an agent/tool result so other agents can react."""
+        self.broker.publish(Message(
+            message_id=str(uuid.uuid4()),
+            message_type=MessageType.RESULT_REPORT,
+            sender=self.agent_id,
+            recipient="*",
+            timestamp=datetime.now(),
+            priority=MessagePriority.NORMAL,
+            payload={"result": result},
+        ))
+
+    def _publish_knowledge(self, challenge_id: str, artifacts: Dict[str, Any]) -> None:
+        """Share discovered artifacts so specialist agents can consume them."""
+        self.broker.publish(Message(
+            message_id=str(uuid.uuid4()),
+            message_type=MessageType.KNOWLEDGE_SHARE,
+            sender=self.agent_id,
+            recipient="*",
+            timestamp=datetime.now(),
+            priority=MessagePriority.HIGH,
+            payload={"challenge_id": challenge_id, "artifacts": artifacts},
+        ))

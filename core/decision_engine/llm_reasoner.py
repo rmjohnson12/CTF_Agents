@@ -22,20 +22,40 @@ class ChallengeAnalysis:
     detected_indicators: List[str]
 
 
+_NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+_NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
+
+
 class LLMReasoner:
     """
-    Uses OpenAI Responses API if OPENAI_API_KEY is present.
-    Falls back to heuristics if not.
+    Uses an LLM client for challenge analysis and action selection.
+
+    Priority order for auto-configuration:
+      1. Explicit client passed in
+      2. NVAPI_KEY env var  → NVIDIA NIM (OpenAI-compatible, free tier available)
+      3. OPENAI_API_KEY env var → OpenAI
+      4. Heuristic fallback
     """
 
-    def __init__(self, client: Optional[Any] = None, model: str = "gpt-5.4"):
+    def __init__(self, client: Optional[Any] = None, model: Optional[str] = None):
         if client is not None:
             self.client = client
+            self.model = model or "gpt-4o"
         else:
-            api_key = os.getenv("OPENAI_API_KEY")
-            self.client = OpenAI(api_key=api_key) if api_key else None
-
-        self.model = model
+            nvapi_key = os.getenv("NVAPI_KEY")
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if nvapi_key:
+                self.client = OpenAI(
+                    api_key=nvapi_key,
+                    base_url=_NVIDIA_NIM_BASE_URL,
+                )
+                self.model = model or _NVIDIA_DEFAULT_MODEL
+            elif openai_key:
+                self.client = OpenAI(api_key=openai_key)
+                self.model = model or "gpt-4o"
+            else:
+                self.client = None
+                self.model = model or "none"
 
     @property
     def is_available(self) -> bool:
@@ -136,11 +156,11 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
 
     def _call_llm(self, prompt: str) -> str:
         try:
-            response = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-        )
-            return response.output_text
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.choices[0].message.content or ""
         except Exception as e:
             print(f"[LLM ERROR] Falling back to heuristics: {e}")
             return ""
@@ -164,7 +184,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
     }}
 
     Challenge:
-    {{json.dumps(challenge, indent=2)}}
+    {json.dumps(challenge, indent=2)}
     """.strip()
 
     def _build_next_action_prompt(
@@ -189,14 +209,19 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
     }}
 
     Challenge:
-    {{json.dumps(challenge, indent=2)}}
+    {json.dumps(challenge, indent=2)}
 
     Analysis:
-    {{json.dumps(asdict(analysis), indent=2)}}
+    {json.dumps(asdict(analysis), indent=2)}
 
     History:
-    {{json.dumps(history, indent=2)}}
+    {json.dumps(history, indent=2)}
     """.strip()
+
+    @staticmethod
+    def _kw(text: str, *words: str) -> bool:
+        """True if any word/phrase matches as a whole word in text."""
+        return any(re.search(r'\b' + re.escape(w) + r'\b', text) for w in words)
 
     def _heuristic_analysis(self, challenge: Dict[str, Any]) -> ChallengeAnalysis:
         # Only look at user-provided text for heuristics, ignore metadata (which contains tool names)
@@ -211,7 +236,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
         files = challenge.get("files", [])
 
         # Priority 0: Network Forensics (PCAP)
-        if any(f.endswith('.pcap') or f.endswith('.pcapng') for f in files) or "pcap" in text:
+        if any(f.endswith('.pcap') or f.endswith('.pcapng') for f in files) or self._kw(text, "pcap"):
             indicators.append("network_forensics")
             return ChallengeAnalysis(
                 category_guess="forensics",
@@ -224,7 +249,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
 
         # Priority 1: Reverse Engineering (Source/Binary analysis)
         if any(f.endswith('.py') or f.endswith('.exe') or f.endswith('.bin') or f.endswith('.elf') for f in files) or \
-           any(word in text for word in ["reverse", "source code", "analyze program", "authenticate the program"]):
+           self._kw(text, "reverse", "source code", "analyze program", "authenticate the program"):
             indicators.append("reverse_terms")
             return ChallengeAnalysis(
                 category_guess="reverse",
@@ -237,7 +262,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
 
         # Priority 2: Forensics (if files are present or forensics keywords found)
         if any(f.endswith('.pdf') or f.endswith('.pcap') for f in files) or \
-           any(word in text for word in ["artifact", "extract", "binwalk", "forensics", "metadata", "exiftool"]):
+           self._kw(text, "artifact", "extract", "binwalk", "forensics", "metadata", "exiftool"):
             indicators.append("forensics_terms")
             return ChallengeAnalysis(
                 category_guess="forensics",
@@ -251,7 +276,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
         # Priority 3: Crypto / Decoding
         # Special check for numerical strings (decimal/octal encoding)
         if re.search(r'\b(?:\d{1,3}[\s,]+){3,}', text) or \
-           any(word in text for word in ["cipher", "decrypt", "decode", "base64", "hex", "xor", "caesar", "password", "rockyou", "crack"]):
+           self._kw(text, "cipher", "decrypt", "decode", "base64", "hex", "xor", "caesar", "password", "rockyou", "crack"):
             indicators.append("crypto_terms")
             return ChallengeAnalysis(
                 category_guess="crypto",
@@ -263,7 +288,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
             )
 
         # Priority 4: SQLi
-        if any(word in text for word in ["sqli", "sql injection", "login bypass", "union select"]):
+        if self._kw(text, "sqli", "sql injection", "login bypass", "union select"):
             indicators.append("sqli_terms")
             return ChallengeAnalysis(
                 category_guess="web",
@@ -276,12 +301,12 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
 
         # Priority 5: Web
         url = challenge.get("url")
-        if url or any(word in text for word in ["url", "http", "login", "form", "page", "cookie", "endpoint"]):
+        if url or self._kw(text, "url", "http", "login", "form", "page", "cookie", "endpoint"):
             indicators.append("web_terms")
-            
+
             # Heuristic pivot: If "inspect", "form", or "page" are used without specific attack keywords,
             # prefer browser_snapshot tool for initial reconnaissance.
-            if any(k in text for k in ["inspect", "form", "page", "snapshot", "look at"]):
+            if self._kw(text, "inspect", "form", "page", "snapshot", "look at"):
                 return ChallengeAnalysis(
                     category_guess="web",
                     confidence=0.89,
@@ -301,7 +326,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
             )
 
         # OSINT (Lower priority)
-        if any(k in text for k in ["osint", "whois", "social media", "located"]):
+        if self._kw(text, "osint", "whois", "social media", "located"):
             indicators.append("osint_terms")
             return ChallengeAnalysis(
                 category_guess="osint",
@@ -313,7 +338,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
             )
 
         # Log Analysis (Lower priority)
-        if any(f.endswith('.log') for f in files) or any(k in text for k in ["access log", "auth log", "server log"]):
+        if any(f.endswith('.log') for f in files) or self._kw(text, "access log", "auth log", "server log"):
             indicators.append("log_terms")
             return ChallengeAnalysis(
                 category_guess="log",
@@ -325,7 +350,7 @@ CRITICAL: Return ONLY the fixed Python code. Do not include explanation, comment
             )
 
         # Priority 6: Coding
-        if any(word in text for word in ["script", "python", "automate", "program", "code", "algorithm"]):
+        if self._kw(text, "script", "python", "automate", "program", "code", "algorithm"):
             indicators.append("coding_terms")
             return ChallengeAnalysis(
                 category_guess="misc",

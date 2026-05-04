@@ -120,47 +120,47 @@ class CryptographyAgent(BaseAgent):
 
         # Hash Cracking Priority
         if "hash" in analysis["detected_types"] or len(cipher_text) in [32, 40, 64, 128]:
-            wordlist = None
+            _rockyou_paths = [
+                "shared/wordlists/passwords/rockyou.txt",
+                "/usr/share/wordlists/rockyou.txt",
+                str(Path.home() / "Downloads" / "rockyou.txt"),
+                str(Path.home() / "Downloads" / "rockyou" / "rockyou.txt"),
+            ]
+            _rockyou = next((p for p in _rockyou_paths if Path(p).exists()), None)
+
+            # Build wordlist priority list: user-supplied first, then rockyou fallback
             files = challenge.get("files", [])
             txt_files = [f for f in files if f.endswith(".txt")]
+            wordlists_to_try = []
             if txt_files:
-                wordlist = txt_files[0]
-            
-            if not wordlist:
-                paths = [
-                    "shared/wordlists/passwords/rockyou.txt", 
-                    "/usr/share/wordlists/rockyou.txt",
-                    str(Path.home() / "Downloads" / "rockyou.txt"),
-                    str(Path.home() / "Downloads" / "rockyou" / "rockyou.txt")
-                ]
-                for p in paths:
-                    if Path(p).exists():
-                        wordlist = p
-                        break
-            
+                wordlists_to_try.append(txt_files[0])
+            if _rockyou and (_rockyou not in wordlists_to_try):
+                wordlists_to_try.append(_rockyou)
+
             if "hash" in analysis["detected_types"]:
-                try:
-                    # If 32 chars, try MD5 mode (0) in hashcat
-                    # For bitlocker, we'd need mode 22100, but john might auto-detect better
-                    mode = 0 if len(cipher_text) == 32 else None
-                    if mode is not None:
-                        res = self.hashcat_tool.run(cipher_text, wordlist=wordlist, mode=mode)
-                        if res.cracked_password:
-                            best_result = ("hashcat", res.cracked_password, 1000.0, f"Cracked: {res.cracked_password}")
-                except Exception as e:
-                    steps.append(f"Hashcat error: {e}")
-            
+                mode = 0 if len(cipher_text) == 32 else None
+                if mode is not None:
+                    for wl in wordlists_to_try:
+                        try:
+                            res = self.hashcat_tool.run(cipher_text, wordlist=wl, mode=mode)
+                            if res.cracked_password:
+                                best_result = ("hashcat", res.cracked_password, 1000.0, f"Cracked: {res.cracked_password}")
+                                break
+                        except Exception as e:
+                            steps.append(f"Hashcat error ({wl}): {e}")
+
             if best_result is None:
-                try:
-                    steps.append(f"Running john on the hash with wordlist: {wordlist}")
-                    res = self.john_tool.run(cipher_text, wordlist=wordlist)
-                    if res.cracked_password:
-                        best_result = ("john", res.cracked_password, 1000.0, f"Cracked: {res.cracked_password}")
-                    else:
-                        steps.append("John could not crack the hash.")
-                except Exception as e:
-                    steps.append(f"John error: {e}")
-                except: pass
+                for wl in wordlists_to_try:
+                    try:
+                        steps.append(f"Running john on hash with wordlist: {wl}")
+                        res = self.john_tool.run(cipher_text, wordlist=wl)
+                        if res.cracked_password:
+                            best_result = ("john", res.cracked_password, 1000.0, f"Cracked: {res.cracked_password}")
+                            break
+                        else:
+                            steps.append(f"John could not crack with {Path(wl).name}.")
+                    except Exception as e:
+                        steps.append(f"John error ({wl}): {e}")
 
         if "caesar_cipher" in analysis["detected_types"]:
             shift, plaintext, score = self._best_caesar_candidate(cipher_text)
@@ -176,9 +176,10 @@ class CryptographyAgent(BaseAgent):
             raw = self._try_hex(cipher_text)
             if raw:
                 plaintext = raw.decode("utf-8", errors="ignore")
-                # Also try to just treat it as a hex string if it's 32 chars (MD5?)
-                if len(cipher_text) == 32:
-                    best_result = self._pick_better(best_result, ("hex_raw", cipher_text, 1.0, "Raw Hex (MD5?)"))
+                # hex_raw only makes sense when we're NOT dealing with a hash —
+                # returning the hash itself as the flag is never correct
+                if len(cipher_text) == 32 and "hash" not in analysis["detected_types"]:
+                    best_result = self._pick_better(best_result, ("hex_raw", cipher_text, 1.0, "Raw Hex"))
                 best_result = self._pick_better(best_result, ("hex", plaintext, self._score_english(plaintext), "Hex"))
 
         if "decimal" in analysis["detected_types"]:
@@ -225,9 +226,29 @@ class CryptographyAgent(BaseAgent):
         }
 
     def _extract_ciphertext(self, challenge: Dict[str, Any]) -> str:
+        description = challenge.get("description", "")
+
+        # Priority 1: bare hash in description (MD5/SHA1/SHA256/SHA512)
+        m_bare_hash = re.search(r"\b([0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64}|[0-9a-fA-F]{128})\b", description)
+        if m_bare_hash:
+            return m_bare_hash.group(1)
+
+        # Priority 2: $-prefixed hash (john/hashcat format)
+        m_hash = re.search(r"\$[^\s]+", description)
+        if m_hash:
+            return m_hash.group(0).strip()
+
+        # Priority 3: quoted ciphertext in description
+        m_quoted = re.search(r"['\"]([^'\"]{4,})['\"]", description)
+        if m_quoted:
+            return m_quoted.group(1).strip()
+
+        # Priority 4: file content — skip wordlist/log files; only read single-content files
         files = challenge.get("files", [])
-        if files:
-            file_path = files[0]
+        for file_path in files:
+            if file_path.endswith(".txt") or file_path.endswith(".log"):
+                # plaintext lists and log files are not ciphertext
+                continue
             try:
                 with open(file_path, "r") as f:
                     content = f.read().strip()
@@ -236,17 +257,8 @@ class CryptographyAgent(BaseAgent):
             except Exception:
                 pass
 
-        description = challenge.get("description", "")
-        # Look for $... patterns (common for bitlocker/hashes)
-        m_hash = re.search(r"\$[^\s]+", description)
-        if m_hash:
-            return m_hash.group(0).strip()
-
-        m = re.search(r"['\"]([^'\"]{4,})['\"]", description)
-        if m: return m.group(1).strip()
-        
+        # Priority 5: strip preamble from description and return remainder
         text = description.strip()
-        # Only strip if it's clearly a preamble and doesn't start with bitlocker/hash indicator
         if not text.startswith("$"):
             text = re.sub(r'^(?i:please\s+)?(?i:decrypt|decode|solve|what is)\s+(?i:this|the|flag)?\s+', '', text)
         return text.strip()
