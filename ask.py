@@ -86,13 +86,28 @@ Example shape:
         if url_match:
             url = url_match.group(0).strip(".,")
 
+        lowered_input = user_input.lower()
+        crypto_terms = [
+            "decrypt",
+            "decode",
+            "encoded",
+            "cipher",
+            "hash",
+            "md5",
+            "sha",
+            "base64",
+            "hex",
+            "password",
+            "rockyou",
+        ]
+
         if any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.pcapng') for f in files_in_prompt):
             category = "forensics"
-        elif any(f.endswith('.py') or f.endswith('.exe') for f in files_in_prompt) or "authenticate" in user_input.lower():
+        elif any(f.endswith('.py') or f.endswith('.exe') for f in files_in_prompt) or "authenticate" in lowered_input:
             category = "reverse"
-        elif url or ".cloud" in user_input.lower():
+        elif url or ".cloud" in lowered_input:
             category = "web"
-        elif any(f.endswith('.txt') for f in files_in_prompt) or "decrypt" in user_input.lower() or "password" in user_input.lower() or "rockyou" in user_input.lower():
+        elif any(f.endswith('.txt') for f in files_in_prompt) or any(term in lowered_input for term in crypto_terms):
             category = "crypto"
 
         challenge = {

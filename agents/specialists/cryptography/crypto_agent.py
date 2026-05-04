@@ -243,7 +243,12 @@ class CryptographyAgent(BaseAgent):
         if m_quoted:
             return m_quoted.group(1).strip()
 
-        # Priority 4: file content — skip wordlist/log files; only read single-content files
+        # Priority 4: unquoted encoded blob in natural-language prompts
+        encoded_token = self._extract_encoded_token(description)
+        if encoded_token:
+            return encoded_token
+
+        # Priority 5: file content — skip wordlist/log files; only read single-content files
         files = challenge.get("files", [])
         for file_path in files:
             if file_path.endswith(".txt") or file_path.endswith(".log"):
@@ -257,11 +262,44 @@ class CryptographyAgent(BaseAgent):
             except Exception:
                 pass
 
-        # Priority 5: strip preamble from description and return remainder
+        # Priority 6: strip preamble from description and return remainder
         text = description.strip()
         if not text.startswith("$"):
             text = re.sub(r'^(?i:please\s+)?(?i:decrypt|decode|solve|what is)\s+(?i:this|the|flag)?\s+', '', text)
         return text.strip()
+
+    def _extract_encoded_token(self, text: str) -> Optional[str]:
+        """Extract likely standalone hex/base64 content from a natural-language prompt."""
+        search_text = text.rsplit(":", 1)[-1] if ":" in text else text
+
+        hex_candidates = [
+            m.group(0)
+            for m in re.finditer(r"\b[0-9a-fA-F]{8,}\b", search_text)
+            if len(m.group(0)) % 2 == 0
+        ]
+        if hex_candidates:
+            return max(hex_candidates, key=len)
+
+        base64_candidates = []
+        for m in re.finditer(r"(?<![A-Za-z0-9+/=])([A-Za-z0-9+/]{8,}={0,2})(?![A-Za-z0-9+/=])", search_text):
+            candidate = m.group(1)
+            if not re.search(r"[A-Z0-9+/=]", candidate):
+                continue
+            decoded = self._try_base64(candidate)
+            if decoded and self._is_mostly_printable(decoded):
+                base64_candidates.append(candidate)
+
+        if base64_candidates:
+            return max(base64_candidates, key=len)
+
+        return None
+
+    @staticmethod
+    def _is_mostly_printable(raw: bytes) -> bool:
+        if not raw:
+            return False
+        printable = sum(32 <= b <= 126 or b in (9, 10, 13) for b in raw)
+        return printable / len(raw) >= 0.8
 
     def _plan_approach(self, cipher_types: List[str]) -> str:
         if not cipher_types:
