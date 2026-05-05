@@ -176,5 +176,5 @@ or do not have explicit permission to test.
 
 ## Acknowledgments
 
-Original architecture by TonyZeroArch. Continued development is focused on
+Original architecture by TonyZeroArch and myself. Continued development is focused on
 practical, iterative CTF automation and agent-assisted security research.
