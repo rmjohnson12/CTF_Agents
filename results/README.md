@@ -89,11 +89,10 @@ Challenge artifacts and evidence:
 
 ## Data Retention
 
-- Keep all challenge artifacts
-- Archive old reports periodically
-- Maintain flag database for reference
-- Version control important artifacts
-- Back up results regularly
+- Treat this directory as local run output, not source data.
+- Keep only recent reports for debugging; `ResultManager` defaults to three reports per challenge.
+- Override local report retention with `CTF_MAX_REPORTS=<count>` when needed.
+- Commit durable challenge fixtures under `challenges/`, not generated files under `results/`.
 
 ## Privacy and Security
 

@@ -76,6 +76,7 @@ def test_coordinator_iterative_loop_stops_on_solve():
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{success}"
     assert result["iterations"] == 2
+    assert reasoner.analyze_called == 1
     assert agent1.solve_called == 1
     assert agent2.solve_called == 1
 
@@ -96,6 +97,7 @@ def test_coordinator_iterative_loop_stops_on_max_iterations():
 
     assert result["iterations"] == 3
     assert result["status"] == "attempted"
+    assert reasoner.analyze_called == 1
     assert agent1.solve_called == 3
 
 def test_coordinator_does_not_resubmit_same_in_flight_target():

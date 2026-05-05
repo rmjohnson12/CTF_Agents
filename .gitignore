@@ -198,6 +198,9 @@ cython_debug/
 
 # Ephemeral run artifacts
 results/browser_snapshot_*/
+results/**
+!results/
+!results/README.md
 
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to

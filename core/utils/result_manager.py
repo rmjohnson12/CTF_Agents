@@ -1,17 +1,25 @@
 import json
-import time
+import os
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 class ResultManager:
     """
     Manages the organization and persistence of challenge results.
     Creates a standardized directory structure for each challenge run.
     """
-    def __init__(self, base_results_dir: str = "results", max_reports: int = 10):
+    def __init__(self, base_results_dir: str = "results", max_reports: Optional[int] = None):
         self.base_dir = Path(base_results_dir)
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.max_reports = max_reports
+        self.max_reports = max_reports if max_reports is not None else self._default_max_reports()
+
+    @staticmethod
+    def _default_max_reports() -> int:
+        try:
+            return max(0, int(os.getenv("CTF_MAX_REPORTS", "3")))
+        except ValueError:
+            return 3
 
     def get_challenge_dir(self, challenge_id: str) -> Path:
         """
@@ -55,10 +63,7 @@ class ResultManager:
         challenge_id = result.get("challenge_id", "unknown")
         cdir = self.get_challenge_dir(challenge_id)
         
-        # Cleanup old reports before saving the new one
-        self.cleanup_reports(challenge_id)
-        
-        ts = time.strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         report_path = cdir / "reports" / f"run_{ts}.json"
         
         with open(report_path, "w") as f:
@@ -71,6 +76,8 @@ class ResultManager:
             # Append flag if it's new
             with open(flag_path, "a") as f:
                 f.write(f"[{ts}] {flag}\n")
+
+        self.cleanup_reports(challenge_id)
         
         return report_path
 

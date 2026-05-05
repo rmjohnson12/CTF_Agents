@@ -15,7 +15,7 @@ from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentType, AgentStatus
 from core.communication.message import Message, MessageType, MessagePriority
 from core.communication.message_broker import MessageBroker
-from core.decision_engine.llm_reasoner import LLMReasoner
+from core.decision_engine.llm_reasoner import LLMReasoner, ChallengeAnalysis
 from core.utils.result_manager import ResultManager
 from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
@@ -78,7 +78,13 @@ class CoordinatorAgent(BaseAgent):
             Structured analysis containing routing decision and metadata.
         """
         analysis = self.reasoner.analyze_challenge(challenge)
+        return self._analysis_to_dict(challenge, analysis)
 
+    def _analysis_to_dict(
+        self,
+        challenge: Dict[str, Any],
+        analysis: ChallengeAnalysis,
+    ) -> Dict[str, Any]:
         return {
             "challenge_id": challenge.get("id"),
             "category": analysis.category_guess,
@@ -101,7 +107,8 @@ class CoordinatorAgent(BaseAgent):
         challenge_id = challenge.get("id", "unknown_challenge")
         self.active_challenges[challenge_id] = challenge
 
-        initial_analysis = self.analyze_challenge(challenge)
+        initial_analysis_obj = self.reasoner.analyze_challenge(challenge)
+        initial_analysis = self._analysis_to_dict(challenge, initial_analysis_obj)
         history: List[Dict[str, Any]] = []
         
         all_steps = [
@@ -166,7 +173,7 @@ class CoordinatorAgent(BaseAgent):
 
                 decision = self.reasoner.choose_next_action(
                     challenge, 
-                    self.reasoner.analyze_challenge(challenge),
+                    initial_analysis_obj,
                     history
                 )
 
