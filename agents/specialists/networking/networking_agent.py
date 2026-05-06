@@ -4,6 +4,7 @@ Networking Specialist Agent
 Specialized agent for network traffic analysis and protocol reverse engineering.
 """
 
+from dataclasses import asdict
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
@@ -85,7 +86,9 @@ class NetworkingAgent(BaseAgent):
                 if flag:
                     steps.append(f"  Found flag in raw strings: {flag}")
                     break
-            except Exception: pass
+            except Exception as e:
+                logger.debug("strings analysis failed for %s: %s", pcap, e)
+                steps.append(f"  Raw strings analysis failed: {e}")
 
             # Step B: TShark Summary
             try:
@@ -113,7 +116,7 @@ class NetworkingAgent(BaseAgent):
                     found = find_first_flag(data)
                     if found:
                         flag = found
-                        steps.append(f"  ✅ Found flag in {stream.protocol} stream {i} ({stream.client} -> {stream.server}): {flag}")
+                        steps.append(f"  Found flag in {stream.protocol} stream {i} ({stream.client} -> {stream.server}): {flag}")
                         break
             except Exception as e:
                 steps.append(f"  Scapy reconstruction failed: {e}")
@@ -130,7 +133,7 @@ class NetworkingAgent(BaseAgent):
                 steps.append(f"  Open ports: {', '.join(open_ports) if open_ports else 'None found'}")
                 artifacts["nmap_scan"] = {
                     "target": target,
-                    "ports": [p.__dict__ for p in nm_res.ports]
+                    "ports": [asdict(p) for p in nm_res.ports]
                 }
                 
                 # Check nmap output for flags (unlikely but possible in banner grabs)

@@ -218,7 +218,7 @@ Example shape:
                 challenge = _heuristic_challenge_from_instruction(user_input, available_tools)
         else:
             # Follow-up input: append to description and set resume
-            challenge["description"] += f"\n\nUser Hint: {user_input}"
+            challenge["description"] = (challenge.get("description") or "") + f"\n\nUser Hint: {user_input}"
             resume = True
 
         print(f"Target category: {challenge.get('category')}")
@@ -238,7 +238,7 @@ Example shape:
                 print(f"  - {step}")
 
         if result.get("status") == "solved" or result.get("flag"):
-            print("\n✅ Challenge solved!")
+            print("\nChallenge solved!")
             if interactive:
                 challenge = None # Reset for next task
                 user_input = ""
