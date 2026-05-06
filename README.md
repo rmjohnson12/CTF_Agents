@@ -19,6 +19,8 @@ the solving loop.
   SQL injection tooling.
 - Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings, and
   recovered artifacts.
+- Networking tasks using `nmap`, `tshark`, and `scapy` for traffic analysis and
+  port scanning.
 - OSINT and log-analysis tasks for metadata, domains, authentication events, and
   anomaly patterns.
 - Miscellaneous coding/math tasks that benefit from generated Python scripts.
@@ -44,22 +46,9 @@ For a fuller architecture map, see `PROJECT_STRUCTURE.md` and
 
 - Python 3.10 or newer.
 - Python packages from `requirements.txt`.
-- Optional LLM key:
+- Optional LLM key (Required for autonomous reasoning):
   - `NVAPI_KEY` for NVIDIA NIM, which is checked first.
   - `OPENAI_API_KEY` for OpenAI fallback.
-- Optional command-line security tools, depending on the challenge type:
-  - `john`
-  - `hashcat`
-  - `binwalk`
-  - `exiftool`
-  - `qpdf`
-  - `nmap`
-  - `sqlmap`
-  - `tshark`
-  - `strings`
-
-The system still has heuristic routing when no LLM key is configured, but LLM
-configuration improves natural-language mapping and planning.
 
 ## Installation
 
@@ -73,44 +62,47 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-If you plan to use browser-based web tooling, install Playwright's browser
-runtime after installing dependencies:
+### Pre-flight Check
+
+Before running a challenge, use the diagnostic tool to verify your environment, API keys, and security tools:
 
 ```bash
-python -m playwright install
+python3 check_setup.py
 ```
 
-Copy the example environment file if you want LLM-backed routing or optional
-external integrations:
+If you plan to use browser-based web tooling, install Playwright's browser runtime:
 
 ```bash
-cp config/.env.example .env
+python -m playwright install chromium
 ```
 
-Then set `NVAPI_KEY` or `OPENAI_API_KEY` in `.env`. The runtime loads `.env` from
-the project root.
-
-## Quick Start
-
-Use `ask.py` for natural-language tasks. These examples run against files that
-are included in the repo and work without an LLM key:
+Set your API keys in a `.env` file in the project root:
 
 ```bash
-python3 ask.py "Find the password for tests/e2e/fixtures/reverse_me.py"
-python3 ask.py "Decode this base64 challenge from challenges/templates/example_crypto_base64.json"
-python3 ask.py "Decrypt the following message: 'pm ol ohk hufaopun jvumpkluaphs av zhf...' It seems to be encrypted with a simple cipher."
-python3 ask.py "Analyze this file for hidden flags. File is located in challenges/active/sim_web_001/artifact.bin"
-python3 ask.py "Analyze tests/e2e/fixtures/auth_events.txt and identify which IP executed a brute force SSH attack"
-python3 ask.py "Calculate the sum of all prime numbers between 1 and 100 and print it in the format CTF{result}"
+NVAPI_KEY=your_nvidia_key_here
 ```
 
-For your own authorized targets, you can also point at PCAPs, URLs, or challenge
-files that are not part of this repository:
+## Quick Start (Interactive Mode)
+
+Use `ask.py` for a natural-language, multi-turn experience. If run without arguments, it enters **Interactive Mode**, allowing you to provide hints if the agent gets stuck:
+
+```bash
+python3 ask.py
+```
+
+Alternatively, provide a one-shot instruction:
 
 ```bash
 python3 ask.py "Analyze suspicious traffic in capture.pcapng and recover the flag"
-python3 ask.py "Check http://challenge.local:8080 for common CTF web leaks"
+python3 ask.py "Find the password for tests/e2e/fixtures/reverse_me.py"
+python3 ask.py "Calculate the sum of all prime numbers between 1 and 100"
 ```
+
+### Key Features
+
+1. **Interactive Feedback**: If the agent hits a wall, you can provide a "hint" (e.g., "try port 8080" or "the flag is in the EXIF data") and it will resume the solve with the new context.
+2. **Persistent Knowledge**: Discovered facts (IPs, credentials, artifacts) are stored in a local Knowledge Base and injected into future reasoning steps.
+3. **Networking Specialist**: Deep packet inspection and automated network enumeration are now integrated natively.
 
 `ask.py` will:
 
