@@ -38,6 +38,12 @@ def _extract_title_from_html(html: str) -> str:
     return _norm_ws(match.group(1))
 
 
+def _json_safe_mapping(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items()}
+
+
 @dataclass
 class BrowserSnapshotResult:
     url: str
@@ -196,8 +202,8 @@ class BrowserSnapshotTool:
                 hidden_inputs = page.eval_on_selector_all("input[type=hidden]", "els => els.map(i => ({name: i.name || '', id: i.id || '', value: i.value || ''}))")
                 
                 try:
-                    local_storage = page.evaluate("() => ({...localStorage})")
-                    session_storage = page.evaluate("() => ({...sessionStorage})")
+                    local_storage = _json_safe_mapping(page.evaluate("() => ({...localStorage})"))
+                    session_storage = _json_safe_mapping(page.evaluate("() => ({...sessionStorage})"))
                 except:
                     local_storage = {}
                     session_storage = {}
