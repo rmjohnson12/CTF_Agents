@@ -26,7 +26,7 @@ def check():
         print("[-] OpenAI API Key: MISSING")
 
     if has_llm:
-        print("[+] Mode: AUTONOMOUS (LLM-backed routing and planning enabled)")
+        print("[+] Mode: LLM-assisted (LLM-backed routing and planning enabled)")
     else:
         print("[!] Mode: HEURISTIC (Running without LLM; using pattern matching for routing)")
 
