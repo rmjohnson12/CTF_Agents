@@ -187,8 +187,15 @@ class CoordinatorAgent(BaseAgent):
                         self.result_manager.save_run_result(completed_result)
                         return completed_result
 
+                # Fetch prior knowledge for this challenge to inform the next decision
+                prior_facts = self.knowledge_store.get_facts(challenge_id=challenge_id)
+                challenge_with_knowledge = challenge.copy()
+                if prior_facts:
+                    challenge_with_knowledge["prior_knowledge"] = prior_facts
+                    all_steps.append(f"  [Knowledge] Retrieved {len(prior_facts)} fact(s) from storage.")
+
                 decision = self.reasoner.choose_next_action(
-                    challenge, 
+                    challenge_with_knowledge, 
                     initial_analysis_obj,
                     history
                 )
@@ -231,7 +238,12 @@ class CoordinatorAgent(BaseAgent):
 
                 # Execute action (using thread pool for agents/tools)
                 if action == "run_agent":
+                    # Re-fetch knowledge specifically for the specialist agent
+                    prior_facts = self.knowledge_store.get_facts(challenge_id=challenge_id)
                     agent_challenge = challenge.copy()
+                    if prior_facts:
+                        agent_challenge["prior_knowledge"] = prior_facts
+                        
                     if decision.get("inputs", {}).get("task"):
                         agent_challenge['current_task_description'] = decision["inputs"]["task"]
                     
@@ -503,7 +515,18 @@ class CoordinatorAgent(BaseAgent):
         ))
 
     def _publish_knowledge(self, challenge_id: str, artifacts: Dict[str, Any]) -> None:
-        """Share discovered artifacts so specialist agents can consume them."""
+        """Share discovered artifacts and store them in the KnowledgeStore."""
+        # 1. Store in KnowledgeStore for persistence
+        for key, value in artifacts.items():
+            self.knowledge_store.add_fact(
+                challenge_id=challenge_id,
+                agent_id=self.agent_id,
+                key=key,
+                value=value,
+                metadata={"timestamp": datetime.now().isoformat()}
+            )
+
+        # 2. Broadcast via broker for immediate reaction
         self.broker.publish(Message(
             message_id=str(uuid.uuid4()),
             message_type=MessageType.KNOWLEDGE_SHARE,

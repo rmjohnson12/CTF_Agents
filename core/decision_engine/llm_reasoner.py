@@ -147,9 +147,14 @@ class LLMReasoner:
         system_tools = challenge.get("metadata", {}).get("system_tools", [])
         tools_ctx = f"Available system tools: {', '.join(system_tools)}" if system_tools else ""
 
+        # Include prior knowledge if present
+        prior_knowledge = challenge.get("prior_knowledge", [])
+        knowledge_ctx = f"\nPrior Knowledge (discovered facts):\n{json.dumps(prior_knowledge, indent=2)}" if prior_knowledge else ""
+
         return f"""
     You are analyzing a CTF challenge for routing and planning.
     {tools_ctx}
+    {knowledge_ctx}
 
     Return ONLY valid JSON with this shape:
     {{
@@ -174,9 +179,14 @@ class LLMReasoner:
         system_tools = challenge.get("metadata", {}).get("system_tools", [])
         tools_ctx = f"Available system tools: {', '.join(system_tools)}" if system_tools else ""
 
+        # Include prior knowledge if present
+        prior_knowledge = challenge.get("prior_knowledge", [])
+        knowledge_ctx = f"\nPrior Knowledge (discovered facts):\n{json.dumps(prior_knowledge, indent=2)}" if prior_knowledge else ""
+
         return f"""
     You are deciding the next step in a CTF agent workflow.
     {tools_ctx}
+    {knowledge_ctx}
 
     Return ONLY valid JSON with this shape:
     {{

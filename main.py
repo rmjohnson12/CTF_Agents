@@ -13,6 +13,7 @@ from agents.specialists.forensics.forensics_agent import ForensicsAgent
 from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineeringAgent
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
+from agents.specialists.networking.networking_agent import NetworkingAgent
 
 
 def main(argv: List[str]) -> int:
@@ -58,6 +59,7 @@ def main(argv: List[str]) -> int:
     coordinator.register_agent(ReverseEngineeringAgent(agent_id="reverse_agent"))
     coordinator.register_agent(OSINTAgent(agent_id="osint_agent", browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent(agent_id="log_agent"))
+    coordinator.register_agent(NetworkingAgent(agent_id="networking_agent"))
 
     result = coordinator.solve_challenge(challenge, resume=args.resume)
     print(json.dumps(result, indent=2))
