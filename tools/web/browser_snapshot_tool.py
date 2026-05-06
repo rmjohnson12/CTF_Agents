@@ -38,6 +38,12 @@ def _extract_title_from_html(html: str) -> str:
     return _norm_ws(match.group(1))
 
 
+def _json_safe_mapping(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items()}
+
+
 @dataclass
 class BrowserSnapshotResult:
     url: str
@@ -56,6 +62,8 @@ class BrowserSnapshotResult:
     cookies: List[Dict[str, Any]]
     script_srcs: List[str]
     hidden_inputs: List[Dict[str, str]]
+    local_storage: Dict[str, str]
+    session_storage: Dict[str, str]
 
     # Saved artifacts
     screenshot_path: str
@@ -76,6 +84,8 @@ class BrowserSnapshotResult:
             "cookies": self.cookies,
             "script_srcs": self.script_srcs,
             "hidden_inputs": self.hidden_inputs,
+            "local_storage": self.local_storage,
+            "session_storage": self.session_storage,
             "artifacts": {
                 "screenshot_path": self.screenshot_path,
                 "html_path": self.html_path,
@@ -153,6 +163,8 @@ class BrowserSnapshotTool:
         captured_cookies: List[Dict[str, Any]] = []
         script_srcs: List[str] = []
         hidden_inputs: List[Dict[str, str]] = []
+        local_storage: Dict[str, str] = {}
+        session_storage: Dict[str, str] = {}
 
         try:
             with sync_playwright() as p:
@@ -188,6 +200,14 @@ class BrowserSnapshotTool:
                 captured_cookies = context.cookies()
                 script_srcs = page.eval_on_selector_all("script[src]", "els => els.map(s => s.src).filter(Boolean)")
                 hidden_inputs = page.eval_on_selector_all("input[type=hidden]", "els => els.map(i => ({name: i.name || '', id: i.id || '', value: i.value || ''}))")
+                
+                try:
+                    local_storage = _json_safe_mapping(page.evaluate("() => ({...localStorage})"))
+                    session_storage = _json_safe_mapping(page.evaluate("() => ({...sessionStorage})"))
+                except:
+                    local_storage = {}
+                    session_storage = {}
+
                 final_url = page.url
                 title = page.title()
                 
@@ -230,6 +250,7 @@ class BrowserSnapshotTool:
             "elapsed_s": elapsed, "links": links, "forms": forms, 
             "text_preview": text_preview, "html_content": html_content,
             "cookies": captured_cookies, "script_srcs": script_srcs, "hidden_inputs": hidden_inputs,
+            "local_storage": local_storage, "session_storage": session_storage,
             "artifacts": {
                 "screenshot_path": str(screenshot_path),
                 "html_path": str(html_path),
@@ -240,7 +261,8 @@ class BrowserSnapshotTool:
 
         return BrowserSnapshotResult(
             url, final_url, title, status, elapsed, links, forms, text_preview, html_content,
-            captured_cookies, script_srcs, hidden_inputs, str(screenshot_path), str(html_path), str(json_path)
+            captured_cookies, script_srcs, hidden_inputs, local_storage, session_storage,
+            str(screenshot_path), str(html_path), str(json_path)
         )
 
     def submit_form(
@@ -319,6 +341,12 @@ class BrowserSnapshotTool:
                 html_path.write_text(html_content, encoding="utf-8")
                 page.screenshot(path=str(screenshot_path), full_page=True)
                 captured_cookies = context.cookies()
+                try:
+                    local_storage = page.evaluate("() => ({...localStorage})")
+                    session_storage = page.evaluate("() => ({...sessionStorage})")
+                except:
+                    local_storage = {}
+                    session_storage = {}
                 body_text = page.eval_on_selector("body", "el => (el && el.innerText) ? el.innerText : ''")
                 text_preview = _truncate(_norm_ws(body_text or ""), self.max_text_chars)
                 browser.close()
@@ -334,6 +362,8 @@ class BrowserSnapshotTool:
             "elapsed_s": elapsed, "links": [], "forms": [], 
             "text_preview": text_preview, "html_content": html_content,
             "cookies": captured_cookies, "script_srcs": [], "hidden_inputs": [],
+            "local_storage": local_storage if 'local_storage' in locals() else {},
+            "session_storage": session_storage if 'session_storage' in locals() else {},
             "artifacts": {
                 "screenshot_path": str(screenshot_path),
                 "html_path": str(html_path),
@@ -344,5 +374,8 @@ class BrowserSnapshotTool:
 
         return BrowserSnapshotResult(
             url, final_url, title, status, elapsed, [], [], text_preview, html_content,
-            captured_cookies, [], [], str(screenshot_path), str(html_path), str(json_path)
+            captured_cookies, [], [], 
+            local_storage if 'local_storage' in locals() else {}, 
+            session_storage if 'session_storage' in locals() else {},
+            str(screenshot_path), str(html_path), str(json_path)
         )

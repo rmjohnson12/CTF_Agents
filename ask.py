@@ -73,13 +73,14 @@ def _extract_referenced_paths(user_input: str) -> List[str]:
     potential_paths = [
         w.strip(" \"',?!.;")
         for w in user_input.split()
-        if "/" in w or w.startswith("~")
     ]
     files_in_prompt = []
     for p in potential_paths:
-        full_path = _normalize_path(p)
-        if os.path.exists(full_path):
-            files_in_prompt.append(full_path)
+        # Check if it looks like a path or if it's a file that exists in CWD
+        if "/" in p or p.startswith("~") or os.path.isfile(p):
+            full_path = _normalize_path(p)
+            if os.path.exists(full_path) and os.path.isfile(full_path):
+                files_in_prompt.append(full_path)
 
     current_files = [
         f
@@ -156,22 +157,24 @@ def _heuristic_challenge_from_instruction(
 
     log_terms = ["log", "auth", "ssh", "brute force", "failed password", "authentication"]
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
+    web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web"]
 
     if any(term in lowered_input for term in log_terms):
         category = "log"
     elif (
-        any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.pcapng') for f in challenge_files)
+        any(f.lower().endswith(('.pdf', '.pcap', '.pcapng')) for f in challenge_files)
         or (
-            any(f.endswith('.bin') or f.endswith('.dat') for f in challenge_files)
+            any(f.lower().endswith(('.bin', '.dat')) for f in challenge_files)
             and any(term in lowered_input for term in forensics_terms)
         )
+        or any(term in lowered_input for term in ["forensics", "artifact"])
     ):
         category = "forensics"
-    elif any(f.endswith('.py') or f.endswith('.exe') for f in challenge_files) or "authenticate" in lowered_input:
+    elif any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files) or "authenticate" in lowered_input:
         category = "reverse"
-    elif url or any(term in lowered_input for term in ["jwt", "session", "cookie", "token", ".cloud"]):
+    elif url or any(term in lowered_input for term in web_terms):
         category = "web"
-    elif any(f.endswith('.txt') for f in challenge_files) or any(term in lowered_input for term in crypto_terms):
+    elif any(f.lower().endswith(('.txt', '.doc', '.docx')) for f in challenge_files) or any(term in lowered_input for term in crypto_terms):
         category = "crypto"
     elif any(term in lowered_input for term in coding_terms):
         category = "misc"

@@ -208,6 +208,12 @@ class CoordinatorAgent(BaseAgent):
                 action, target = self._normalize_decision(action, target, challenge, all_steps)
                 decision_key = (action, target)
 
+                # Correct common reasoner mixups (agents vs tools)
+                if action == "run_tool" and target in self.specialist_agents:
+                    action = "run_agent"
+                elif action == "run_agent" and target in ["browser_snapshot", "tony_htb_sql"]:
+                    action = "run_tool"
+
                 if action == "stop":
                     if not futures:
                         all_steps.append("Reasoner requested to stop.")
@@ -217,6 +223,21 @@ class CoordinatorAgent(BaseAgent):
                         all_steps.append("Reasoner requested to stop, but tasks are still running...")
                         self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                         continue
+
+                # Decision Quality: Check if we've already done this exact thing in this run
+                # without getting any new hints or knowledge.
+                has_new_info = "User Hint:" in challenge.get("description", "") or (prior_facts and len(prior_facts) > 0)
+                
+                is_duplicate = any(
+                    h.get("routing", {}).get("selected_target") == target and
+                    h.get("routing", {}).get("execution_type") == ("agent" if action == "run_agent" else "tool") and
+                    h.get("challenge_id") == challenge_id
+                    for h in history
+                )
+                
+                if is_duplicate and not has_new_info:
+                    all_steps.append(f"Skipping duplicate task: {action} -> {target} (already attempted and no new info)")
+                    continue
 
                 if any(info["action"] == action and info["target"] == target for info in futures.values()):
                     all_steps.append(f"Waiting for in-flight task: {action} -> {target}")
