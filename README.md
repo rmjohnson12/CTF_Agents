@@ -92,11 +92,22 @@ the project root.
 
 ## Quick Start
 
-Use `ask.py` for natural-language tasks:
+Use `ask.py` for natural-language tasks. These examples run against files that
+are included in the repo and work without an LLM key:
 
 ```bash
-python3 ask.py "Find the password for ~/Downloads/reverse_me.py"
+python3 ask.py "Find the password for tests/e2e/fixtures/reverse_me.py"
 python3 ask.py "Decode this base64 challenge from challenges/templates/example_crypto_base64.json"
+python3 ask.py "Decrypt the following message: 'pm ol ohk hufaopun jvumpkluaphs av zhf...' It seems to be encrypted with a simple cipher."
+python3 ask.py "Analyze this file for hidden flags. File is located in challenges/active/sim_web_001/artifact.bin"
+python3 ask.py "Analyze tests/e2e/fixtures/auth_events.txt and identify which IP executed a brute force SSH attack"
+python3 ask.py "Calculate the sum of all prime numbers between 1 and 100 and print it in the format CTF{result}"
+```
+
+For your own authorized targets, you can also point at PCAPs, URLs, or challenge
+files that are not part of this repository:
+
+```bash
 python3 ask.py "Analyze suspicious traffic in capture.pcapng and recover the flag"
 python3 ask.py "Check http://challenge.local:8080 for common CTF web leaks"
 ```
