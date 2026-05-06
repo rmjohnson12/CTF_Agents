@@ -51,6 +51,24 @@ def _normalize_path(p: str) -> str:
 
     return expanded
 
+def _normalize_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return url
+    url = url.strip()
+    if re.match(r"^https?://", url):
+        return url
+    if url.startswith("www.") or re.match(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:/.*)?$", url):
+        return "http://" + url
+    return url
+
+def _normalize_challenge(challenge: Dict[str, Any]) -> Dict[str, Any]:
+    if challenge.get("url"):
+        challenge["url"] = _normalize_url(challenge["url"])
+    target = challenge.get("target")
+    if isinstance(target, dict) and target.get("url"):
+        target["url"] = _normalize_url(target["url"])
+    return challenge
+
 def _extract_referenced_paths(user_input: str) -> List[str]:
     potential_paths = [
         w.strip(" \"',?!.;")
@@ -112,7 +130,7 @@ def _heuristic_challenge_from_instruction(
     url = None
     url_match = re.search(r'(?:https?://|www\.)[^\s<>"]+|(?:\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\b)', user_input)
     if url_match:
-        url = url_match.group(0).strip(".,")
+        url = _normalize_url(url_match.group(0).strip(".,"))
 
     lowered_input = user_input.lower()
     crypto_terms = [
@@ -245,14 +263,15 @@ Example shape:
                     raise Exception("LLM client not configured")
                 raw_json = reasoner._call_llm(prompt)
                 raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
-                challenge = json.loads(raw_json)
+                challenge = _normalize_challenge(json.loads(raw_json))
             except Exception as e:
                 print(f"LLM mapping failed or not available, using heuristics...")
-                challenge = _heuristic_challenge_from_instruction(user_input, available_tools)
+                challenge = _normalize_challenge(_heuristic_challenge_from_instruction(user_input, available_tools))
         else:
             # Follow-up input: append to description and set resume
             challenge["description"] = (challenge.get("description") or "") + f"\n\nUser Hint: {user_input}"
             resume = True
+            challenge = _normalize_challenge(challenge)
 
         print(f"Target category: {challenge.get('category')}")
         if challenge.get("files"):

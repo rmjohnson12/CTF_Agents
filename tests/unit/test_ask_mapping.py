@@ -1,6 +1,6 @@
 import json
 
-from ask import _heuristic_challenge_from_instruction, _normalize_path, _unwrap_ask_command
+from ask import _heuristic_challenge_from_instruction, _normalize_path, _normalize_url, _unwrap_ask_command
 
 
 def test_heuristic_mapping_loads_referenced_challenge_json(tmp_path, monkeypatch):
@@ -86,3 +86,17 @@ def test_normalize_path_recovers_downloads_path_from_llm_output(tmp_path, monkey
     monkeypatch.setenv("HOME", str(home))
 
     assert _normalize_path("Downloads/challenge.py") == str(download_file)
+
+
+def test_normalize_url_adds_scheme_to_bare_ip_port():
+    assert _normalize_url("154.57.164.65:30433") == "http://154.57.164.65:30433"
+
+
+def test_heuristic_mapping_normalizes_bare_ip_port_to_http_url():
+    challenge = _heuristic_challenge_from_instruction(
+        "Help desk JWT challenge at 154.57.164.65:30433",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "web"
+    assert challenge["url"] == "http://154.57.164.65:30433"

@@ -89,3 +89,29 @@ def test_web_agent_jwt_playbook_uses_challenge_description():
     assert result["status"] == "solved"
     assert result["flag"] == "HTB{jwt_secret_leak}"
     assert any("Executing JWT Playbook" in step for step in result["steps"])
+
+
+def test_web_agent_normalizes_bare_ip_port_url():
+    class RecordingBrowserTool(MockBrowserTool):
+        def __init__(self):
+            self.urls = []
+
+        def snapshot(self, url, cookies=None):
+            self.urls.append(url)
+            return super().snapshot(url, cookies=cookies)
+
+    browser = RecordingBrowserTool()
+    agent = WebExploitationAgent(
+        browser_tool=browser,
+        http_tool=MockHttpTool(),
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    agent.solve_challenge({
+        "id": "bare_ip_web",
+        "category": "web",
+        "description": "Help desk portal",
+        "url": "127.0.0.1:30433",
+    })
+
+    assert browser.urls[0] == "http://127.0.0.1:30433"

@@ -238,9 +238,9 @@ class CoordinatorAgent(BaseAgent):
                     continue
 
                 if decision_key in deferred_duplicate_targets:
-                    all_steps.append(f"Skipping duplicate completed task: {action} -> {target}")
+                    all_steps.append(f"Target already completed without a solution: {action} -> {target}. Stopping to avoid a retry loop.")
                     self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
-                    continue
+                    break
 
                 task_id = f"{challenge_id}_step_{i+1}"
                 task = Task(
