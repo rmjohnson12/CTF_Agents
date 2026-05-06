@@ -225,7 +225,24 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 1: Reverse Engineering (Source/Binary analysis)
+        # Priority 1: Forensics-style binary artifacts.
+        # A .bin can be a reverse task, but prompts asking for hidden/extracted data
+        # should get strings/binwalk style analysis first.
+        if (
+            any(f.endswith('.bin') or f.endswith('.dat') for f in files)
+            and self._kw(text, "hidden", "artifact", "extract", "embedded", "strings", "forensics")
+        ):
+            indicators.append("binary_artifact_forensics")
+            return ChallengeAnalysis(
+                category_guess="forensics",
+                confidence=0.95,
+                reasoning="Detected binary artifact with hidden/extraction-oriented wording.",
+                recommended_target="forensics_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
+        # Priority 2: Reverse Engineering (Source/Binary analysis)
         if any(f.endswith('.py') or f.endswith('.exe') or f.endswith('.bin') or f.endswith('.elf') for f in files) or \
            self._kw(text, "reverse", "source code", "analyze program", "authenticate the program"):
             indicators.append("reverse_terms")
@@ -238,8 +255,8 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 2: Forensics (if files are present or forensics keywords found)
-        if any(f.endswith('.pdf') or f.endswith('.pcap') for f in files) or \
+        # Priority 3: Forensics (if files are present or forensics keywords found)
+        if any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.dat') for f in files) or \
            self._kw(text, "artifact", "extract", "binwalk", "forensics", "metadata", "exiftool"):
             indicators.append("forensics_terms")
             return ChallengeAnalysis(

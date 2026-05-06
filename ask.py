@@ -100,7 +100,15 @@ def _heuristic_challenge_from_instruction(
         if _load_challenge_json(path) is None
     ]
 
-    if any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.pcapng') for f in challenge_files):
+    forensics_terms = ["hidden", "artifact", "forensics", "extract", "embedded", "strings"]
+
+    if (
+        any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.pcapng') for f in challenge_files)
+        or (
+            any(f.endswith('.bin') or f.endswith('.dat') for f in challenge_files)
+            and any(term in lowered_input for term in forensics_terms)
+        )
+    ):
         category = "forensics"
     elif any(f.endswith('.py') or f.endswith('.exe') for f in challenge_files) or "authenticate" in lowered_input:
         category = "reverse"

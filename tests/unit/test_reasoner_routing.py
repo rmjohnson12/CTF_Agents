@@ -80,3 +80,24 @@ def test_reasoner_routes_auth_log_before_web_login():
     assert analysis.category_guess == "log"
     assert analysis.recommended_target == "log_agent"
     assert analysis.recommended_action == "run_agent"
+
+
+def test_reasoner_routes_hidden_binary_artifact_to_forensics_before_reverse():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "forensics_bin_001",
+        "name": "Hidden Artifact",
+        "category": "forensics",
+        "description": "Analyze this file for hidden flags.",
+        "hints": [],
+        "tags": [],
+        "files": ["artifact.bin"],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "forensics"
+    assert analysis.recommended_target == "forensics_agent"
+    assert analysis.recommended_action == "run_agent"
