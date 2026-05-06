@@ -1,8 +1,9 @@
 import json
 import os
+import re
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 # Ensure we can import from project root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -16,6 +17,107 @@ from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineer
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from core.decision_engine.llm_reasoner import LLMReasoner
+
+def _extract_referenced_paths(user_input: str) -> List[str]:
+    potential_paths = [
+        w.strip(" \"',?!.;")
+        for w in user_input.split()
+        if "/" in w or w.startswith("~")
+    ]
+    files_in_prompt = []
+    for p in potential_paths:
+        full_path = os.path.expanduser(p)
+        if os.path.exists(full_path):
+            files_in_prompt.append(full_path)
+
+    current_files = [
+        f
+        for f in os.listdir(".")
+        if os.path.isfile(f) and f.lower() in user_input.lower()
+    ]
+    files_in_prompt.extend([os.path.abspath(f) for f in current_files])
+    return sorted(set(files_in_prompt))
+
+def _load_challenge_json(path: str) -> Optional[Dict[str, Any]]:
+    if not path.lower().endswith(".json"):
+        return None
+
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    if not any(key in data for key in ("description", "category", "name")):
+        return None
+
+    return data
+
+def _heuristic_challenge_from_instruction(
+    user_input: str,
+    available_tools: List[str],
+) -> Dict[str, Any]:
+    files_in_prompt = _extract_referenced_paths(user_input)
+
+    challenge_jsons = [
+        loaded
+        for path in files_in_prompt
+        if (loaded := _load_challenge_json(path)) is not None
+    ]
+    if len(challenge_jsons) == 1:
+        challenge = challenge_jsons[0]
+        metadata = dict(challenge.get("metadata") or {})
+        metadata.setdefault("system_tools", available_tools)
+        challenge["metadata"] = metadata
+        return challenge
+
+    category = "misc"
+    url = None
+    url_match = re.search(r'https?://[^\s<>"]+|www\.[^\s<>"]+', user_input)
+    if url_match:
+        url = url_match.group(0).strip(".,")
+
+    lowered_input = user_input.lower()
+    crypto_terms = [
+        "decrypt",
+        "decode",
+        "encoded",
+        "cipher",
+        "hash",
+        "md5",
+        "sha",
+        "base64",
+        "hex",
+        "password",
+        "rockyou",
+    ]
+
+    challenge_files = [
+        path for path in files_in_prompt
+        if _load_challenge_json(path) is None
+    ]
+
+    if any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.pcapng') for f in challenge_files):
+        category = "forensics"
+    elif any(f.endswith('.py') or f.endswith('.exe') for f in challenge_files) or "authenticate" in lowered_input:
+        category = "reverse"
+    elif url or ".cloud" in lowered_input:
+        category = "web"
+    elif any(f.endswith('.txt') for f in challenge_files) or any(term in lowered_input for term in crypto_terms):
+        category = "crypto"
+
+    return {
+        "id": "heuristic_task",
+        "name": "Heuristic Task",
+        "category": category,
+        "description": user_input,
+        "files": challenge_files,
+        "url": url,
+        "metadata": {"system_tools": available_tools}
+    }
 
 def main():
     if len(sys.argv) < 2:
@@ -62,63 +164,7 @@ Example shape:
         challenge = json.loads(raw_json)
     except Exception as e:
         print(f"LLM mapping failed or not available, using heuristics...")
-        # Heuristic Fallback
-        # 1. Extract potential paths from prompt (words containing / or starting with ~)
-        # Strip trailing punctuation like ?, !, or .
-        potential_paths = [w.strip(" \"',?!.;") for w in user_input.split() if "/" in w or w.startswith("~")]
-        files_in_prompt = []
-        for p in potential_paths:
-            full_path = os.path.expanduser(p)
-            if os.path.exists(full_path):
-                files_in_prompt.append(full_path)
-        
-        # 2. Check current directory for filenames mentioned
-        current_files = [f for f in os.listdir('.') if os.path.isfile(f) and f.lower() in user_input.lower()]
-        files_in_prompt.extend([os.path.abspath(f) for f in current_files])
-        # Dedupe
-        files_in_prompt = list(set(files_in_prompt))
-
-        category = "misc"
-        url = None
-        # Simple regex for URL extraction
-        import re
-        url_match = re.search(r'https?://[^\s<>"]+|www\.[^\s<>"]+', user_input)
-        if url_match:
-            url = url_match.group(0).strip(".,")
-
-        lowered_input = user_input.lower()
-        crypto_terms = [
-            "decrypt",
-            "decode",
-            "encoded",
-            "cipher",
-            "hash",
-            "md5",
-            "sha",
-            "base64",
-            "hex",
-            "password",
-            "rockyou",
-        ]
-
-        if any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.pcapng') for f in files_in_prompt):
-            category = "forensics"
-        elif any(f.endswith('.py') or f.endswith('.exe') for f in files_in_prompt) or "authenticate" in lowered_input:
-            category = "reverse"
-        elif url or ".cloud" in lowered_input:
-            category = "web"
-        elif any(f.endswith('.txt') for f in files_in_prompt) or any(term in lowered_input for term in crypto_terms):
-            category = "crypto"
-
-        challenge = {
-            "id": "heuristic_task",
-            "name": "Heuristic Task",
-            "category": category,
-            "description": user_input,
-            "files": files_in_prompt,
-            "url": url,
-            "metadata": {"system_tools": available_tools}
-        }
+        challenge = _heuristic_challenge_from_instruction(user_input, available_tools)
 
     print(f"Mapped to category: {challenge.get('category')}")
     if challenge.get("files"):
