@@ -128,18 +128,9 @@ class CryptographyAgent(BaseAgent):
 
         cipher_text = self._extract_ciphertext(challenge)
         
-        # 1.1 Detection/Decoding: If it looks like hex or base64, decode it
         # Check for "Flag: " prefix and strip it
         if cipher_text.lower().startswith("flag:"):
             cipher_text = cipher_text[5:].strip()
-        
-        # Try hex decode - if it's hex, decode it to raw bytes (stored as latin-1 string)
-        if all(c in "0123456789abcdefABCDEF" for c in cipher_text) and len(cipher_text) % 2 == 0 and len(cipher_text) > 8:
-            try:
-                raw_bytes = bytes.fromhex(cipher_text)
-                steps.append("  Detected hex encoding in ciphertext. Decoding to bytes...")
-                cipher_text = raw_bytes.decode('latin-1', errors='ignore')
-            except Exception: pass
 
         steps.append(f"Extracted ciphertext: {cipher_text}")
 

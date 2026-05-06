@@ -143,6 +143,7 @@ class CoordinatorAgent(BaseAgent):
         # Thread pool for parallel execution
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         futures = {}
+        deferred_duplicate_targets = set()
 
         def record_completed_future(f, step_prefix: str) -> Optional[Dict[str, Any]]:
             task_info = futures.pop(f)
@@ -203,6 +204,7 @@ class CoordinatorAgent(BaseAgent):
                 action = decision.get("next_action", "stop")
                 target = decision.get("target", "none")
                 reasoning = decision.get("reasoning", "No reasoning provided.")
+                decision_key = (action, target)
 
                 if action == "stop":
                     if not futures:
@@ -217,8 +219,25 @@ class CoordinatorAgent(BaseAgent):
                 if any(info["action"] == action and info["target"] == target for info in futures.values()):
                     all_steps.append(f"Waiting for in-flight task: {action} -> {target}")
                     self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
-                    # Block until at least one task finishes, then continue
-                    concurrent.futures.wait(futures.keys(), timeout=10, return_when=concurrent.futures.FIRST_COMPLETED)
+                    done, _ = concurrent.futures.wait(
+                        futures.keys(), timeout=10, return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+                    for f in done:
+                        completed_result = record_completed_future(f, "Async Result")
+                        if completed_result is not None:
+                            completed_result["steps"] = all_steps
+                            completed_result["history"] = history
+                            self.active_challenges.pop(challenge_id, None)
+                            self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                            self.result_manager.save_run_result(completed_result)
+                            return completed_result
+                    if done:
+                        deferred_duplicate_targets.add(decision_key)
+                    continue
+
+                if decision_key in deferred_duplicate_targets:
+                    all_steps.append(f"Skipping duplicate completed task: {action} -> {target}")
+                    self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                     continue
 
                 task_id = f"{challenge_id}_step_{i+1}"
