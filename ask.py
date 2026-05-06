@@ -19,6 +19,13 @@ from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
 from core.decision_engine.llm_reasoner import LLMReasoner
 
+def _normalize_path(p: str) -> str:
+    """Robustly expand tilde and return absolute path, even if joined weirdly."""
+    if "~" in p:
+        # If ~ is buried (e.g. /cwd/~/path), extract from ~ onwards
+        p = p[p.find("~"):]
+    return os.path.abspath(os.path.expanduser(p))
+
 def _extract_referenced_paths(user_input: str) -> List[str]:
     potential_paths = [
         w.strip(" \"',?!.;")
@@ -27,7 +34,7 @@ def _extract_referenced_paths(user_input: str) -> List[str]:
     ]
     files_in_prompt = []
     for p in potential_paths:
-        full_path = os.path.expanduser(p)
+        full_path = _normalize_path(p)
         if os.path.exists(full_path):
             files_in_prompt.append(full_path)
 
@@ -216,6 +223,8 @@ Example shape:
 
         print(f"Target category: {challenge.get('category')}")
         if challenge.get("files"):
+            # Normalize and expand paths
+            challenge["files"] = [_normalize_path(f) for f in challenge["files"]]
             print(f"Target files: {challenge.get('files')}")
 
         # Step 2: Solve

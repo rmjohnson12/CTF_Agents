@@ -4,6 +4,7 @@ Cryptography Specialist Agent
 Specialized agent for solving cryptography-based CTF challenges.
 """
 
+import os
 import logging
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
@@ -126,6 +127,20 @@ class CryptographyAgent(BaseAgent):
         steps.append("Detected types: " + ", ".join(analysis["detected_types"]))
 
         cipher_text = self._extract_ciphertext(challenge)
+        
+        # 1.1 Detection/Decoding: If it looks like hex or base64, decode it
+        # Check for "Flag: " prefix and strip it
+        if cipher_text.lower().startswith("flag:"):
+            cipher_text = cipher_text[5:].strip()
+        
+        # Try hex decode - if it's hex, decode it to raw bytes (stored as latin-1 string)
+        if all(c in "0123456789abcdefABCDEF" for c in cipher_text) and len(cipher_text) % 2 == 0 and len(cipher_text) > 8:
+            try:
+                raw_bytes = bytes.fromhex(cipher_text)
+                steps.append("  Detected hex encoding in ciphertext. Decoding to bytes...")
+                cipher_text = raw_bytes.decode('latin-1', errors='ignore')
+            except Exception: pass
+
         steps.append(f"Extracted ciphertext: {cipher_text}")
 
         best_result: Optional[Tuple[str, str, float, str]] = None
@@ -214,16 +229,11 @@ class CryptographyAgent(BaseAgent):
                 steps.append(f"SUCCESS: Found flag pattern via {method}")
                 flag = found
             # If the score is decent or it looks like a specific hash answer (32 chars hex)
-            elif score > 5.0 or (method == "hex_raw" and len(plaintext) == 32):
+            elif score > 10.0 or (method == "hex_raw" and len(plaintext) == 32):
                 steps.append(f"SUCCESS: Decoded via {method} (score {score:.2f})")
                 flag = plaintext
             else:
                 steps.append(f"Rejected candidate from {method} (score {score:.2f})")
-                # If it's the ONLY thing we have and it looks like it could be the answer,
-                # let's be less picky.
-                if score > -2.0:
-                    steps.append(f"  [Wait] Actually, let's keep it as a potential answer.")
-                    flag = plaintext
         
         return {
             "challenge_id": challenge.get("id"),
@@ -256,11 +266,12 @@ class CryptographyAgent(BaseAgent):
         if encoded_token:
             return encoded_token
 
-        # Priority 5: file content — skip wordlist/log files; only read single-content files
+        # Priority 5: file content — skip source code and wordlists
         files = challenge.get("files", [])
         for file_path in files:
-            if file_path.endswith(".txt") or file_path.endswith(".log"):
-                # plaintext lists and log files are not ciphertext
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext in [".py", ".c", ".cpp", ".java", ".go", ".sh", ".txt", ".log"]:
+                # skip source code and plain text lists/logs
                 continue
             try:
                 with open(file_path, "r") as f:
@@ -269,11 +280,25 @@ class CryptographyAgent(BaseAgent):
                     return content
             except Exception:
                 pass
+        
+        # Fallback for .txt files if no better candidate found
+        for file_path in files:
+            if file_path.endswith(".txt") and "output" in file_path.lower():
+                try:
+                    with open(file_path, "r") as f:
+                        return f.read().strip()
+                except Exception:
+                    pass
 
-        # Priority 6: strip preamble from description and return remainder
+        # Priority 6: strip preamble from description and return remainder ONLY if it looks like ciphertext
         text = description.strip()
         if not text.startswith("$"):
             text = re.sub(r'^(?i:please\s+)?(?i:decrypt|decode|solve|what is)\s+(?i:this|the|flag)?\s+', '', text)
+        
+        # Don't return long natural language as ciphertext fallback
+        if len(text.split()) > 4 or any(w in text.lower() for w in ["challenge", "file", "download"]):
+            return ""
+
         return text.strip()
 
     def _extract_encoded_token(self, text: str) -> Optional[str]:
@@ -409,9 +434,14 @@ class CryptographyAgent(BaseAgent):
         
         score = sum(8.0 for w in words if w in self.common_words)
         
-        # Penalize non-printable/weird characters less aggressively if we have word hits
+        # Density check: if words are a tiny fraction of the text, it's likely garbage
+        word_len = sum(len(w) for w in words)
+        if len(text) > 0 and (word_len / len(text)) < 0.3:
+            score -= 10.0
+
+        # Penalize non-printable/weird characters more heavily
         weird_penalty = sum(not (c.isalpha() or c.isspace() or c in ".,!?;:'\"") for c in text)
-        score -= weird_penalty * 1.5
+        score -= weird_penalty * 2.0
         
         return score
 

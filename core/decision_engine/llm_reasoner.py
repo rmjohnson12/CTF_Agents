@@ -143,6 +143,43 @@ class LLMReasoner:
 
         return ""
 
+    def generate_script(self, challenge: Dict[str, Any], task_desc: str) -> str:
+        """Use LLM to generate a Python script for a specific task."""
+        prompt = f"""
+        Write a Python script to solve the following task in a CTF context:
+        Task: {task_desc}
+        
+        Challenge Context:
+        {json.dumps(challenge, indent=2)}
+        
+        Rules:
+        - Return ONLY the Python code. No preamble, no markdown blocks.
+        - Use standard libraries.
+        - Print the final flag clearly (e.g. 'Found flag: CTF{{...}}').
+        """
+        return self._call_llm(prompt).strip().replace("```python", "").replace("```", "").strip()
+
+    def fix_script(self, challenge: Dict[str, Any], script: str, error: str, stdout: str) -> str:
+        """Use LLM to fix a failing Python script based on its output."""
+        prompt = f"""
+        Fix the following Python script which failed during execution.
+        
+        Original Script:
+        {script}
+        
+        Execution Error:
+        {error}
+        
+        Execution Output:
+        {stdout}
+        
+        Challenge Context:
+        {json.dumps(challenge, indent=2)}
+        
+        Return ONLY the fixed Python code. No preamble, no markdown blocks.
+        """
+        return self._call_llm(prompt).strip().replace("```python", "").replace("```", "").strip()
+
     def _build_analysis_prompt(self, challenge: Dict[str, Any]) -> str:
         system_tools = challenge.get("metadata", {}).get("system_tools", [])
         tools_ctx = f"Available system tools: {', '.join(system_tools)}" if system_tools else ""
@@ -396,7 +433,18 @@ class LLMReasoner:
         last_artifacts = last_result.get("artifacts", {})
 
         # Pivot: If any step found a login form, let coding_agent try to bypass it
-        if "browser_snapshot" in last_artifacts:
+        # Heuristic 1: If we have a .py file and it's a crypto challenge, and we already tried crypto, pivot to coding
+        files = challenge.get("files", [])
+        has_script = any(f.endswith(".py") for f in files)
+        if has_script and any(h.get("agent_id") == "crypto_agent" for h in history):
+            return {
+                "next_action": "run_agent",
+                "target": "coding_agent",
+                "reasoning": "Crypto agent could not solve it directly. Pivoting to coding agent to analyze the provided script.",
+                "inputs": {"task": "Analyze the encryption script and implement a decryption routine for the output."}
+            }
+
+        if last_artifacts and "browser_snapshot" in last_artifacts:
             forms = last_artifacts["browser_snapshot"].get("forms", [])
             has_login = any("user" in str(f).lower() or "pass" in str(f).lower() for f in forms)
             if has_login and last_status != "solved":
