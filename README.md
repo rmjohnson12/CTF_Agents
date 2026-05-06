@@ -114,6 +114,8 @@ Use `main.py` when you already have a challenge JSON file:
 
 ```bash
 python3 main.py challenges/templates/example_crypto_base64.json
+python3 main.py challenges/templates/example_crypto_base64.json --max-iterations 3
+python3 main.py challenges/templates/example_crypto_base64.json --resume
 ```
 
 Challenge files are dictionaries with fields such as:
@@ -130,6 +132,10 @@ Challenge files are dictionaries with fields such as:
 
 Existing examples live in `challenges/templates/` and simulated active
 challenges live in `challenges/active/`.
+
+`--resume` loads `logs/checkpoints/{challenge_id}.json` when present and
+continues from the prior history and steps. If no checkpoint exists, the
+coordinator starts a fresh run.
 
 ## Configuration
 
@@ -160,11 +166,26 @@ pytest
 The test suite includes coordinator routing, reasoner fallback behavior, tool
 wrappers, flag detection utilities, and end-to-end fixtures.
 
+## Runtime Artifacts
+
+Generated outputs are local-only and ignored by git:
+
+- `results/` stores run reports, artifacts, and captured flags.
+- `logs/checkpoints/` stores coordinator progress snapshots for resume support.
+- `logs/knowledge.db` stores the local knowledge base.
+
+To clean local generated output:
+
+```bash
+find results -mindepth 1 ! -path 'results/README.md' -exec rm -rf {} +
+find logs/checkpoints -mindepth 1 -exec rm -rf {} +
+```
+
 ## Development Notes
 
 - Add new agents under `agents/specialists/` or `agents/support/`.
 - Add command wrappers under `tools/` using the shared tool/result patterns.
-- Keep generated outputs in `results/` and runtime logs in `logs/`.
+- Keep durable fixtures under `challenges/`; keep generated outputs local.
 - Prefer adding focused tests in `tests/unit/` for routing, parsing, and wrapper
   behavior before broad end-to-end coverage.
 
