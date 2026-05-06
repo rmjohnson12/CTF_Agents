@@ -31,12 +31,6 @@ def _extract_referenced_paths(user_input: str) -> List[str]:
         if os.path.exists(full_path):
             files_in_prompt.append(full_path)
 
-    current_files = [
-        f
-        for f in os.listdir(".")
-        if os.path.isfile(f) and f.lower() in user_input.lower()
-    ]
-    files_in_prompt.extend([os.path.abspath(f) for f in current_files])
     return sorted(set(files_in_prompt))
 
 def _load_challenge_json(path: str) -> Optional[Dict[str, Any]]:
@@ -193,7 +187,6 @@ Convert the following natural language security instruction into a standard CTF 
 Instruction: {user_input}
 
 Current working directory: {os.getcwd()}
-Available files in directory: {', '.join([f for f in os.listdir('.') if os.path.isfile(f)])}
 {system_ctx}
 
 Return ONLY the JSON object.
