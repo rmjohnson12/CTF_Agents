@@ -204,6 +204,12 @@ class CoordinatorAgent(BaseAgent):
                 target = decision.get("target", "none")
                 reasoning = decision.get("reasoning", "No reasoning provided.")
 
+                # Correct common reasoner mixups (agents vs tools)
+                if action == "run_tool" and target in self.specialist_agents:
+                    action = "run_agent"
+                elif action == "run_agent" and target in ["browser_snapshot", "tony_htb_sql"]:
+                    action = "run_tool"
+
                 if action == "stop":
                     if not futures:
                         all_steps.append("Reasoner requested to stop.")

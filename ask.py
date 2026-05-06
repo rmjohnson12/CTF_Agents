@@ -82,6 +82,8 @@ def _heuristic_challenge_from_instruction(
     url_match = re.search(r'(?:https?://|www\.)[^\s<>"]+|(?:\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\b)', user_input)
     if url_match:
         url = url_match.group(0).strip(".,")
+        if not url.startswith("http"):
+            url = "http://" + url
 
     lowered_input = user_input.lower()
     crypto_terms = [
@@ -107,6 +109,7 @@ def _heuristic_challenge_from_instruction(
 
     log_terms = ["log", "auth", "ssh", "brute force", "failed password", "authentication"]
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
+    web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web"]
 
     if any(term in lowered_input for term in log_terms):
         category = "log"
@@ -121,7 +124,7 @@ def _heuristic_challenge_from_instruction(
         category = "forensics"
     elif any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files) or "authenticate" in lowered_input:
         category = "reverse"
-    elif url or any(term in lowered_input for term in ["jwt", "session", "cookie", "token", ".cloud"]):
+    elif url or any(term in lowered_input for term in web_terms):
         category = "web"
     elif any(f.lower().endswith(('.txt', '.doc', '.docx')) for f in challenge_files) or any(term in lowered_input for term in crypto_terms):
         category = "crypto"

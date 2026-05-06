@@ -216,7 +216,7 @@ class LLMReasoner:
     "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "crypto_agent|browser_snapshot|tony_htb_sql|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|none",
+    "recommended_target": "crypto_agent|browser_snapshot|tony_htb_sql|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|web_agent|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
@@ -246,7 +246,7 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "crypto_agent|browser_snapshot|tony_htb_sql|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|none",
+    "target": "crypto_agent|browser_snapshot|tony_htb_sql|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|web_agent|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}

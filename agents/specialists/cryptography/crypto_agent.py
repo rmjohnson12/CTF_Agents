@@ -107,11 +107,14 @@ class CryptographyAgent(BaseAgent):
             cipher_types.append("rsa")
 
         cipher_types = sorted(set(cipher_types))
-        confidence = 0.95 if challenge.get("category") == "crypto" else 0.4
+        has_crypto_indicators = len(cipher_types) > 0
+        
+        can_handle = challenge.get("category") == "crypto" or has_crypto_indicators
+        confidence = 0.95 if has_crypto_indicators else (0.4 if can_handle else 0.1)
 
         return {
             "agent_id": self.agent_id,
-            "can_handle": True,
+            "can_handle": can_handle,
             "confidence": confidence,
             "detected_types": cipher_types,
             "approach": self._plan_approach(cipher_types),
@@ -234,6 +237,37 @@ class CryptographyAgent(BaseAgent):
             key, plaintext, score = self._best_single_byte_xor(cipher_text)
             best_result = self._pick_better(best_result, ("single_byte_xor", plaintext, score, f"XOR key: {key}"))
 
+        # 5. JWT Cracking (Offline)
+        if cipher_text.startswith("ey") and "." in cipher_text:
+            steps.append("Detected JWT token. Attempting to brute-force secret with common keys...")
+            common_secrets = ["secret", "123456", "password", "key", "admin", "helpdesk", "support", "ctf", "flag"]
+            
+            import hmac
+            import hashlib
+            import base64
+            
+            parts = cipher_text.split('.')
+            if len(parts) == 3:
+                header_payload = f"{parts[0]}.{parts[1]}"
+                signature = parts[2]
+                try:
+                    # Padding for b64
+                    sig_bytes = base64.urlsafe_b64decode(signature + "==")
+                    for s in common_secrets:
+                        # Try HS256
+                        h = hmac.new(s.encode(), header_payload.encode(), hashlib.sha256).digest()
+                        if h == sig_bytes:
+                            steps.append(f"SUCCESS: Cracked JWT secret: {s}")
+                            # For now, return the secret as the finding
+                            return {
+                                "challenge_id": challenge.get("id"),
+                                "agent_id": self.agent_id,
+                                "status": "solved",
+                                "flag": f"JWT Secret Cracked: {s}",
+                                "steps": steps
+                            }
+                except: pass
+
         if best_result:
             method, plaintext, score, detail = best_result
             from core.utils.flag_utils import find_first_flag
@@ -260,6 +294,16 @@ class CryptographyAgent(BaseAgent):
 
     def _extract_ciphertext(self, challenge: Dict[str, Any]) -> str:
         description = challenge.get("description", "")
+
+        # Priority 0: Check prior knowledge/facts first
+        prior_knowledge = challenge.get("prior_knowledge", [])
+        for fact in prior_knowledge:
+            # Fact can be a string or a dictionary (from KnowledgeStore)
+            val = fact.get("value") if isinstance(fact, dict) else fact
+            if isinstance(val, str) and val.startswith("ey"):
+                return val
+            if isinstance(fact, dict) and fact.get("key") == "jwt_token":
+                return str(fact.get("value"))
 
         # Priority 1: bare hash in description (MD5/SHA1/SHA256/SHA512)
         m_bare_hash = re.search(r"\b([0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64}|[0-9a-fA-F]{128})\b", description)
