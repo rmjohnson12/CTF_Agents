@@ -16,6 +16,7 @@ from agents.specialists.forensics.forensics_agent import ForensicsAgent
 from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineeringAgent
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
+from agents.specialists.networking.networking_agent import NetworkingAgent
 from core.decision_engine.llm_reasoner import LLMReasoner
 
 def _extract_referenced_paths(user_input: str) -> List[str]:
@@ -135,21 +136,59 @@ def _heuristic_challenge_from_instruction(
     }
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python ask.py \"your instruction here\"")
-        sys.exit(1)
-
-    user_input = " ".join(sys.argv[1:])
-    print(f"\n--- Processing Instruction: \"{user_input}\" ---")
-
-    reasoner = LLMReasoner()
+    interactive = len(sys.argv) < 2
+    user_input = " ".join(sys.argv[1:]) if not interactive else ""
     
-    # Step 1: Use LLM to convert natural language to challenge JSON
+    reasoner = LLMReasoner()
     from core.utils.system_checks import get_available_tools, get_system_context
     available_tools = get_available_tools()
     system_ctx = get_system_context()
 
-    prompt = f"""
+    # Initialize Tools and Coordinator once
+    from tools.web.browser_snapshot_tool import BrowserSnapshotTool
+    from tools.crypto.john import JohnTool
+    from tools.crypto.hashcat import HashcatTool
+    
+    browser_tool = BrowserSnapshotTool()
+    john_tool = JohnTool()
+    hashcat_tool = HashcatTool()
+    
+    coordinator = CoordinatorAgent(browser_snapshot_tool=browser_tool)
+    coordinator.register_agent(CryptographyAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
+    coordinator.register_agent(WebExploitationAgent(browser_tool=browser_tool))
+    coordinator.register_agent(CodingAgent(reasoner=coordinator.reasoner))
+    coordinator.register_agent(ForensicsAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
+    coordinator.register_agent(ReverseEngineeringAgent(reasoner=coordinator.reasoner))
+    coordinator.register_agent(OSINTAgent(browser_tool=browser_tool))
+    coordinator.register_agent(LogAnalysisAgent())
+    coordinator.register_agent(NetworkingAgent())
+
+    challenge = None
+    resume = False
+
+    while True:
+        if not user_input:
+            if challenge and challenge.get("status") != "solved":
+                print("\n--- The agent is stuck or needs more info ---")
+                prompt_text = "Provide a hint, a new direction, or type 'exit' to quit: "
+            else:
+                prompt_text = "Enter your CTF instruction (or 'exit'): "
+            
+            try:
+                user_input = input(f"\n{prompt_text}").strip()
+            except EOFError:
+                break
+                
+            if user_input.lower() in ["exit", "quit", "q"]:
+                break
+            if not user_input:
+                continue
+
+        print(f"\n--- Processing Instruction: \"{user_input}\" ---")
+
+        if not challenge:
+            # Step 1: Use LLM to convert natural language to challenge JSON
+            prompt = f"""
 Convert the following natural language security instruction into a standard CTF challenge JSON object.
 Instruction: {user_input}
 
@@ -168,55 +207,50 @@ Example shape:
   "url": "..."
 }}
 """
-    
-    try:
-        if reasoner.client is None:
-            raise Exception("LLM client not configured")
-        # Step 1: Use LLM to convert natural language to challenge JSON
-        raw_json = reasoner._call_llm(prompt)
-        # Clean up possible markdown blocks
-        raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
-        challenge = json.loads(raw_json)
-    except Exception as e:
-        print(f"LLM mapping failed or not available, using heuristics...")
-        challenge = _heuristic_challenge_from_instruction(user_input, available_tools)
+            try:
+                if reasoner.client is None:
+                    raise Exception("LLM client not configured")
+                raw_json = reasoner._call_llm(prompt)
+                raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
+                challenge = json.loads(raw_json)
+            except Exception as e:
+                print(f"LLM mapping failed or not available, using heuristics...")
+                challenge = _heuristic_challenge_from_instruction(user_input, available_tools)
+        else:
+            # Follow-up input: append to description and set resume
+            challenge["description"] = (challenge.get("description") or "") + f"\n\nUser Hint: {user_input}"
+            resume = True
 
-    print(f"Mapped to category: {challenge.get('category')}")
-    if challenge.get("files"):
-        print(f"Target files: {challenge.get('files')}")
-    if available_tools:
-        print(f"Detected tools: {len(available_tools)} available")
+        print(f"Target category: {challenge.get('category')}")
+        if challenge.get("files"):
+            print(f"Target files: {challenge.get('files')}")
 
-    # Step 2: Initialize Tools and Coordinator
-    from tools.web.browser_snapshot_tool import BrowserSnapshotTool
-    from tools.crypto.john import JohnTool
-    from tools.crypto.hashcat import HashcatTool
-    
-    browser_tool = BrowserSnapshotTool()
-    john_tool = JohnTool()
-    hashcat_tool = HashcatTool()
-    
-    coordinator = CoordinatorAgent(browser_snapshot_tool=browser_tool)
-    coordinator.register_agent(CryptographyAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
-    
-    # Initialize WebExploitationAgent with its tools
-    web_agent = WebExploitationAgent(browser_tool=browser_tool)
-    coordinator.register_agent(web_agent)
-    
-    coordinator.register_agent(CodingAgent(reasoner=coordinator.reasoner))
-    coordinator.register_agent(ForensicsAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
-    coordinator.register_agent(ReverseEngineeringAgent(reasoner=coordinator.reasoner))
-    coordinator.register_agent(OSINTAgent(browser_tool=browser_tool))
-    coordinator.register_agent(LogAnalysisAgent())
+        # Step 2: Solve
+        result = coordinator.solve_challenge(challenge, resume=resume)
 
-    result = coordinator.solve_challenge(challenge)
+        print("\n--- Step Result ---")
+        print(f"Status: {result.get('status')}")
+        print(f"Flag: {result.get('flag')}")
+        
+        if result.get("steps"):
+            print("\nRecent steps:")
+            for step in result.get("steps")[-5:]:
+                print(f"  - {step}")
 
-    print("\n--- Final Result ---")
-    print(f"Status: {result.get('status')}")
-    print(f"Flag: {result.get('flag')}")
-    print("\nSteps taken:")
-    for step in result.get("steps", []):
-        print(f"  - {step}")
+        if result.get("status") == "solved" or result.get("flag"):
+            print("\nChallenge solved!")
+            if interactive:
+                challenge = None # Reset for next task
+                user_input = ""
+                resume = False
+                continue
+            else:
+                break
+        
+        if not interactive:
+            break
+        
+        user_input = "" # Clear for next loop iteration input
 
 if __name__ == "__main__":
     main()
