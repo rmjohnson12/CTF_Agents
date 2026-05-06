@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -204,6 +205,7 @@ class CoordinatorAgent(BaseAgent):
                 action = decision.get("next_action", "stop")
                 target = decision.get("target", "none")
                 reasoning = decision.get("reasoning", "No reasoning provided.")
+                action, target = self._normalize_decision(action, target, challenge, all_steps)
                 decision_key = (action, target)
 
                 if action == "stop":
@@ -371,6 +373,39 @@ class CoordinatorAgent(BaseAgent):
             return result
         finally:
             agent.complete_task()
+
+    def _normalize_decision(
+        self,
+        action: str,
+        target: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> tuple[str, str]:
+        """Correct common LLM action/target mismatches before dispatch."""
+        if action == "run_tool" and target in self.specialist_agents:
+            steps.append(f"Corrected decision: run_tool -> {target} should be run_agent.")
+            return "run_agent", target
+
+        tool_targets = {"browser_snapshot", "tony_htb_sql"}
+        if action == "run_agent" and target in tool_targets:
+            steps.append(f"Corrected decision: run_agent -> {target} should be run_tool.")
+            return "run_tool", target
+
+        description = (challenge.get("description") or "").lower()
+        url = challenge.get("url") or challenge.get("target", {}).get("url")
+        has_service = bool(url) or bool(re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b", description))
+        mentions_jwt_web = any(term in description for term in ("jwt", "session", "token"))
+        if (
+            action == "run_agent"
+            and target == "crypto_agent"
+            and "web_agent" in self.specialist_agents
+            and has_service
+            and mentions_jwt_web
+        ):
+            steps.append("Corrected decision: live JWT/session web target should use web_agent.")
+            return "run_agent", "web_agent"
+
+        return action, target
 
     def _run_selected_tool(
         self,

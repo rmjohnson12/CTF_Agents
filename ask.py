@@ -38,7 +38,18 @@ def _normalize_path(p: str) -> str:
     if "~" in p:
         # If ~ is buried (e.g. /cwd/~/path), extract from ~ onwards
         p = p[p.find("~"):]
-    return os.path.abspath(os.path.expanduser(p))
+    expanded = os.path.abspath(os.path.expanduser(p))
+    if os.path.exists(expanded):
+        return expanded
+
+    # LLMs sometimes strip the leading "~/" and return Downloads/foo from a
+    # prompt that said ~/Downloads/foo. Prefer the user's real Downloads path.
+    if not os.path.isabs(p) and p.startswith("Downloads/"):
+        home_download = os.path.join(os.path.expanduser("~"), p)
+        if os.path.exists(home_download):
+            return os.path.abspath(home_download)
+
+    return expanded
 
 def _extract_referenced_paths(user_input: str) -> List[str]:
     potential_paths = [

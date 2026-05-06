@@ -1,4 +1,13 @@
+import pytest
+
 from core.decision_engine.llm_reasoner import LLMReasoner
+
+
+@pytest.fixture(autouse=True)
+def clear_llm_env(monkeypatch):
+    monkeypatch.delenv("NVAPI_KEY", raising=False)
+    monkeypatch.delenv("NGC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 def test_reasoner_routes_crypto():

@@ -151,6 +151,51 @@ def test_coordinator_iterative_loop_stops_on_reasoner_stop():
     assert agent1.solve_called == 1
 
 
+def test_coordinator_corrects_agent_target_marked_as_tool():
+    decisions = [
+        {"next_action": "run_tool", "target": "agent_1", "reasoning": "LLM confused an agent for a tool"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+
+    agent1 = MockAgent("agent_1", status_on_solve="solved", flag="CTF{corrected}")
+    coordinator.register_agent(agent1)
+
+    result = coordinator.solve_challenge({"id": "test_correct_action", "description": "test correction"})
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{corrected}"
+    assert agent1.solve_called == 1
+    assert "Corrected decision: run_tool -> agent_1 should be run_agent." in result["steps"]
+
+
+def test_coordinator_keeps_live_jwt_web_target_on_web_agent():
+    decisions = [
+        {"next_action": "run_agent", "target": "crypto_agent", "reasoning": "JWT sounds cryptographic"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+
+    crypto_agent = MockAgent("crypto_agent", status_on_solve="attempted")
+    web_agent = MockAgent("web_agent", status_on_solve="solved", flag="HTB{web_jwt}")
+    coordinator.register_agent(crypto_agent)
+    coordinator.register_agent(web_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "jwt_web",
+        "category": "web",
+        "description": "Help desk portal uses JWT tokens. Target is 154.57.164.65:30433",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{web_jwt}"
+    assert crypto_agent.solve_called == 0
+    assert web_agent.solve_called == 1
+    assert "Corrected decision: live JWT/session web target should use web_agent." in result["steps"]
+
+
 def test_coordinator_writes_checkpoint_for_fast_solve(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     decisions = [

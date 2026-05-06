@@ -1,6 +1,6 @@
 import json
 
-from ask import _heuristic_challenge_from_instruction, _unwrap_ask_command
+from ask import _heuristic_challenge_from_instruction, _normalize_path, _unwrap_ask_command
 
 
 def test_heuristic_mapping_loads_referenced_challenge_json(tmp_path, monkeypatch):
@@ -76,3 +76,13 @@ def test_unwrap_ask_command_from_interactive_prompt():
     )
 
     assert instruction == "Analyze this file for hidden flags. File is located in artifact.bin"
+
+
+def test_normalize_path_recovers_downloads_path_from_llm_output(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    download_file = home / "Downloads" / "challenge.py"
+    download_file.parent.mkdir(parents=True)
+    download_file.write_text("print('challenge')")
+    monkeypatch.setenv("HOME", str(home))
+
+    assert _normalize_path("Downloads/challenge.py") == str(download_file)

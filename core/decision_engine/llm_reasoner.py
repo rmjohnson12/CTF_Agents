@@ -216,7 +216,7 @@ class LLMReasoner:
     "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "crypto_agent|browser_snapshot|tony_htb_sql|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|none",
+    "recommended_target": "web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
@@ -246,10 +246,13 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "crypto_agent|browser_snapshot|tony_htb_sql|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|none",
+    "target": "web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
+
+    Use "run_agent" for targets ending in "_agent".
+    Use "run_tool" only for browser_snapshot or tony_htb_sql.
 
     Challenge:
     {json.dumps(challenge, indent=2)}

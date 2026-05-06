@@ -238,6 +238,12 @@ for path in paths:
             if attempt == max_retries:
                 steps.append("Max retries reached. Self-correction failed.")
 
+        if not flag:
+            steps.append("Generated scripts did not recover a flag. Running deterministic XOR fallback solver...")
+            flag = self._fallback_xor_solver(challenge, task_desc)
+            if flag:
+                steps.append(f"SUCCESS: Recovered flag via deterministic fallback: {flag}")
+
         return {
             'challenge_id': challenge.get('id'),
             'agent_id': self.agent_id,
