@@ -4,12 +4,16 @@ Reverse Engineering Specialist Agent
 Specialized agent for binary and source code analysis.
 """
 
+import logging
 from typing import Dict, Any, List, Optional
+
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
 from tools.common.python_tool import PythonTool
 import re
 import sys
+
+logger = logging.getLogger(__name__)
 
 class ReverseEngineeringAgent(BaseAgent):
     """
@@ -117,8 +121,9 @@ class ReverseEngineeringAgent(BaseAgent):
                     if "correct" in res.stdout.lower():
                         return {"challenge_id": challenge.get("id"), "agent_id": self.agent_id, "status": "solved", "flag": result, "steps": steps}
 
-            except Exception as e:
-                steps.append(f"Error during analysis: {e}")
+            except Exception as exc:
+                logger.warning("Error during reverse analysis of %s: %s", file_path, exc)
+                steps.append(f"Error during analysis: {exc}")
 
         return {"challenge_id": challenge.get("id"), "agent_id": self.agent_id, "status": "attempted", "steps": steps}
 

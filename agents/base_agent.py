@@ -5,10 +5,12 @@ This module defines the abstract base class that all agents must implement.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
 from enum import Enum
+import logging
+import shlex
 import subprocess
 import time
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from core.knowledge_base.knowledge_store import KnowledgeStore
 
@@ -120,47 +122,60 @@ class BaseAgent(ABC):
             return "General analysis and tool execution"
         return f"Focus on {', '.join(indicators)} indicators"
 
-    def run_shell_command(self, command: str, timeout: int = 60):
+    def run_shell_command(
+        self,
+        command: Union[str, Sequence[str]],
+        timeout: int = 60,
+    ):
         """
-        Helper to run shell commands from agents.
+        Helper to run shell commands from agents safely (no shell=True).
+        Accepts either a string (split via shlex) or a list of arguments.
         """
         from tools.common.result import ToolResult
+
+        if isinstance(command, str):
+            argv = shlex.split(command)
+        else:
+            argv = list(command)
+
         start_time = time.time()
         try:
             process = subprocess.Popen(
-                command,
-                shell=True,
+                argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
             )
             stdout, stderr = process.communicate(timeout=timeout)
             duration = time.time() - start_time
             return ToolResult(
-                argv=command.split(),
+                argv=argv,
                 stdout=stdout,
                 stderr=stderr,
                 exit_code=process.returncode,
                 timed_out=False,
-                duration_s=duration
+                duration_s=duration,
             )
         except subprocess.TimeoutExpired:
             duration = time.time() - start_time
             return ToolResult(
-                argv=command.split(),
+                argv=argv,
                 stdout="",
                 stderr="Timeout",
                 exit_code=-1,
                 timed_out=True,
-                duration_s=duration
+                duration_s=duration,
             )
         except Exception as e:
             duration = time.time() - start_time
+            logging.getLogger(self.agent_id).warning(
+                "run_shell_command failed: %s (argv=%s)", e, argv
+            )
             return ToolResult(
-                argv=command.split(),
+                argv=argv,
                 stdout="",
                 stderr=str(e),
                 exit_code=-1,
                 timed_out=False,
-                duration_s=duration
+                duration_s=duration,
             )

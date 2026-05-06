@@ -4,14 +4,19 @@ Cryptography Specialist Agent
 Specialized agent for solving cryptography-based CTF challenges.
 """
 
+import logging
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
+
+from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
 import base64
 import binascii
 import re
+
+logger = logging.getLogger(__name__)
 
 
 class CryptographyAgent(BaseAgent):
@@ -120,13 +125,7 @@ class CryptographyAgent(BaseAgent):
 
         # Hash Cracking Priority
         if "hash" in analysis["detected_types"] or len(cipher_text) in [32, 40, 64, 128]:
-            _rockyou_paths = [
-                "shared/wordlists/passwords/rockyou.txt",
-                "/usr/share/wordlists/rockyou.txt",
-                str(Path.home() / "Downloads" / "rockyou.txt"),
-                str(Path.home() / "Downloads" / "rockyou" / "rockyou.txt"),
-            ]
-            _rockyou = next((p for p in _rockyou_paths if Path(p).exists()), None)
+            _rockyou = next((p for p in DEFAULT_ROCKYOU_PATHS if Path(p).exists()), None)
 
             # Build wordlist priority list: user-supplied first, then rockyou fallback
             files = challenge.get("files", [])
@@ -147,6 +146,7 @@ class CryptographyAgent(BaseAgent):
                                 best_result = ("hashcat", res.cracked_password, 1000.0, f"Cracked: {res.cracked_password}")
                                 break
                         except Exception as e:
+                            logger.warning("Hashcat error (%s): %s", wl, e)
                             steps.append(f"Hashcat error ({wl}): {e}")
 
             if best_result is None:
@@ -160,6 +160,7 @@ class CryptographyAgent(BaseAgent):
                         else:
                             steps.append(f"John could not crack with {Path(wl).name}.")
                     except Exception as e:
+                        logger.warning("John error (%s): %s", wl, e)
                         steps.append(f"John error ({wl}): {e}")
 
         if "caesar_cipher" in analysis["detected_types"]:
@@ -298,8 +299,12 @@ class CryptographyAgent(BaseAgent):
     def _is_mostly_printable(raw: bytes) -> bool:
         if not raw:
             return False
-        printable = sum(32 <= b <= 126 or b in (9, 10, 13) for b in raw)
-        return printable / len(raw) >= 0.8
+        try:
+            printable = sum(32 <= b <= 126 or b in (9, 10, 13) for b in raw)
+            return printable / len(raw) >= 0.8
+        except Exception as exc:
+            logger.debug("_is_mostly_printable failed: %s", exc)
+            return False
 
     def _plan_approach(self, cipher_types: List[str]) -> str:
         if not cipher_types:
@@ -326,31 +331,42 @@ class CryptographyAgent(BaseAgent):
             compact = re.sub(r"\s+", "", text)
             while len(compact) % 4 != 0: compact += "="
             return base64.b64decode(compact)
-        except: return None
+        except Exception as exc:
+            logger.debug("_try_base64 failed: %s", exc)
+            return None
 
     def _looks_like_hex(self, text: str) -> bool:
         compact = re.sub(r"\s+", "", text)
         return len(compact) >= 4 and len(compact) % 2 == 0 and bool(re.fullmatch(r"[0-9a-fA-F]+", compact))
 
     def _try_hex(self, text: str) -> Optional[bytes]:
-        try: return bytes.fromhex(re.sub(r"\s+", "", text))
-        except: return None
+        try:
+            return bytes.fromhex(re.sub(r"\s+", "", text))
+        except Exception as exc:
+            logger.debug("_try_hex failed: %s", exc)
+            return None
 
     def _looks_like_decimal(self, text: str) -> bool:
         nums = re.split(r"[\s,]+", text.strip())
         return len(nums) >= 3 and all(n.isdigit() and 0 <= int(n) <= 255 for n in nums if n)
 
     def _try_decimal(self, text: str) -> Optional[str]:
-        try: return "".join(chr(int(n)) for n in re.split(r"[\s,]+", text.strip()) if n)
-        except: return None
+        try:
+            return "".join(chr(int(n)) for n in re.split(r"[\s,]+", text.strip()) if n)
+        except Exception as exc:
+            logger.debug("_try_decimal failed: %s", exc)
+            return None
 
     def _looks_like_octal(self, text: str) -> bool:
         nums = text.strip().split()
         return len(nums) >= 3 and all(len(n) == 3 and all('0'<=c<='7' for c in n) for n in nums)
 
     def _try_octal(self, text: str) -> Optional[str]:
-        try: return "".join(chr(int(n, 8)) for n in text.strip().split())
-        except: return None
+        try:
+            return "".join(chr(int(n, 8)) for n in text.strip().split())
+        except Exception as exc:
+            logger.debug("_try_octal failed: %s", exc)
+            return None
 
     def _best_single_byte_xor(self, cipher_text: str) -> Tuple[int, str, float]:
         try:
@@ -360,7 +376,9 @@ class CryptographyAgent(BaseAgent):
                 plain = "".join([chr(b ^ key) for b in raw])
                 candidates.append((key, plain, self._score_english(plain)))
             return max(candidates, key=lambda x: x[2])
-        except: return 0, "", float("-inf")
+        except Exception as exc:
+            logger.debug("_best_single_byte_xor failed: %s", exc)
+            return 0, "", float("-inf")
 
     def _score_english(self, text: str) -> float:
         from core.utils.flag_utils import find_first_flag

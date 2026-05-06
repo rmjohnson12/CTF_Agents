@@ -8,8 +8,11 @@ which specialist agent or tool to run next.
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from agents.base_agent import BaseAgent, AgentType, AgentStatus
@@ -21,6 +24,8 @@ from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
 from core.knowledge_base.knowledge_store import KnowledgeStore
 import concurrent.futures
+
+logger = logging.getLogger(__name__)
 
 
 class CoordinatorAgent(BaseAgent):
@@ -103,6 +108,7 @@ class CoordinatorAgent(BaseAgent):
         """
         Coordinate the solving of a challenge in an iterative loop using TaskQueue.
         Supports parallel execution of independent tasks.
+        Persists checkpoint after each iteration to logs/checkpoints/.
         """
         challenge_id = challenge.get("id", "unknown_challenge")
         self.active_challenges[challenge_id] = challenge
@@ -124,6 +130,9 @@ class CoordinatorAgent(BaseAgent):
             "steps": all_steps,
             "iterations": 0,
         }
+
+        checkpoint_dir = Path("logs/checkpoints")
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Thread pool for parallel execution
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
@@ -168,6 +177,7 @@ class CoordinatorAgent(BaseAgent):
                         completed_result["steps"] = all_steps
                         completed_result["history"] = history
                         self.active_challenges.pop(challenge_id, None)
+                        self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                         self.result_manager.save_run_result(completed_result)
                         return completed_result
 
@@ -184,13 +194,16 @@ class CoordinatorAgent(BaseAgent):
                 if action == "stop":
                     if not futures:
                         all_steps.append("Reasoner requested to stop.")
+                        self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                         break
                     else:
                         all_steps.append("Reasoner requested to stop, but tasks are still running...")
+                        self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                         continue
 
                 if any(info["action"] == action and info["target"] == target for info in futures.values()):
                     all_steps.append(f"Waiting for in-flight task: {action} -> {target}")
+                    self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                     continue
 
                 task_id = f"{challenge_id}_step_{i+1}"
@@ -224,6 +237,7 @@ class CoordinatorAgent(BaseAgent):
                 else:
                     all_steps.append(f"Unknown action: {action}")
                     self.task_queue.fail_task(task_id, f"Unknown action: {action}")
+                    self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                     continue
 
                 just_done, _ = concurrent.futures.wait([f], timeout=0.01)
@@ -233,8 +247,11 @@ class CoordinatorAgent(BaseAgent):
                         completed_result["steps"] = all_steps
                         completed_result["history"] = history
                         self.active_challenges.pop(challenge_id, None)
+                        self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                         self.result_manager.save_run_result(completed_result)
                         return completed_result
+
+                self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
 
             # Wait for any remaining tasks
             if futures:
@@ -247,6 +264,7 @@ class CoordinatorAgent(BaseAgent):
             final_result["steps"] = all_steps
             final_result["history"] = history
             
+            self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
             self.result_manager.save_run_result(final_result)
             return final_result
 
@@ -254,6 +272,7 @@ class CoordinatorAgent(BaseAgent):
             self.update_status(AgentStatus.ERROR)
             final_result["status"] = "failed"
             final_result["steps"] = all_steps + [f"Coordinator error: {exc}"]
+            self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
             self.active_challenges.pop(challenge_id, None)
             return final_result
         finally:
@@ -407,6 +426,28 @@ class CoordinatorAgent(BaseAgent):
             "execution_type": "tool",
         })
         return result
+
+    def _checkpoint_progress(
+        self,
+        checkpoint_dir: Path,
+        challenge_id: str,
+        history: List[Dict[str, Any]],
+        all_steps: List[str],
+    ) -> None:
+        """Write a checkpoint JSON file so recovery is possible after a crash."""
+        try:
+            checkpoint_path = checkpoint_dir / f"{challenge_id}.json"
+            checkpoint = {
+                "challenge_id": challenge_id,
+                "timestamp": datetime.now().isoformat(),
+                "history": history,
+                "steps": all_steps,
+            }
+            with open(checkpoint_path, "w") as f:
+                json.dump(checkpoint, f, indent=2)
+            logger.debug("Checkpoint written to %s", checkpoint_path)
+        except Exception as exc:
+            logger.warning("Failed to write checkpoint for %s: %s", challenge_id, exc)
 
     def list_registered_agents(self) -> Dict[str, List[str]]:
         """

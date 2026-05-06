@@ -5,8 +5,11 @@ Specialized agent for forensics-based CTF challenges.
 """
 
 import json
+import logging
 import os
 from typing import Dict, Any, List, Optional
+
+from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
 from tools.forensics.binwalk import BinwalkTool
 from tools.forensics.exiftool import ExiftoolTool
@@ -17,6 +20,8 @@ from tools.common.strings import StringsTool
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
 from core.utils.flag_utils import find_first_flag
+
+logger = logging.getLogger(__name__)
 
 
 class ForensicsAgent(BaseAgent):
@@ -114,23 +119,14 @@ class ForensicsAgent(BaseAgent):
                         steps.append(f"  [!] PDF is encrypted. Attempting to find password...")
                         
                         # 1. Try common wordlist (rockyou) via John
-                        wordlist = None
-                        paths = [
-                            "/Users/ronniejohnson/Downloads/rockyou.txt",
-                            "shared/wordlists/passwords/rockyou.txt",
-                            "/usr/share/wordlists/rockyou.txt"
-                        ]
-                        for p in paths:
-                            if os.path.exists(p):
-                                wordlist = p
-                                break
+                        wordlist = next((p for p in DEFAULT_ROCKYOU_PATHS if os.path.exists(p)), None)
                         
                         steps.append(f"  Running pdf2john and john with wordlist: {wordlist or 'incremental'}")
                         
                         # We need the hash first. pdf2john is usually a script.
                         # For simplicity in this wrapper, let's see if we can use john directly or a helper.
                         # Most CTF environments have pdf2john.pl or pdf2john.py.
-                        hash_res = self.run_shell_command(f"pdf2john.py {file_path}")
+                        hash_res = self.run_shell_command(["pdf2john.py", file_path])
                         if hash_res.exit_code == 0:
                             pdf_hash = hash_res.stdout.strip()
                             crack_res = self.john_tool.run(pdf_hash, wordlist=wordlist)
@@ -160,8 +156,9 @@ class ForensicsAgent(BaseAgent):
                         })
                     else:
                         steps.append("  PDF is not encrypted. Proceeding with standard analysis.")
-                except Exception as e:
-                    steps.append(f"  QPDF error: {e}")
+                except Exception as exc:
+                    logger.debug("QPDF error on %s: %s", file_path, exc)
+                    steps.append(f"  QPDF error: {exc}")
 
             # 0b. PCAP Detection & Analysis
             if file_path.lower().endswith(".pcap") or file_path.lower().endswith(".pcapng"):
@@ -212,8 +209,9 @@ class ForensicsAgent(BaseAgent):
                         "hostnames": pcap_res.hostnames,
                         "streams_analyzed": len(scapy_streams)
                     })
-                except Exception as e:
-                    steps.append(f"  Tshark error: {e}")
+                except Exception as exc:
+                    logger.debug("PCAP analysis error on %s: %s", file_path, exc)
+                    steps.append(f"  Tshark error: {exc}")
 
             # 1. Binwalk
             steps.append(f"Running binwalk on {file_path}")
@@ -227,8 +225,9 @@ class ForensicsAgent(BaseAgent):
                         if found_flag and not flag:
                             flag = found_flag
                             steps.append(f"  Flag found in binwalk: {flag}")
-            except Exception as e:
-                steps.append(f"  Binwalk error: {e}")
+            except Exception as exc:
+                logger.debug("Binwalk error on %s: %s", file_path, exc)
+                steps.append(f"  Binwalk error: {exc}")
 
             # 2. Exiftool
             steps.append(f"Running exiftool on {file_path}")
@@ -242,8 +241,9 @@ class ForensicsAgent(BaseAgent):
                     if found_flag and not flag:
                         flag = found_flag
                         steps.append(f"  Flag found in metadata: {flag}")
-            except Exception as e:
-                steps.append(f"  Exiftool error: {e}")
+            except Exception as exc:
+                logger.debug("Exiftool error on %s: %s", file_path, exc)
+                steps.append(f"  Exiftool error: {exc}")
 
             # 3. Strings
             steps.append(f"Running strings on {file_path}")
@@ -257,8 +257,9 @@ class ForensicsAgent(BaseAgent):
                             flag = found_flag
                             steps.append(f"  Flag found in strings: {flag}")
                             break
-            except Exception as e:
-                steps.append(f"  Strings error: {e}")
+            except Exception as exc:
+                logger.debug("Strings error on %s: %s", file_path, exc)
+                steps.append(f"  Strings error: {exc}")
 
         # Heuristic: Answer "What is the IP" questions if artifacts found
         if not flag and ("ip" in challenge.get("description", "").lower() or "server" in challenge.get("description", "").lower()):
@@ -287,7 +288,8 @@ class ForensicsAgent(BaseAgent):
         # Convert to bytes for binary analysis if possible
         try:
             raw_bytes = data.encode('latin-1') if isinstance(data, str) else data
-        except:
+        except Exception as exc:
+            logger.debug("Raw protocol encode failed: %s", exc)
             return None
 
         # NCL/SKY Pattern in common structured data (Base64 chunks)
@@ -321,8 +323,12 @@ class ForensicsAgent(BaseAgent):
                             decoded = base64.b64decode(clean)
                             found = find_first_flag(decoded.decode('utf-8', errors='ignore'))
                             if found: return found
-                        except: pass
-            except: pass
+                        except Exception as exc:
+                            logger.debug("Base64 chunk decode failed: %s", exc)
+                            pass
+            except Exception as exc:
+                logger.debug("Magic number chunk parsing failed: %s", exc)
+                pass
 
         # 2. General greedy base64 extraction from raw stream
         # (Useful if the protocol structure isn't exactly as above)
@@ -332,7 +338,9 @@ class ForensicsAgent(BaseAgent):
                 decoded = base64.b64decode(m.group(0))
                 found = find_first_flag(decoded.decode('utf-8', errors='ignore'))
                 if found: return found
-            except: continue
+            except Exception as exc:
+                logger.debug("Greedy base64 decode failed: %s", exc)
+                continue
 
         return None
 

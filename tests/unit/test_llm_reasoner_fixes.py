@@ -168,6 +168,35 @@ def test_call_llm_handles_none_content():
     assert result == ""
 
 
+def test_call_llm_retries_retryable_exception_before_success():
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = [
+        TimeoutError("temporary timeout"),
+        MagicMock(choices=[MagicMock(message=MagicMock(content="recovered"))]),
+    ]
+    reasoner = LLMReasoner(client=mock_client)
+
+    with patch("core.decision_engine.llm_reasoner.time.sleep") as sleep:
+        result = reasoner._call_llm("hello")
+
+    assert result == "recovered"
+    assert mock_client.chat.completions.create.call_count == 2
+    sleep.assert_called_once_with(1.0)
+
+
+def test_call_llm_exhausts_retryable_errors_without_final_sleep():
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = TimeoutError("still down")
+    reasoner = LLMReasoner(client=mock_client)
+
+    with patch("core.decision_engine.llm_reasoner.time.sleep") as sleep:
+        result = reasoner._call_llm("hello")
+
+    assert result == ""
+    assert mock_client.chat.completions.create.call_count == 3
+    assert [call.args[0] for call in sleep.call_args_list] == [1.0, 2.0]
+
+
 # ── heuristic fallback still works ───────────────────────────────────
 
 def test_heuristic_fallback_when_no_client():

@@ -201,6 +201,7 @@ results/browser_snapshot_*/
 results/**
 !results/
 !results/README.md
+logs/checkpoints/
 
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to

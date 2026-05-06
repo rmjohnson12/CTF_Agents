@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +13,9 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class ChallengeAnalysis:
@@ -24,6 +29,10 @@ class ChallengeAnalysis:
 
 _NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 _NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
+
+_RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError)
+_MAX_LLM_RETRIES = 3
+_LLM_BACKOFF_BASE = 1.0
 
 
 class LLMReasoner:
@@ -104,18 +113,35 @@ class LLMReasoner:
             return self._heuristic_next_action(challenge, analysis, history)
 
     def _call_llm(self, prompt: str) -> str:
-        try:
-            if not self.client:
+        if not self.client:
+            return ""
+
+        for attempt in range(1, _MAX_LLM_RETRIES + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response.choices[0].message.content or ""
+            except _RETRYABLE_EXCEPTIONS as exc:
+                if attempt == _MAX_LLM_RETRIES:
+                    logger.error(
+                        "LLM call exhausted all %d retries after retryable error: %s",
+                        _MAX_LLM_RETRIES,
+                        exc,
+                    )
+                    break
+                wait = _LLM_BACKOFF_BASE * (2 ** (attempt - 1))
+                logger.warning(
+                    "LLM call failed (%s), retrying in %.1fs (attempt %d/%d)",
+                    exc, wait, attempt, _MAX_LLM_RETRIES,
+                )
+                time.sleep(wait)
+            except Exception as exc:
+                logger.error("LLM call failed with non-retryable error: %s", exc)
                 return ""
 
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.choices[0].message.content or ""
-        except Exception as e:
-            print(f"[LLM ERROR] Falling back to heuristics: {e}")
-            return ""
+        return ""
 
     def _build_analysis_prompt(self, challenge: Dict[str, Any]) -> str:
         system_tools = challenge.get("metadata", {}).get("system_tools", [])

@@ -1,5 +1,6 @@
 import pytest
 import time
+import json
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.base_agent import BaseAgent, AgentType, AgentStatus
 from typing import Dict, Any, List
@@ -137,3 +138,25 @@ def test_coordinator_iterative_loop_stops_on_reasoner_stop():
     assert result["iterations"] == 2
     assert result["status"] == "attempted"
     assert agent1.solve_called == 1
+
+
+def test_coordinator_writes_checkpoint_for_fast_solve(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    decisions = [
+        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try fast agent"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="solved", flag="CTF{checkpointed}"))
+
+    result = coordinator.solve_challenge({"id": "checkpoint_fast", "description": "test checkpoint"})
+
+    checkpoint_path = tmp_path / "logs" / "checkpoints" / "checkpoint_fast.json"
+    assert result["status"] == "solved"
+    assert checkpoint_path.exists()
+
+    checkpoint = json.loads(checkpoint_path.read_text())
+    assert checkpoint["challenge_id"] == "checkpoint_fast"
+    assert checkpoint["history"][0]["flag"] == "CTF{checkpointed}"
+    assert any("Challenge solved" in step for step in checkpoint["steps"])

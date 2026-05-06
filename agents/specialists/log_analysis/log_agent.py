@@ -4,11 +4,15 @@ Log Analysis Specialist Agent
 Specialized agent for analyzing server, auth, and application logs.
 """
 
+import logging
 import re
 import collections
 from typing import Dict, Any, List, Optional
+
 from agents.base_agent import BaseAgent, AgentType
 from core.utils.flag_utils import find_first_flag
+
+logger = logging.getLogger(__name__)
 
 
 class LogAnalysisAgent(BaseAgent):
@@ -120,8 +124,9 @@ class LogAnalysisAgent(BaseAgent):
                             flag = brute_force_ip[0]
                             steps.append(f"  Heuristic: Found likely answer to auth question: {flag}")
 
-            except Exception as e:
-                steps.append(f"  Error analyzing {file_path}: {e}")
+            except Exception as exc:
+                logger.warning("Error analyzing %s: %s", file_path, exc)
+                steps.append(f"  Error analyzing {file_path}: {exc}")
 
         return {
             "challenge_id": challenge.get("id"),

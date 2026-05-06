@@ -4,12 +4,18 @@ Coding Specialist Agent
 Specialized agent for programming, scripting, and automation challenges.
 """
 
+import logging
 from typing import Dict, Any, List, Optional
+
+from config.defaults import COMMON_WEB_PATHS, DEFAULT_AUTH_HEADERS, SQLI_PAYLOADS
 from agents.base_agent import BaseAgent, AgentType
 from tools.common.python_tool import PythonTool
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
 import re
+
+logger = logging.getLogger(__name__)
+
 
 class CodingAgent(BaseAgent):
     """
@@ -86,10 +92,10 @@ url = "{challenge.get('url', 'http://localhost')}"
 if not url.endswith('/'): url += '/'
 
 # Technique 1: SQL Injection payloads
-sqli_payloads = ["' OR 1=1 --", "admin' --", "admin' #", "' OR '1'='1"]
+sqli_payloads = {SQLI_PAYLOADS}
 
 # Technique 2: Common admin paths
-paths = ["", "admin", "dashboard", "api/admin"]
+paths = {COMMON_WEB_PATHS[:8]}
 
 # Technique 3: Auth cookies
 cookies = {{"admin": "true", "auth": "true", "authenticated": "true"}}
@@ -107,7 +113,9 @@ for path in paths:
             print(f"Success with cookie manipulation on {{test_url}}!")
             print(r.text)
             break
-    except: pass
+    except Exception as exc:
+        logger.debug("Cookie manipulation failed for %s: %s", test_url, exc)
+        continue
 
     # Try SQLi on login form (if it's a login page)
     for p in sqli_payloads:
@@ -118,7 +126,9 @@ for path in paths:
                 print(f"Success with SQLi payload {{p}} on {{test_url}}!")
                 print(r.text)
                 break
-        except: pass
+        except Exception as exc:
+            logger.debug("SQLi payload %s failed for %s: %s", p, test_url, exc)
+            continue
 """
             else:
                 steps.append("Error: LLM not available for script generation and no heuristic applies.")
@@ -179,9 +189,10 @@ for path in paths:
                 if res.exit_code != 0:
                     steps.append(f"  Script failed with exit code {res.exit_code}")
 
-            except Exception as e:
-                last_error = str(e)
-                steps.append(f"  Error during script execution: {e}")
+            except Exception as exc:
+                logger.warning("Script execution failed (attempt %d): %s", attempt + 1, exc)
+                last_error = str(exc)
+                steps.append(f"  Error during script execution: {exc}")
 
             if attempt == max_retries:
                 steps.append("Max retries reached. Self-correction failed.")

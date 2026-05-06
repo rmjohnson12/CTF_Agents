@@ -4,12 +4,16 @@ OSINT Specialist Agent
 Specialized agent for Open Source Intelligence challenges.
 """
 
+import logging
 from typing import Dict, Any, List, Optional
+
 from agents.base_agent import BaseAgent, AgentType
 from tools.forensics.exiftool import ExiftoolTool
 from tools.web.browser_snapshot_tool import BrowserSnapshotTool
 from core.utils.flag_utils import find_first_flag
 import re
+
+logger = logging.getLogger(__name__)
 
 
 class OSINTAgent(BaseAgent):
@@ -107,7 +111,8 @@ class OSINTAgent(BaseAgent):
                     if found_flag and not flag:
                         flag = found_flag
                         steps.append(f"    Flag found in domain snapshot: {flag}")
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Could not snapshot %s: %s", domain, exc)
                     steps.append(f"    Could not snapshot {domain}")
 
         # 3. Handle specific OSINT questions (Common in NCL)

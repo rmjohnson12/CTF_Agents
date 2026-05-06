@@ -11,13 +11,13 @@ anthropic>=0.8.0  # Alternative AI provider
 
 # Communication and async
 aiohttp>=3.9.0
-asyncio-mqtt>=0.16.0
-redis>=5.0.0  # Optional: for message queue
+# asyncio-mqtt>=0.16.0  # Unused in current core
+# redis>=5.0.0  # Optional: for message queue (unused)
 
-# Database and storage
-sqlalchemy>=2.0.0
-alembic>=1.13.0
-pymongo>=4.6.0  # Optional: for MongoDB
+# Database and storage (unused in current core — uncomment if needed)
+# sqlalchemy>=2.0.0
+# alembic>=1.13.0
+# pymongo>=4.6.0  # Optional: for MongoDB
 
 # Web scraping and requests
 requests>=2.31.0
