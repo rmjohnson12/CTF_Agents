@@ -100,6 +100,17 @@ class LLMReasoner:
         analysis: ChallengeAnalysis,
         history: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        # MASTER PIVOT: If we have a .py file and it's a crypto challenge, and we already tried crypto, pivot to coding
+        files = challenge.get("files", [])
+        has_script = any(f.endswith(".py") for f in files)
+        if has_script and any(h.get("agent_id") == "crypto_agent" for h in history):
+            return {
+                "next_action": "run_agent",
+                "target": "coding_agent",
+                "reasoning": "Crypto agent could not solve it directly. MASTER PIVOT: Handing to coding agent to analyze the provided script.",
+                "inputs": {"task": "Analyze the encryption script and implement a decryption routine for the output."}
+            }
+
         if self.client is None:
             return self._heuristic_next_action(challenge, analysis, history)
 
@@ -138,6 +149,9 @@ class LLMReasoner:
                 )
                 time.sleep(wait)
             except Exception as exc:
+                if "503" in str(exc) or "429" in str(exc):
+                    logger.error("LLM service temporarily unavailable (503/429). Fast-failing to heuristic mode.")
+                    return ""
                 logger.error("LLM call failed with non-retryable error: %s", exc)
                 return ""
 
@@ -146,16 +160,20 @@ class LLMReasoner:
     def generate_script(self, challenge: Dict[str, Any], task_desc: str) -> str:
         """Use LLM to generate a Python script for a specific task."""
         prompt = f"""
-        Write a Python script to solve the following task in a CTF context:
+        You are a World-Class CTF Exploitation Expert.
+        Write a Python script to solve the following task:
         Task: {task_desc}
         
         Challenge Context:
         {json.dumps(challenge, indent=2)}
         
-        Rules:
-        - Return ONLY the Python code. No preamble, no markdown blocks.
-        - Use standard libraries.
-        - Print the final flag clearly (e.g. 'Found flag: CTF{{...}}').
+        CRITICAL RULES for CTF Logic:
+        1. DATA DECODING: If you read from a file, check if it's hex (0-9, a-f) or Base64. Decode it to raw bytes before processing. Strip labels like 'Flag: ' or 'Cipher: '.
+        2. XOR STRATEGY: If multi-byte XOR is suspected, use a 'Known Plaintext Attack'. Try deriving the key by XORing the first bytes of ciphertext with common prefixes: 'HTB{{', 'CTF{{', 'flag{{', 'SKY-'.
+        3. OUTPUT: Print the final flag clearly (e.g. 'Found flag: HTB{{...}}').
+        4. SELF-CONTAINED: Use only standard libraries (sys, os, binascii, base64, re, etc.).
+        
+        Return ONLY the Python code. No preamble, no markdown.
         """
         return self._call_llm(prompt).strip().replace("```python", "").replace("```", "").strip()
 

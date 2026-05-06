@@ -82,24 +82,47 @@ Set your API keys in a `.env` file in the project root:
 NVAPI_KEY=your_nvidia_key_here
 ```
 
-## Quick Start (Interactive Mode)
+### 🧠 Advanced Autonomous Features
+- **Autonomous Specialist Pivoting**: The system now recognizes when a specialist (like `CryptoAgent`) is hitting a wall and will automatically pivot to the `CodingAgent` if a script is provided for analysis.
+- **Self-Correcting Coding Agent**: The agent doesn't just write scripts; it debugs them. If an exploit fails, it reads the error logs, reasons about the failure, and iterates on the code autonomously.
+- **API Resilience**: Built-in exponential backoff handles NVIDIA NIM/OpenAI rate limits (429) automatically, ensuring long-running challenges don't crash.
+- **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
 
-Use `ask.py` for a natural-language, multi-turn experience. If run without arguments, it enters **Interactive Mode**, allowing you to provide hints if the agent gets stuck:
+## 🛠 Prerequisites
 
+- Python 3.8+
+- `.env` file with `NVAPI_KEY` (NVIDIA NIM) or `OPENAI_API_KEY`.
+- Essential security tools: `nmap`, `tshark`, `binwalk`, `john`, `hashcat`.
+
+## 🚀 Quick Start
+
+1. **Check your setup**:
+   ```bash
+   python3 check_setup.py
+   ```
+
+2. **Start the Interactive Solver**:
+   ```bash
+   python3 ask.py
+   ```
+
+3. **Solve a Challenge**:
+   You can provide raw instructions or point to files:
+   ```text
+   > "Who needs AES when you have XOR? The files are in ~/Downloads/challenge.py and ~/Downloads/output.txt"
+   ```
+
+## 📂 Project Structure
+- `agents/`: Specialist agents (Web, Crypto, Networking, Coding).
+- `core/`: The "Brain" (LLM Reasoner, Coordinator, Message Broker).
+- `tools/`: Wrapped security binaries (TShark, Nmap, John, Hashcat).
+- `ask.py`: The main interactive CLI entry point.
+
+## 🧪 Testing
+Run the smoke tests to verify the routing logic:
 ```bash
-python3 ask.py
+pytest tests/e2e/test_smoke_prompts.py
 ```
-
-Alternatively, provide a one-shot instruction:
-
-```bash
-python3 ask.py "Analyze suspicious traffic in capture.pcapng and recover the flag"
-python3 ask.py "Find the password for tests/e2e/fixtures/reverse_me.py"
-python3 ask.py "Calculate the sum of all prime numbers between 1 and 100"
-```
-
-### Key Features
-
 1. **Interactive Feedback**: If the agent hits a wall, you can provide a "hint" (e.g., "try port 8080" or "the flag is in the EXIF data") and it will resume the solve with the new context.
 2. **Persistent Knowledge**: Discovered facts (IPs, credentials, artifacts) are stored in a local Knowledge Base and injected into future reasoning steps.
 3. **Networking Specialist**: Deep packet inspection and automated network enumeration are now integrated natively.

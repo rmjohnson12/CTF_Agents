@@ -217,6 +217,8 @@ class CoordinatorAgent(BaseAgent):
                 if any(info["action"] == action and info["target"] == target for info in futures.values()):
                     all_steps.append(f"Waiting for in-flight task: {action} -> {target}")
                     self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                    # Block until at least one task finishes, then continue
+                    concurrent.futures.wait(futures.keys(), timeout=10, return_when=concurrent.futures.FIRST_COMPLETED)
                     continue
 
                 task_id = f"{challenge_id}_step_{i+1}"

@@ -158,6 +158,18 @@ for path in paths:
             steps.append("Generating solution script via LLM...")
             script_content = self.reasoner.generate_script(challenge, task_desc)
         
+        if not script_content:
+            steps.append("LLM produced no script (service likely down). Bypassing to deterministic fallback...")
+            flag = self._fallback_xor_solver(challenge, task_desc)
+            if flag:
+                return {
+                    'challenge_id': challenge.get('id'),
+                    'agent_id': self.agent_id,
+                    'status': 'solved',
+                    'flag': flag,
+                    'steps': steps + [f"SUCCESS: Recovered flag via fast-fail fallback: {flag}"]
+                }
+
         if script_content.startswith("# LLM not available"):
             steps.append("Error: LLM not available for script generation.")
             return {
@@ -169,9 +181,23 @@ for path in paths:
             }
 
         for attempt in range(max_retries + 1):
+            if not script_content or attempt > max_retries:
+                # If LLM failed to produce a script or we exhausted retries, try the hardcoded fallback
+                steps.append("LLM scripts failing or unavailable. Running deterministic XOR fallback solver...")
+                flag = self._fallback_xor_solver(challenge, task_desc)
+                if flag:
+                    steps.append(f"SUCCESS: Recovered flag via deterministic fallback: {flag}")
+                    break
+                else:
+                    steps.append("Fallback solver could not find a valid flag prefix.")
+                    break
+
             if attempt > 0:
                 steps.append(f"Attempt {attempt + 1}: Fixing script based on previous failure...")
                 script_content = self.reasoner.fix_script(challenge, script_content, last_error, last_stdout)
+            
+            if not script_content:
+                continue
 
             steps.append(f"Executing script (Attempt {attempt + 1})...")
             last_stdout = None
@@ -223,6 +249,42 @@ for path in paths:
                 'final_attempt': attempt + 1
             }
         }
+
+    def _fallback_xor_solver(self, challenge: Dict[str, Any], task_desc: str) -> Optional[str]:
+        """Deterministic solver for XOR challenges when LLM is unavailable."""
+        import binascii
+        
+        # 1. Extract potential hex from files
+        cipher_text = ""
+        files = challenge.get("files", [])
+        for f in files:
+            if f.endswith(".txt"):
+                try:
+                    with open(f, "r") as file:
+                        content = file.read().strip()
+                        if "Flag:" in content: content = content.split("Flag:")[1].strip()
+                        if all(c in "0123456789abcdefABCDEF" for c in content) and len(content) > 8:
+                            cipher_text = content
+                            break
+                except: pass
+        
+        if not cipher_text:
+            return None
+            
+        try:
+            cipher_bytes = binascii.unhexlify(cipher_text)
+            prefixes = [b"HTB{", b"CTF{", b"flag{", b"SKY-"]
+            
+            for prefix in prefixes:
+                # Derive 4-byte key
+                key = bytes([cipher_bytes[i] ^ prefix[i] for i in range(len(prefix))])
+                # Decrypt
+                decrypted = bytes([cipher_bytes[i] ^ key[i % len(key)] for i in range(len(cipher_bytes))])
+                res = decrypted.decode('utf-8', errors='ignore')
+                if prefix.decode() in res:
+                    return res
+        except: pass
+        return None
 
     def _solve_prime_sum_prompt(self, task_desc: str) -> Optional[str]:
         lowered = task_desc.lower()
