@@ -77,7 +77,7 @@ def _heuristic_challenge_from_instruction(
 
     category = "misc"
     url = None
-    url_match = re.search(r'https?://[^\s<>"]+|www\.[^\s<>"]+', user_input)
+    url_match = re.search(r'(?:https?://|www\.)[^\s<>"]+|(?:\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\b)', user_input)
     if url_match:
         url = url_match.group(0).strip(".,")
 
@@ -118,7 +118,7 @@ def _heuristic_challenge_from_instruction(
         category = "forensics"
     elif any(f.endswith('.py') or f.endswith('.exe') for f in challenge_files) or "authenticate" in lowered_input:
         category = "reverse"
-    elif url or ".cloud" in lowered_input:
+    elif url or any(term in lowered_input for term in ["jwt", "session", "cookie", "token", ".cloud"]):
         category = "web"
     elif any(f.endswith('.txt') for f in challenge_files) or any(term in lowered_input for term in crypto_terms):
         category = "crypto"

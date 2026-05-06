@@ -322,12 +322,13 @@ class LLMReasoner:
 
         # Priority 7: Web
         url = challenge.get("url")
-        if url or self._kw(text, "url", "http", "login", "form", "page", "cookie", "endpoint"):
+        ip_pattern = r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\b'
+        if url or re.search(ip_pattern, text) or self._kw(text, "url", "http", "login", "form", "page", "cookie", "endpoint", "jwt", "token", "session"):
             indicators.append("web_terms")
 
-            # Heuristic pivot: If "inspect", "form", or "page" are used without specific attack keywords,
+            # Heuristic pivot: If "inspect", "form", "page", "source", "javascript", or "code" are used
             # prefer browser_snapshot tool for initial reconnaissance.
-            if self._kw(text, "inspect", "form", "page", "snapshot", "look at"):
+            if self._kw(text, "inspect", "form", "page", "snapshot", "look at", "source", "javascript", "js", "code", "analyze"):
                 return ChallengeAnalysis(
                     category_guess="web",
                     confidence=0.89,
@@ -406,24 +407,26 @@ class LLMReasoner:
                     "inputs": {"task": "Attempt SQLi login bypass or default credentials on the discovered form."}
                 }
 
-        # Decision Quality: Don't repeat the same failed agent
-        if last_agent == analysis.recommended_target and last_status != "solved":
-            return {
-                "next_action": "stop",
-                "target": "none",
-                "reasoning": f"Specialist {last_agent} already attempted this task and did not find a solution. Stopping to prevent infinite loop.",
-                "inputs": {},
-            }
+        # Decision Quality: Don't repeat the same failed agent unless a new hint was provided
+        has_hint = "User Hint:" in challenge.get("description", "")
+        if not has_hint:
+            if last_agent == analysis.recommended_target and last_status != "solved":
+                return {
+                    "next_action": "stop",
+                    "target": "none",
+                    "reasoning": f"Specialist {last_agent} already attempted this task and did not find a solution. Stopping to prevent infinite loop.",
+                    "inputs": {},
+                }
 
-        # Decision Quality: Don't repeat the same failed tool
-        last_target = last_result.get("routing", {}).get("selected_target")
-        if last_target == "browser_snapshot" and analysis.recommended_target == "browser_snapshot":
-            return {
-                "next_action": "stop",
-                "target": "none",
-                "reasoning": "Browser snapshot already performed. No further information gathered. Stopping.",
-                "inputs": {},
-            }
+            # Decision Quality: Don't repeat the same failed tool
+            last_target = last_result.get("routing", {}).get("selected_target")
+            if last_target == "browser_snapshot" and analysis.recommended_target == "browser_snapshot":
+                return {
+                    "next_action": "stop",
+                    "target": "none",
+                    "reasoning": "Browser snapshot already performed. No further information gathered. Stopping.",
+                    "inputs": {},
+                }
 
         if analysis.recommended_target == "crypto_agent":
             return {
