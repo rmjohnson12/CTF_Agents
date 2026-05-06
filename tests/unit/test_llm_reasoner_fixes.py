@@ -71,6 +71,7 @@ def test_next_action_prompt_contains_challenge_and_history():
 
 def test_default_model_is_gpt4o_when_no_keys(monkeypatch):
     monkeypatch.delenv("NVAPI_KEY", raising=False)
+    monkeypatch.delenv("NGC_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     reasoner = LLMReasoner()
     assert reasoner.model == "none"
@@ -106,6 +107,21 @@ def test_nvapi_key_selects_nvidia_nim(monkeypatch):
     assert reasoner.model == _NVIDIA_DEFAULT_MODEL
 
 
+def test_ngc_api_key_alias_selects_nvidia_nim(monkeypatch):
+    monkeypatch.delenv("NVAPI_KEY", raising=False)
+    monkeypatch.setenv("NGC_API_KEY", "ngc-fake-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["api_key"] == "ngc-fake-key"
+    assert call_kwargs["base_url"] == _NVIDIA_NIM_BASE_URL
+    assert reasoner.model == _NVIDIA_DEFAULT_MODEL
+
+
 def test_nvapi_key_overrides_openai_key(monkeypatch):
     monkeypatch.setenv("NVAPI_KEY", "nvapi-fake-key")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-openai")
@@ -121,6 +137,7 @@ def test_nvapi_key_overrides_openai_key(monkeypatch):
 
 def test_openai_key_fallback(monkeypatch):
     monkeypatch.delenv("NVAPI_KEY", raising=False)
+    monkeypatch.delenv("NGC_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-openai")
 
     with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:

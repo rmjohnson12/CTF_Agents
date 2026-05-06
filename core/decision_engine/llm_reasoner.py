@@ -51,7 +51,7 @@ class LLMReasoner:
             self.client = client
             self.model = model or "gpt-4o"
         else:
-            nvapi_key = os.getenv("NVAPI_KEY")
+            nvapi_key = os.getenv("NVAPI_KEY") or os.getenv("NGC_API_KEY")
             openai_key = os.getenv("OPENAI_API_KEY")
 
             if nvapi_key:

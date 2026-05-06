@@ -22,6 +22,9 @@ class MockPythonTool:
             duration_s=0.1
         )
 
+class MockUnavailableReasoner:
+    is_available = False
+
 def test_coding_agent_solve_success():
     reasoner = MockReasoner()
     python_tool = MockPythonTool()
@@ -91,7 +94,7 @@ def test_coding_agent_self_correction_success():
 
 
 def test_coding_agent_solves_prime_sum_without_llm():
-    agent = CodingAgent(reasoner=LLMReasoner(client=None))
+    agent = CodingAgent(reasoner=MockUnavailableReasoner())
 
     challenge = {
         "id": "prime_sum",

@@ -10,7 +10,7 @@ def check():
     
     # 1. Check API Keys & Mode
     openai_key = os.getenv("OPENAI_API_KEY")
-    nvapi_key = os.getenv("NVAPI_KEY")
+    nvapi_key = os.getenv("NVAPI_KEY") or os.getenv("NGC_API_KEY")
     
     has_llm = False
     if nvapi_key:
