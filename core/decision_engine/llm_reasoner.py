@@ -268,7 +268,23 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 3: Crypto / Decoding
+        # Priority 4: Log Analysis
+        if (
+            challenge.get("category") == "log"
+            or any(f.endswith('.log') for f in files)
+            or self._kw(text, "access log", "auth log", "server log", "brute force", "failed password", "ssh")
+        ):
+            indicators.append("log_terms")
+            return ChallengeAnalysis(
+                category_guess="log",
+                confidence=0.86,
+                reasoning="Detected log analysis indicators.",
+                recommended_target="log_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
+        # Priority 5: Crypto / Decoding
         # Special check for numerical strings (decimal/octal encoding)
         if re.search(r'\b(?:\d{1,3}[\s,]+){3,}', text) or \
            self._kw(text, "cipher", "decrypt", "decode", "base64", "hex", "xor", "caesar", "password", "rockyou", "crack"):
@@ -282,7 +298,7 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 4: SQLi
+        # Priority 6: SQLi
         if self._kw(text, "sqli", "sql injection", "login bypass", "union select"):
             indicators.append("sqli_terms")
             return ChallengeAnalysis(
@@ -294,19 +310,7 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 5: Log Analysis
-        if any(f.endswith('.log') for f in files) or self._kw(text, "access log", "auth log", "server log"):
-            indicators.append("log_terms")
-            return ChallengeAnalysis(
-                category_guess="log",
-                confidence=0.84,
-                reasoning="Detected log analysis indicators.",
-                recommended_target="log_agent",
-                recommended_action="run_agent",
-                detected_indicators=indicators,
-            )
-
-        # Priority 6: Web
+        # Priority 7: Web
         url = challenge.get("url")
         if url or self._kw(text, "url", "http", "login", "form", "page", "cookie", "endpoint"):
             indicators.append("web_terms")
@@ -344,8 +348,11 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 7: Coding
-        if self._kw(text, "script", "python", "automate", "program", "code", "algorithm"):
+        # Priority 8: Coding
+        if (
+            challenge.get("category") == "misc"
+            and self._kw(text, "calculate", "sum", "prime", "math", "format", "ctf")
+        ) or self._kw(text, "script", "python", "automate", "program", "code", "algorithm"):
             indicators.append("coding_terms")
             return ChallengeAnalysis(
                 category_guess="misc",

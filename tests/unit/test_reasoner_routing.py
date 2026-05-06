@@ -101,3 +101,45 @@ def test_reasoner_routes_hidden_binary_artifact_to_forensics_before_reverse():
     assert analysis.category_guess == "forensics"
     assert analysis.recommended_target == "forensics_agent"
     assert analysis.recommended_action == "run_agent"
+
+
+def test_reasoner_routes_auth_text_file_to_log_agent():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "auth_text_001",
+        "name": "Auth events",
+        "category": "log",
+        "description": "Identify which IP executed a brute force SSH attack.",
+        "hints": [],
+        "tags": [],
+        "files": ["auth_events.txt"],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "log"
+    assert analysis.recommended_target == "log_agent"
+    assert analysis.recommended_action == "run_agent"
+
+
+def test_reasoner_routes_prime_sum_task_to_coding_agent():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "prime_sum_001",
+        "name": "Prime Sum",
+        "category": "misc",
+        "description": "Calculate the sum of all prime numbers between 1 and 100 and print it in the format CTF{result}.",
+        "hints": [],
+        "tags": [],
+        "files": [],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "misc"
+    assert analysis.recommended_target == "coding_agent"
+    assert analysis.recommended_action == "run_agent"

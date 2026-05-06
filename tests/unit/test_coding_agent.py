@@ -88,3 +88,18 @@ def test_coding_agent_self_correction_success():
     assert reasoner.calls == 1
     assert reasoner.captured_stdout == "error_output"
     assert python_tool.calls == 2 # 1 fail, 1 success after fix
+
+
+def test_coding_agent_solves_prime_sum_without_llm():
+    agent = CodingAgent(reasoner=LLMReasoner(client=None))
+
+    challenge = {
+        "id": "prime_sum",
+        "category": "misc",
+        "description": "Calculate the sum of all prime numbers between 1 and 100 and print it in the format CTF{result}.",
+    }
+
+    result = agent.solve_challenge(challenge)
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{1060}"

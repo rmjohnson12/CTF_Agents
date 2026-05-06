@@ -54,3 +54,17 @@ def test_heuristic_mapping_routes_hidden_binary_artifact_to_forensics(tmp_path, 
 
     assert challenge["category"] == "forensics"
     assert challenge["files"] == [str(artifact)]
+
+
+def test_heuristic_mapping_routes_auth_text_file_to_log(tmp_path, monkeypatch):
+    log_file = tmp_path / "auth_events.txt"
+    log_file.write_text("Failed password for root from 192.0.2.10 port 22 ssh2")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Analyze auth_events.txt and identify which IP executed a brute force SSH attack",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "log"
+    assert challenge["files"] == [str(log_file)]

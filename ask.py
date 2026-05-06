@@ -102,7 +102,12 @@ def _heuristic_challenge_from_instruction(
 
     forensics_terms = ["hidden", "artifact", "forensics", "extract", "embedded", "strings"]
 
-    if (
+    log_terms = ["log", "auth", "ssh", "brute force", "failed password", "authentication"]
+    coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
+
+    if any(term in lowered_input for term in log_terms):
+        category = "log"
+    elif (
         any(f.endswith('.pdf') or f.endswith('.pcap') or f.endswith('.pcapng') for f in challenge_files)
         or (
             any(f.endswith('.bin') or f.endswith('.dat') for f in challenge_files)
@@ -116,6 +121,8 @@ def _heuristic_challenge_from_instruction(
         category = "web"
     elif any(f.endswith('.txt') for f in challenge_files) or any(term in lowered_input for term in crypto_terms):
         category = "crypto"
+    elif any(term in lowered_input for term in coding_terms):
+        category = "misc"
 
     return {
         "id": "heuristic_task",

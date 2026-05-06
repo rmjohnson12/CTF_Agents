@@ -81,6 +81,21 @@ class CodingAgent(BaseAgent):
         
         script_content = ""
         if not self.reasoner.is_available:
+            prime_sum = self._solve_prime_sum_prompt(task_desc)
+            if prime_sum:
+                flag = prime_sum
+                steps.append("LLM not available. Solved prime-sum task with deterministic heuristic.")
+                return {
+                    'challenge_id': challenge.get('id'),
+                    'agent_id': self.agent_id,
+                    'status': 'solved',
+                    'flag': flag,
+                    'steps': steps,
+                    'artifacts': {
+                        'generated_script': None,
+                        'final_attempt': 0
+                    }
+                }
             # Heuristic: If it's a login bypass task, generate a simple script
             if "login" in task_desc.lower() or "bypass" in task_desc.lower() or "authenticate" in task_desc.lower():
                 steps.append("LLM not available. Generating improved heuristic login bypass script...")
@@ -208,6 +223,36 @@ for path in paths:
                 'final_attempt': attempt + 1
             }
         }
+
+    def _solve_prime_sum_prompt(self, task_desc: str) -> Optional[str]:
+        lowered = task_desc.lower()
+        if "prime" not in lowered or "sum" not in lowered:
+            return None
+
+        nums = [int(n) for n in re.findall(r"\b\d+\b", task_desc)]
+        if len(nums) < 2:
+            return None
+
+        start, end = min(nums[0], nums[1]), max(nums[0], nums[1])
+        total = sum(n for n in range(start, end + 1) if self._is_prime(n))
+        if "ctf" in lowered:
+            return f"CTF{{{total}}}"
+        return str(total)
+
+    @staticmethod
+    def _is_prime(n: int) -> bool:
+        if n < 2:
+            return False
+        if n == 2:
+            return True
+        if n % 2 == 0:
+            return False
+        divisor = 3
+        while divisor * divisor <= n:
+            if n % divisor == 0:
+                return False
+            divisor += 2
+        return True
     
     def get_capabilities(self) -> List[str]:
         return self.capabilities
