@@ -28,3 +28,7 @@ def test_no_flags():
     text = "No flags in this string."
     assert extract_flags(text) == []
     assert find_first_flag(text) is None
+
+def test_ignores_single_letter_brace_fragments():
+    text = 'input(f"\\n{prompt_text}").strip()'
+    assert extract_flags(text) == []

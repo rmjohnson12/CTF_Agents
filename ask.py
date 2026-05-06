@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -18,6 +19,19 @@ from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
 from core.decision_engine.llm_reasoner import LLMReasoner
+
+def _unwrap_ask_command(user_input: str) -> str:
+    """Accept either a raw instruction or a pasted `python ask.py "..."` command."""
+    try:
+        parts = shlex.split(user_input)
+    except ValueError:
+        return user_input
+
+    for idx, part in enumerate(parts):
+        if os.path.basename(part) == "ask.py" and idx + 1 < len(parts):
+            return " ".join(parts[idx + 1:])
+
+    return user_input
 
 def _normalize_path(p: str) -> str:
     """Robustly expand tilde and return absolute path, even if joined weirdly."""
@@ -191,6 +205,7 @@ def main():
                 break
             if not user_input:
                 continue
+            user_input = _unwrap_ask_command(user_input)
 
         print(f"\n--- Processing Instruction: \"{user_input}\" ---")
 

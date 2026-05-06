@@ -1,6 +1,6 @@
 import json
 
-from ask import _heuristic_challenge_from_instruction
+from ask import _heuristic_challenge_from_instruction, _unwrap_ask_command
 
 
 def test_heuristic_mapping_loads_referenced_challenge_json(tmp_path, monkeypatch):
@@ -68,3 +68,11 @@ def test_heuristic_mapping_routes_auth_text_file_to_log(tmp_path, monkeypatch):
 
     assert challenge["category"] == "log"
     assert challenge["files"] == [str(log_file)]
+
+
+def test_unwrap_ask_command_from_interactive_prompt():
+    instruction = _unwrap_ask_command(
+        'python3 ask.py "Analyze this file for hidden flags. File is located in artifact.bin"'
+    )
+
+    assert instruction == "Analyze this file for hidden flags. File is located in artifact.bin"
