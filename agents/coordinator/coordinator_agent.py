@@ -104,7 +104,7 @@ class CoordinatorAgent(BaseAgent):
             "confidence": analysis.confidence,
         }
 
-    def solve_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
+    def solve_challenge(self, challenge: Dict[str, Any], resume: bool = False) -> Dict[str, Any]:
         """
         Coordinate the solving of a challenge in an iterative loop using TaskQueue.
         Supports parallel execution of independent tasks.
@@ -112,15 +112,24 @@ class CoordinatorAgent(BaseAgent):
         """
         challenge_id = challenge.get("id", "unknown_challenge")
         self.active_challenges[challenge_id] = challenge
+        checkpoint_dir = Path("logs/checkpoints")
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         initial_analysis_obj = self.reasoner.analyze_challenge(challenge)
         initial_analysis = self._analysis_to_dict(challenge, initial_analysis_obj)
-        history: List[Dict[str, Any]] = []
+        checkpoint = self._load_checkpoint(checkpoint_dir, challenge_id) if resume else None
+        history: List[Dict[str, Any]] = checkpoint.get("history", []) if checkpoint else []
         
-        all_steps = [
-            f"Initial category guess: {initial_analysis['category']}",
-            f"Initial confidence: {initial_analysis['confidence']:.2f}",
-        ]
+        if checkpoint:
+            all_steps = checkpoint.get("steps", [])
+            all_steps.append(f"Resuming from checkpoint with {len(history)} prior result(s).")
+            start_iteration = int(checkpoint.get("iterations", len(history)))
+        else:
+            all_steps = [
+                f"Initial category guess: {initial_analysis['category']}",
+                f"Initial confidence: {initial_analysis['confidence']:.2f}",
+            ]
+            start_iteration = 0
 
         final_result = {
             "challenge_id": challenge_id,
@@ -130,9 +139,6 @@ class CoordinatorAgent(BaseAgent):
             "steps": all_steps,
             "iterations": 0,
         }
-
-        checkpoint_dir = Path("logs/checkpoints")
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         # Thread pool for parallel execution
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
@@ -164,7 +170,7 @@ class CoordinatorAgent(BaseAgent):
             return None
 
         try:
-            for i in range(self.max_iterations):
+            for i in range(start_iteration, self.max_iterations):
                 final_result["iterations"] = i + 1
                 
                 # Check for completed futures
@@ -440,6 +446,10 @@ class CoordinatorAgent(BaseAgent):
             checkpoint = {
                 "challenge_id": challenge_id,
                 "timestamp": datetime.now().isoformat(),
+                "iterations": len([
+                    step for step in all_steps
+                    if step.startswith("Iteration ") and " decision: " in step
+                ]),
                 "history": history,
                 "steps": all_steps,
             }
@@ -448,6 +458,28 @@ class CoordinatorAgent(BaseAgent):
             logger.debug("Checkpoint written to %s", checkpoint_path)
         except Exception as exc:
             logger.warning("Failed to write checkpoint for %s: %s", challenge_id, exc)
+
+    def _load_checkpoint(
+        self,
+        checkpoint_dir: Path,
+        challenge_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Load a prior checkpoint if one exists for this challenge."""
+        checkpoint_path = checkpoint_dir / f"{challenge_id}.json"
+        if not checkpoint_path.exists():
+            logger.info("No checkpoint found for %s; starting fresh.", challenge_id)
+            return None
+
+        try:
+            with open(checkpoint_path) as f:
+                checkpoint = json.load(f)
+            if not isinstance(checkpoint, dict):
+                logger.warning("Ignoring malformed checkpoint for %s.", challenge_id)
+                return None
+            return checkpoint
+        except Exception as exc:
+            logger.warning("Failed to load checkpoint for %s: %s", challenge_id, exc)
+            return None
 
     def list_registered_agents(self) -> Dict[str, List[str]]:
         """

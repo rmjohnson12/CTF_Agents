@@ -18,6 +18,8 @@ class MockAgent(BaseAgent):
     def solve_challenge(self, challenge):
         self.solve_called += 1
         return {
+            "challenge_id": challenge.get("id"),
+            "agent_id": self.agent_id,
             "status": self.status_on_solve,
             "flag": self.flag,
             "steps": [f"{self.agent_id} executed"]
@@ -55,6 +57,15 @@ class MockReasoner:
             self.index += 1
             return d
         return {"next_action": "stop", "target": "none", "reasoning": "No more decisions"}
+
+class HistoryAwareReasoner(MockReasoner):
+    def __init__(self):
+        super().__init__([])
+
+    def choose_next_action(self, challenge, analysis, history):
+        if any(h.get("agent_id") == "agent_1" for h in history):
+            return {"next_action": "run_agent", "target": "agent_2", "reasoning": "Resume with second agent"}
+        return {"next_action": "run_agent", "target": "agent_1", "reasoning": "Start with first agent"}
 
 def test_coordinator_iterative_loop_stops_on_solve():
     decisions = [
@@ -160,3 +171,42 @@ def test_coordinator_writes_checkpoint_for_fast_solve(tmp_path, monkeypatch):
     assert checkpoint["challenge_id"] == "checkpoint_fast"
     assert checkpoint["history"][0]["flag"] == "CTF{checkpointed}"
     assert any("Challenge solved" in step for step in checkpoint["steps"])
+
+
+def test_coordinator_resumes_from_checkpoint_history(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    checkpoint_dir = tmp_path / "logs" / "checkpoints"
+    checkpoint_dir.mkdir(parents=True)
+    checkpoint_path = checkpoint_dir / "resume_me.json"
+    checkpoint_path.write_text(json.dumps({
+        "challenge_id": "resume_me",
+        "timestamp": "2026-05-06T09:00:00",
+        "iterations": 1,
+        "history": [{
+            "challenge_id": "resume_me",
+            "agent_id": "agent_1",
+            "status": "attempted",
+            "flag": None,
+            "steps": ["agent_1 executed"],
+        }],
+        "steps": [
+            "Initial category guess: misc",
+            "Initial confidence: 0.90",
+            "Iteration 1 reasoning: Start with first agent",
+            "Iteration 1 decision: run_agent -> agent_1",
+            "  [Exec] agent_1 executed",
+        ],
+    }))
+
+    coordinator = CoordinatorAgent(max_iterations=3)
+    coordinator.reasoner = HistoryAwareReasoner()
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="attempted"))
+    coordinator.register_agent(MockAgent("agent_2", status_on_solve="solved", flag="CTF{resumed}"))
+
+    result = coordinator.solve_challenge({"id": "resume_me", "description": "test resume"}, resume=True)
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{resumed}"
+    assert result["iterations"] == 2
+    assert [h["agent_id"] for h in result["history"]] == ["agent_1", "agent_2"]
+    assert any("Resuming from checkpoint" in step for step in result["steps"])

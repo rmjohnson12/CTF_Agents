@@ -1,4 +1,5 @@
 # main.py
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -15,11 +16,22 @@ from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 
 
 def main(argv: List[str]) -> int:
-    if len(argv) < 2:
-        print("Usage: python main.py <challenge_json_path>")
-        return 2
+    parser = argparse.ArgumentParser(description="Run the CTF multi-agent coordinator.")
+    parser.add_argument("challenge_json_path", help="Path to a challenge JSON file.")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from logs/checkpoints/{challenge_id}.json if present.",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=5,
+        help="Maximum coordinator iterations for this run.",
+    )
+    args = parser.parse_args(argv[1:])
 
-    challenge_path = Path(argv[1])
+    challenge_path = Path(args.challenge_json_path)
     if not challenge_path.exists():
         raise FileNotFoundError(f"Challenge file not found: {challenge_path}")
 
@@ -28,7 +40,10 @@ def main(argv: List[str]) -> int:
     from tools.web.browser_snapshot_tool import BrowserSnapshotTool
     browser_tool = BrowserSnapshotTool()
 
-    coordinator = CoordinatorAgent(browser_snapshot_tool=browser_tool)
+    coordinator = CoordinatorAgent(
+        browser_snapshot_tool=browser_tool,
+        max_iterations=args.max_iterations,
+    )
 
     # Register agents with IDs that match the reasoner/coordinator routing targets
     from tools.crypto.john import JohnTool
@@ -44,7 +59,7 @@ def main(argv: List[str]) -> int:
     coordinator.register_agent(OSINTAgent(agent_id="osint_agent", browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent(agent_id="log_agent"))
 
-    result = coordinator.solve_challenge(challenge)
+    result = coordinator.solve_challenge(challenge, resume=args.resume)
     print(json.dumps(result, indent=2))
     return 0
 
