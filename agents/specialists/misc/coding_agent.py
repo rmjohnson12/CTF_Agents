@@ -160,14 +160,22 @@ for path in paths:
         
         if not script_content:
             steps.append("LLM produced no script (service likely down). Bypassing to deterministic fallback...")
-            flag = self._fallback_xor_solver(challenge, task_desc)
+            
+            # Check for prime sum task first
+            prime_sum = self._solve_prime_sum_prompt(task_desc)
+            if prime_sum:
+                flag = prime_sum
+                steps.append(f"SUCCESS: Recovered flag via prime-sum fallback: {flag}")
+            else:
+                flag = self._fallback_xor_solver(challenge, task_desc)
+            
             if flag:
                 return {
                     'challenge_id': challenge.get('id'),
                     'agent_id': self.agent_id,
                     'status': 'solved',
                     'flag': flag,
-                    'steps': steps + [f"SUCCESS: Recovered flag via fast-fail fallback: {flag}"]
+                    'steps': steps
                 }
 
         if script_content.startswith("# LLM not available"):

@@ -93,16 +93,17 @@ def test_coordinator_iterative_loop_stops_on_solve():
     assert agent2.solve_called == 1
 
 def test_coordinator_iterative_loop_stops_on_max_iterations():
-    # Set up reasoner to keep going
+    # Set up reasoner to keep going with different targets to avoid duplicate check
     decisions = [
-        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Infinite loop simulation"}
-    ] * 10
+        {"next_action": "run_agent", "target": f"agent_{i+1}", "reasoning": "Infinite loop simulation"}
+        for i in range(10)
+    ]
     reasoner = MockReasoner(decisions)
     coordinator = CoordinatorAgent(max_iterations=3)
     coordinator.reasoner = reasoner
-
-    agent1 = MockAgent("agent_1", status_on_solve="attempted")
-    coordinator.register_agent(agent1)
+    
+    for i in range(3):
+        coordinator.register_agent(MockAgent(f"agent_{i+1}", status_on_solve="attempted"))
 
     challenge = {"id": "test_2", "description": "test max iterations"}
     result = coordinator.solve_challenge(challenge)
@@ -110,7 +111,9 @@ def test_coordinator_iterative_loop_stops_on_max_iterations():
     assert result["iterations"] == 3
     assert result["status"] == "attempted"
     assert reasoner.analyze_called == 1
-    assert agent1.solve_called == 3
+    # Total calls across all agents should be 3
+    total_calls = sum(a.solve_called for a in coordinator.specialist_agents.values())
+    assert total_calls == 3
 
 def test_coordinator_does_not_resubmit_same_in_flight_target():
     decisions = [

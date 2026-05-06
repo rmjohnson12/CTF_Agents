@@ -128,20 +128,35 @@ class CryptographyAgent(BaseAgent):
 
         cipher_text = self._extract_ciphertext(challenge)
         
+        steps.append(f"Extracted ciphertext: {cipher_text}")
+
         # 1.1 Detection/Decoding: If it looks like hex or base64, decode it
         # Check for "Flag: " prefix and strip it
         if cipher_text.lower().startswith("flag:"):
             cipher_text = cipher_text[5:].strip()
         
         # Try hex decode - if it's hex, decode it to raw bytes (stored as latin-1 string)
-        if all(c in "0123456789abcdefABCDEF" for c in cipher_text) and len(cipher_text) % 2 == 0 and len(cipher_text) > 8:
+        # BUG FIX: Don't decode if it looks like a hash (32, 40, 64 chars of hex)
+        is_hash = len(cipher_text) in [32, 40, 64, 128] and all(c in "0123456789abcdefABCDEF" for c in cipher_text)
+        if not is_hash and all(c in "0123456789abcdefABCDEF" for c in cipher_text) and len(cipher_text) % 2 == 0 and len(cipher_text) > 8:
             try:
                 raw_bytes = bytes.fromhex(cipher_text)
                 steps.append("  Detected hex encoding in ciphertext. Decoding to bytes...")
                 cipher_text = raw_bytes.decode('latin-1', errors='ignore')
             except Exception: pass
-
-        steps.append(f"Extracted ciphertext: {cipher_text}")
+        
+        # Initial flag check: maybe it was already plaintext or just got decoded
+        from core.utils.flag_utils import find_first_flag
+        found = find_first_flag(cipher_text)
+        if found:
+            steps.append("SUCCESS: Flag found directly in extracted ciphertext.")
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": found,
+                "steps": steps
+            }
 
         best_result: Optional[Tuple[str, str, float, str]] = None
 
