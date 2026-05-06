@@ -8,19 +8,50 @@ def check():
     print("=== CTF_Agents: Pre-Flight Check ===")
     load_dotenv()
     
-    # 1. Check API Key
-    key = os.getenv("OPENAI_API_KEY")
-    if not key or key == "your_openai_api_key_here":
-        print("[-] OpenAI API Key: MISSING (Running in Heuristic Mode)")
+    # 1. Check API Keys & Mode
+    openai_key = os.getenv("OPENAI_API_KEY")
+    nvapi_key = os.getenv("NVAPI_KEY")
+    
+    has_llm = False
+    if nvapi_key:
+        print("[+] NVIDIA NIM API Key: CONFIGURED")
+        has_llm = True
     else:
-        print("[+] OpenAI API Key: CONFIGURED (Full Autonomy Enabled)")
+        print("[-] NVIDIA NIM API Key: MISSING")
+        
+    if openai_key and openai_key != "your_openai_api_key_here":
+        print("[+] OpenAI API Key: CONFIGURED")
+        has_llm = True
+    else:
+        print("[-] OpenAI API Key: MISSING")
 
-    # 2. Check Security Tools
+    if has_llm:
+        print("[+] Mode: AUTONOMOUS (LLM-backed routing and planning enabled)")
+    else:
+        print("[!] Mode: HEURISTIC (Running without LLM; using pattern matching for routing)")
+
+    # 2. Check Playwright
+    print("\n--- Browser Environment ---")
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            try:
+                browser = p.chromium.launch(headless=True)
+                browser.close()
+                print("[+] Playwright Chromium: INSTALLED")
+            except Exception as e:
+                print(f"[!] Playwright Chromium: NOT FOUND ({e})")
+                print("    Run: python3 -m playwright install chromium")
+    except ImportError:
+        print("[-] Playwright Library: NOT INSTALLED (Run: pip install playwright)")
+
+    # 3. Check Security Tools
+    print("\n--- Security Tooling ---")
     tools = {
-        "Web": ["sqlmap", "dirsearch"],
-        "Crypto": ["hashcat", "john"],
-        "Forensics": ["binwalk", "exiftool", "tshark", "qpdf"],
-        "General": ["python3", "curl"]
+        "REQUIRED": ["python3", "curl"],
+        "OPTIONAL (Web)": ["sqlmap", "dirsearch"],
+        "OPTIONAL (Crypto)": ["hashcat", "john"],
+        "OPTIONAL (Forensics)": ["binwalk", "exiftool", "tshark", "qpdf"]
     }
     
     for category, tool_list in tools.items():
@@ -32,18 +63,26 @@ def check():
             else:
                 missing.append(t)
         
-        status = "[+]" if not missing else "[!]"
-        print(f"{status} {category} Tools: {', '.join(found)} " + (f"(MISSING: {', '.join(missing)})" if missing else ""))
+        status = "[+]" if not missing or "OPTIONAL" in category else "[!]"
+        if "REQUIRED" in category and missing:
+            status = "[!]"
+            
+        print(f"{status} {category}: {', '.join(found)} " + (f"(MISSING: {', '.join(missing)})" if missing else ""))
 
-    # 3. Check Workspace
+    # 4. Check Workspace
+    print("\n--- Workspace ---")
     rockyou = Path.home() / "Downloads" / "rockyou.txt"
     if rockyou.exists():
         print(f"[+] Wordlist: Found at {rockyou}")
     else:
-        print(f"[-] Wordlist: rockyou.txt not found in ~/Downloads (Cracking will be limited)")
+        # Check current dir too
+        local_rockyou = Path("rockyou.txt")
+        if local_rockyou.exists():
+            print(f"[+] Wordlist: Found at {local_rockyou.absolute()}")
+        else:
+            print(f"[-] Wordlist: rockyou.txt not found (Cracking will be limited)")
 
-    print("\n[!] Setup complete. If tools are missing, install them via Homebrew:")
-    print("    brew install hashcat john-ripper tshark qpdf binwalk exiftool dirsearch sqlmap")
+    print("\n[!] Setup check complete.")
 
 if __name__ == "__main__":
     check()
