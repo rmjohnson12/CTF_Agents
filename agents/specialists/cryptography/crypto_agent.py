@@ -73,9 +73,16 @@ class CryptographyAgent(BaseAgent):
         cipher_text = self._extract_ciphertext(challenge)
         cipher_types = []
 
-        if any(k in description for k in ["caesar", "shift", "rot"]):
-            cipher_types.append("caesar_cipher")
-        if any(k in hints for k in ["shift", "caesar", "rot"]):
+        classical_text = " ".join([description, hints, tags])
+        if (
+            any(k in classical_text for k in ["caesar", "shift", "rot", "simple cipher", "classic", "classical", "substitution"])
+            or metadata.get("cipher_type") in {"caesar", "rot", "shift"}
+            or (
+                challenge.get("category") == "crypto"
+                and "cipher" in classical_text
+                and self._looks_like_classical_ciphertext(cipher_text)
+            )
+        ):
             cipher_types.append("caesar_cipher")
         
         if cipher_text.startswith("$") or any(k in description for k in ["hash", "md5", "sha"]):
@@ -321,6 +328,14 @@ class CryptographyAgent(BaseAgent):
             plain = "".join([chr((ord(c)-ord('A')-shift)%26+ord('A')) if c.isupper() else (chr((ord(c)-ord('a')-shift)%26+ord('a')) if c.islower() else c) for c in cipher_text])
             candidates.append((shift, plain, self._score_english(plain)))
         return max(candidates, key=lambda x: x[2])
+
+    @staticmethod
+    def _looks_like_classical_ciphertext(text: str) -> bool:
+        letters = sum(c.isalpha() for c in text)
+        if letters < 8:
+            return False
+        meaningful = sum(c.isalpha() or c.isspace() or c in ".,!?;:'\"-" for c in text)
+        return meaningful / max(len(text), 1) >= 0.8
 
     def _looks_like_base64(self, text: str) -> bool:
         compact = re.sub(r"\s+", "", text)

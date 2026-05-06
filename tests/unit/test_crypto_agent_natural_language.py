@@ -37,3 +37,27 @@ def test_crypto_agent_extracts_hex_from_natural_language_prompt():
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{hex_routing_ok}"
     assert "Extracted ciphertext: 4354467b6865785f726f7574696e675f6f6b7d" in result["steps"]
+
+
+def test_crypto_agent_tries_caesar_for_simple_cipher_prompt():
+    agent = CryptographyAgent()
+    challenge = {
+        "id": "nl_simple_cipher",
+        "category": "crypto",
+        "description": (
+            "Decrypt the following message: 'pm ol ohk hufaopun jvumpkluaphs av zhf, "
+            "ol dyval pa pu jpwoly, aoha pz, if zv johunpun aol vykly vm aol "
+            "slaalyz vm aol hswohila, aoha uva h dvyk jvbsk il thkl vba.'. "
+            "It seems to be encrypted with a simple cipher."
+        ),
+        "hints": [],
+        "tags": ["crypto"],
+        "files": [],
+        "metadata": {},
+    }
+
+    result = agent.solve_challenge(challenge)
+
+    assert result["status"] == "solved"
+    assert result["flag"].startswith("if he had anything confidential to say")
+    assert any("Detected types: caesar_cipher" in step for step in result["steps"])
