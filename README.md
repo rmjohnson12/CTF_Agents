@@ -153,7 +153,7 @@ OPENAI_API_KEY=your_openai_key_here
    React2Shell/RSC payload execution is localhost-only by default. For an
    authorized spawned CTF target, explicitly opt in:
    ```bash
-   CTF_AGENTS_ALLOW_REMOTE_R2S=1 python3 ask.py "Solve ReactOOPS at http://TARGET:PORT using the source in ~/Downloads/web_reactoops"
+   CTF_AGENTS_ALLOW_REMOTE_R2S=1 python3 ask.py "Solve ReactOOPS at http://TARGET:PORT"
    ```
 
 ## 📂 Project Structure
