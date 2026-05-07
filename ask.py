@@ -182,7 +182,49 @@ def _heuristic_challenge_from_instruction(
         "metadata": {"system_tools": available_tools}
     }
 
+def _print_plan(
+    challenge: Dict[str, Any],
+    analysis: Dict[str, Any],
+    next_action: Dict[str, Any],
+    tracker=None,
+) -> None:
+    """Print a routing plan without invoking any agents or tools."""
+    conf_pct = f"{analysis['confidence'] * 100:.0f}%"
+    indicators = ", ".join(analysis["strategy"]["detected_indicators"]) or "none"
+    action = next_action.get("next_action", "stop")
+    target = next_action.get("target", "none")
+    routing = f"{action} -> {target}" if target != "none" else "stop  (no confident path)"
+
+    print("\n=== Plan (dry run) ===\n")
+    print(f"Challenge : {challenge.get('name', 'Unknown')}  [{challenge.get('id', '?')}]")
+    print(f"Category  : {analysis['category']}  ({conf_pct} confidence)")
+    print(f"Indicators: {indicators}")
+    print()
+    print(f"Routing   : {routing}")
+    print(f"Reasoning : {next_action.get('reasoning') or analysis['strategy']['reasoning']}")
+
+    if tracker is not None:
+        hint = tracker.get_routing_hint(analysis["category"])
+        if hint:
+            agent_id, rate = hint
+            print()
+            print(
+                f"Perf hint : {agent_id} -> {rate:.0%} historical solve rate "
+                f"for '{analysis['category']}' challenges"
+            )
+        else:
+            print()
+            print(f"Perf hint : No history yet for '{analysis['category']}' challenges")
+
+    print()
+    print("No agents or tools were invoked. Remove --plan to execute.")
+
+
 def main():
+    plan_mode = "--plan" in sys.argv
+    if plan_mode:
+        sys.argv = [a for a in sys.argv if a != "--plan"]
+
     interactive = len(sys.argv) < 2
     user_input = " ".join(sys.argv[1:]) if not interactive else ""
     
@@ -209,6 +251,21 @@ def main():
     coordinator.register_agent(OSINTAgent(browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent())
     coordinator.register_agent(NetworkingAgent())
+
+    if plan_mode:
+        if not user_input:
+            print("Usage: python ask.py --plan \"your instruction\"")
+            print("       python ask.py --plan path/to/challenge.json")
+            return
+        heuristic = _heuristic_challenge_from_instruction(user_input, available_tools)
+        challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
+        if challenge.get("files"):
+            challenge["files"] = [_normalize_path(f) for f in challenge["files"]]
+        raw_analysis = coordinator.reasoner.analyze_challenge(challenge)
+        analysis_dict = coordinator._analysis_to_dict(challenge, raw_analysis)
+        next_action = coordinator.reasoner.choose_next_action(challenge, raw_analysis, [])
+        _print_plan(challenge, analysis_dict, next_action, coordinator.performance_tracker)
+        return
 
     challenge = None
     resume = False
