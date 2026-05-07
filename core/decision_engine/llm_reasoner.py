@@ -57,13 +57,15 @@ class LLMReasoner:
         provider: Optional[str] = None,
     ):
         self.provider = (provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
+        self._nvidia_keys: List[str] = []
+        self._nvidia_key_index = 0
 
         if client is not None:
             self.client = client
             self.provider = self.provider or "openai"
             self.model = model or "gpt-4o"
         else:
-            nvapi_key = os.getenv("NVAPI_KEY") or os.getenv("NGC_API_KEY")
+            self._nvidia_keys = self._load_nvidia_keys()
             anthropic_key = os.getenv("ANTHROPIC_API_KEY")
             openai_key = os.getenv("OPENAI_API_KEY")
             provider_order = self._provider_order(self.provider)
@@ -73,12 +75,9 @@ class LLMReasoner:
             self.provider = "none"
 
             for candidate in provider_order:
-                if candidate == "nvidia" and nvapi_key:
+                if candidate == "nvidia" and self._nvidia_keys:
                     self.provider = "nvidia"
-                    self.client = OpenAI(
-                        api_key=nvapi_key,
-                        base_url=_NVIDIA_NIM_BASE_URL,
-                    )
+                    self._configure_nvidia_client(0)
                     self.model = model or os.getenv("NVIDIA_MODEL") or _NVIDIA_DEFAULT_MODEL
                     break
 
@@ -98,6 +97,43 @@ class LLMReasoner:
     def is_available(self) -> bool:
         """Checks if the LLM client is configured and available."""
         return self.client is not None
+
+    @staticmethod
+    def _load_nvidia_keys() -> List[str]:
+        raw_keys = []
+        raw_keys.extend((os.getenv("NVAPI_KEYS") or "").split(","))
+        raw_keys.append(os.getenv("NVAPI_KEY") or "")
+        raw_keys.append(os.getenv("NGC_API_KEY") or "")
+
+        keys: List[str] = []
+        for key in raw_keys:
+            key = key.strip()
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
+    def _configure_nvidia_client(self, key_index: int) -> None:
+        self._nvidia_key_index = key_index
+        self.client = OpenAI(
+            api_key=self._nvidia_keys[key_index],
+            base_url=_NVIDIA_NIM_BASE_URL,
+        )
+
+    def _rotate_nvidia_key(self) -> bool:
+        if self.provider != "nvidia" or len(self._nvidia_keys) <= 1:
+            return False
+
+        next_index = self._nvidia_key_index + 1
+        if next_index >= len(self._nvidia_keys):
+            return False
+
+        self._configure_nvidia_client(next_index)
+        logger.warning(
+            "NVIDIA LLM key failed with a temporary service/quota error; rotating to configured fallback key %d/%d.",
+            next_index + 1,
+            len(self._nvidia_keys),
+        )
+        return True
 
     @staticmethod
     def _provider_order(provider: str) -> List[str]:
@@ -168,7 +204,8 @@ class LLMReasoner:
         if not self.client:
             return ""
 
-        for attempt in range(1, _MAX_LLM_RETRIES + 1):
+        max_attempts = max(_MAX_LLM_RETRIES, len(self._nvidia_keys) or 1)
+        for attempt in range(1, max_attempts + 1):
             try:
                 if self.provider == "anthropic":
                     response = self.client.messages.create(
@@ -199,6 +236,8 @@ class LLMReasoner:
                 time.sleep(wait)
             except Exception as exc:
                 if "503" in str(exc) or "429" in str(exc):
+                    if self._rotate_nvidia_key():
+                        continue
                     logger.error("LLM service temporarily unavailable (503/429). Fast-failing to heuristic mode.")
                     return ""
                 logger.error("LLM call failed with non-retryable error: %s", exc)

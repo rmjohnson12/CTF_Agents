@@ -1,4 +1,5 @@
 import pytest
+import json
 from tools.web.browser_snapshot_tool import BrowserSnapshotResult
 from tools.web.http_fetch import HttpFetchResult
 from tools.web.sqlmap import SqlmapTool
@@ -115,3 +116,29 @@ def test_web_agent_normalizes_bare_ip_port_url():
     })
 
     assert browser.urls[0] == "http://127.0.0.1:30433"
+
+
+def test_web_agent_audits_local_next_react_source_for_react2shell(tmp_path):
+    challenge_dir = tmp_path / "challenge"
+    challenge_dir.mkdir()
+    (challenge_dir / "package.json").write_text(json.dumps({
+        "name": "react2shell",
+        "dependencies": {
+            "next": "16.0.6",
+            "react": "^19",
+            "react-dom": "^19",
+        },
+    }))
+
+    agent = WebExploitationAgent(dirsearch_tool=NoopDirsearchTool())
+    result = agent.solve_challenge({
+        "id": "reactoops",
+        "category": "web",
+        "description": "ReactOOPS source review challenge with React Server Components.",
+        "files": [str(challenge_dir)],
+    })
+
+    assert result["status"] == "attempted"
+    assert "react2shell_rsc_rce" in result["vulnerabilities_found"]
+    assert result["artifacts"]["source_audit"]["react2shell"]["next"] == "16.0.6"
+    assert any("React2Shell" in step for step in result["steps"])

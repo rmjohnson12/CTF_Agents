@@ -76,10 +76,10 @@ def _extract_referenced_paths(user_input: str) -> List[str]:
     ]
     files_in_prompt = []
     for p in potential_paths:
-        # Check if it looks like a path or if it's a file that exists in CWD
-        if "/" in p or p.startswith("~") or os.path.isfile(p):
+        # Check if it looks like a path or if it's a file/dir that exists in CWD
+        if "/" in p or p.startswith("~") or os.path.exists(p):
             full_path = _normalize_path(p)
-            if os.path.exists(full_path) and os.path.isfile(full_path):
+            if os.path.exists(full_path):
                 files_in_prompt.append(full_path)
 
     current_files = [
@@ -260,6 +260,7 @@ Example shape:
   "files": ["path/to/file"],
   "url": "..."
 }}
+Do NOT invent, guess, or hallucinate a url (like localhost:8080) if one is not clearly specified in the instruction. If there is no url, omit the field.
 """
             try:
                 if reasoner.client is None:

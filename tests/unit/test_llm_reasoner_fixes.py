@@ -120,6 +120,19 @@ def test_nvapi_key_selects_nvidia_nim(monkeypatch):
     assert reasoner.model == _NVIDIA_DEFAULT_MODEL
 
 
+def test_nvapi_keys_selects_first_nvidia_key(monkeypatch):
+    monkeypatch.setenv("NVAPI_KEYS", "nvapi-first, nvapi-second")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["api_key"] == "nvapi-first"
+    assert reasoner.provider == "nvidia"
+    assert reasoner._nvidia_keys == ["nvapi-first", "nvapi-second"]
+
+
 def test_ngc_api_key_alias_selects_nvidia_nim(monkeypatch):
     monkeypatch.setenv("NGC_API_KEY", "ngc-fake-key")
 
@@ -200,6 +213,26 @@ def test_provider_preference_falls_back_to_nvidia_when_anthropic_missing(monkeyp
     MockOpenAI.assert_called_once()
     assert reasoner.provider == "nvidia"
     assert reasoner.model == _NVIDIA_DEFAULT_MODEL
+
+
+def test_nvidia_key_rotation_on_429(monkeypatch):
+    monkeypatch.setenv("NVAPI_KEYS", "nvapi-first,nvapi-second")
+
+    first_client = MagicMock()
+    second_client = MagicMock()
+    first_client.chat.completions.create.side_effect = Exception("429 rate limit")
+    second_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="recovered with fallback key"))]
+    )
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI", side_effect=[first_client, second_client]):
+        reasoner = LLMReasoner()
+        result = reasoner._call_llm("hello")
+
+    assert result == "recovered with fallback key"
+    assert reasoner._nvidia_key_index == 1
+    first_client.chat.completions.create.assert_called_once()
+    second_client.chat.completions.create.assert_called_once()
 
 
 def test_provider_override_selects_custom_anthropic_model(monkeypatch):
