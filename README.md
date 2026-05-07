@@ -15,8 +15,9 @@ the solving loop.
   constraint-style password checks.
 - Cryptography and password-cracking tasks using hashes, encodings, wordlists,
   John the Ripper, and Hashcat.
-- Web challenges with browser snapshots, HTTP fetching, directory discovery, and
-  SQL injection tooling.
+- Web challenges with browser snapshots, HTTP fetching, directory discovery,
+  SQL injection tooling, and local source audits for dependency-level issues
+  such as vulnerable React/Next.js versions.
 - Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings, and
   recovered artifacts.
 - Networking tasks using `nmap`, `tshark`, and `scapy` for traffic analysis and
@@ -46,9 +47,10 @@ For a fuller architecture map, see `PROJECT_STRUCTURE.md` and
 
 - Python 3.10 or newer.
 - Python packages from `requirements.txt`.
-- Optional LLM key (Required for autonomous reasoning):
-  - `NVAPI_KEY` for NVIDIA NIM, which is checked first.
-  - `OPENAI_API_KEY` for OpenAI fallback.
+- Optional LLM key for LLM-assisted reasoning:
+  - `NVAPI_KEY` or `NVAPI_KEYS` for NVIDIA NIM.
+  - `ANTHROPIC_API_KEY` for Claude.
+  - `OPENAI_API_KEY` for OpenAI.
 
 ## Installation
 
@@ -82,16 +84,34 @@ Set your API keys in a `.env` file in the project root:
 NVAPI_KEY=your_nvidia_key_here
 ```
 
+For multiple NVIDIA NIM keys, use a comma-separated fallback list. If one key
+hits a temporary `429` or `503` style failure, the reasoner will try the next
+configured key:
+
+```bash
+NVAPI_KEYS=first_nvidia_key,second_nvidia_key,third_nvidia_key
+```
+
+To prefer a specific LLM provider, set `LLM_PROVIDER`:
+
+```bash
+LLM_PROVIDER=nvidia      # nvidia, anthropic, or openai
+ANTHROPIC_API_KEY=your_claude_key_here
+OPENAI_API_KEY=your_openai_key_here
+```
+
 ### 🧠 Advanced Autonomous Features
 - **Autonomous Specialist Pivoting**: The system now recognizes when a specialist (like `CryptoAgent`) is hitting a wall and will automatically pivot to the `CodingAgent` if a script is provided for analysis.
 - **Self-Correcting Coding Agent**: The agent doesn't just write scripts; it debugs them. If an exploit fails, it reads the error logs, reasons about the failure, and iterates on the code autonomously.
-- **API Resilience**: Built-in exponential backoff handles NVIDIA NIM/OpenAI rate limits (429) automatically, ensuring long-running challenges don't crash.
+- **API Resilience**: Built-in exponential backoff handles transient LLM failures, and NVIDIA NIM can rotate across multiple configured keys.
 - **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
+- **Source-Only Web Audits**: Local web source folders are inspected for framework and dependency clues, including vulnerable React/Next.js combinations.
 
 ## 🛠 Prerequisites
 
 - Python 3.8+
-- `.env` file with `NVAPI_KEY` (NVIDIA NIM) or `OPENAI_API_KEY`.
+- `.env` file with at least one supported LLM key, such as `NVAPI_KEY`,
+  `NVAPI_KEYS`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`.
 - Essential security tools: `nmap`, `tshark`, `binwalk`, `john`, `hashcat`.
 
 ## 🚀 Quick Start
@@ -110,6 +130,11 @@ NVAPI_KEY=your_nvidia_key_here
    You can provide raw instructions or point to files:
    ```text
    > "Who needs AES when you have XOR? The files are in ~/Downloads/challenge.py and ~/Downloads/output.txt"
+   ```
+
+   Source-only web challenges can point directly at a local app folder:
+   ```text
+   > "Analyze ~/Downloads/web_reactoops/challenge for vulnerable React/Next.js package versions. There is no spawned server."
    ```
 
 ## 📂 Project Structure
@@ -170,7 +195,7 @@ The main configuration files are:
 - `config/system_config.yaml` for global runtime settings.
 - `config/agents_config.yaml` for specialist behavior and priorities.
 - `config/tools_config.yaml` for tool paths, timeouts, and enablement.
-- `config/.env.example` for API keys and optional integrations.
+- `.env.example` for API keys, provider selection, and optional integrations.
 
 Tool availability is detected at runtime where possible, so missing external
 tools should degrade specific capabilities rather than preventing all usage.
@@ -199,6 +224,7 @@ Generated outputs are local-only and ignored by git:
 - `results/` stores run reports, artifacts, and captured flags.
 - `logs/checkpoints/` stores coordinator progress snapshots for resume support.
 - `logs/knowledge.db` stores the local knowledge base.
+- `logs/performance.db` stores local agent performance history.
 
 To clean local generated output:
 
