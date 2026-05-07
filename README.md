@@ -150,6 +150,12 @@ OPENAI_API_KEY=your_openai_key_here
    `127.0.0.1` on an ephemeral port, publishes that URL, and cleans up the
    container when the coordinator run finishes.
 
+   React2Shell/RSC payload execution is localhost-only by default. For an
+   authorized spawned CTF target, explicitly opt in:
+   ```bash
+   CTF_AGENTS_ALLOW_REMOTE_R2S=1 python3 ask.py "Solve ReactOOPS at http://TARGET:PORT using the source in ~/Downloads/web_reactoops"
+   ```
+
 ## 📂 Project Structure
 - `agents/`: Specialist agents (Web, Crypto, Networking, Coding).
 - `core/`: The "Brain" (LLM Reasoner, Coordinator, Message Broker).
