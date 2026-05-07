@@ -13,6 +13,7 @@ from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
+from core.utils.flag_utils import find_first_flag
 import base64
 import binascii
 import re
@@ -133,6 +134,20 @@ class CryptographyAgent(BaseAgent):
         
         steps.append(f"Extracted ciphertext: {cipher_text}")
 
+        affine_result = self._try_affine_mod256_from_files(challenge.get("files", []), steps)
+        if affine_result:
+            plaintext = affine_result
+            found = find_first_flag(plaintext)
+            if found:
+                steps.append("SUCCESS: Found flag via affine mod-256 source analysis.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps
+                }
+
         # 1.1 Detection/Decoding: If it looks like hex or base64, decode it
         # Check for "Flag: " prefix and strip it
         if cipher_text.lower().startswith("flag:"):
@@ -149,7 +164,6 @@ class CryptographyAgent(BaseAgent):
             except Exception: pass
 
         # Initial flag check: maybe it was already plaintext or just got decoded
-        from core.utils.flag_utils import find_first_flag
         found = find_first_flag(cipher_text)
         if found:
             steps.append("SUCCESS: Flag found directly in extracted ciphertext.")
@@ -270,7 +284,6 @@ class CryptographyAgent(BaseAgent):
 
         if best_result:
             method, plaintext, score, detail = best_result
-            from core.utils.flag_utils import find_first_flag
             found = find_first_flag(plaintext)
             
             # If we found a flag pattern, it's a definite win
@@ -479,8 +492,89 @@ class CryptographyAgent(BaseAgent):
             logger.debug("_best_single_byte_xor failed: %s", exc)
             return 0, "", float("-inf")
 
+    def _try_affine_mod256_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
+        """
+        Detect simple byte-wise affine encryption in source:
+        ct = (a * char + b) % 256
+
+        Then invert it against a companion hex ciphertext file.
+        """
+        source_files = [Path(f) for f in files if str(f).lower().endswith(".py")]
+        ciphertext_files = [
+            Path(f)
+            for f in files
+            if not str(f).lower().endswith((".py", ".c", ".cpp", ".java", ".go", ".sh"))
+        ]
+        if not source_files or not ciphertext_files:
+            return None
+
+        for source_path in source_files:
+            try:
+                source = source_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read affine source file %s: %s", source_path, exc)
+                continue
+
+            params = self._extract_affine_mod256_params(source)
+            if not params:
+                continue
+            multiplier, offset = params
+
+            try:
+                inverse = pow(multiplier, -1, 256)
+            except ValueError:
+                steps.append(
+                    f"  Affine source pattern found but multiplier {multiplier} has no inverse mod 256."
+                )
+                continue
+
+            for ciphertext_path in ciphertext_files:
+                raw = self._read_hex_cipher_file(ciphertext_path)
+                if not raw:
+                    continue
+                plaintext = bytes(((byte - offset) * inverse) % 256 for byte in raw)
+                decoded = plaintext.decode("utf-8", errors="replace")
+                steps.append(
+                    "  Detected affine mod-256 cipher in "
+                    f"{source_path.name}: ct=( {multiplier}*char + {offset} ) % 256; "
+                    f"decoded {ciphertext_path.name}."
+                )
+                return decoded
+
+        return None
+
+    @staticmethod
+    def _extract_affine_mod256_params(source: str) -> Optional[Tuple[int, int]]:
+        compact = re.sub(r"\s+", "", source)
+        patterns = [
+            r"\((\d+)\*char\+(\d+)\)%256",
+            r"\((\d+)\*\w+\+(\d+)\)%256",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, compact)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+        return None
+
+    @staticmethod
+    def _read_hex_cipher_file(path: Path) -> Optional[bytes]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception as exc:
+            logger.debug("Could not read hex ciphertext file %s: %s", path, exc)
+            return None
+
+        compact = re.sub(r"\s+", "", text)
+        if len(compact) < 2 or len(compact) % 2 != 0:
+            return None
+        if not re.fullmatch(r"[0-9a-fA-F]+", compact):
+            return None
+        try:
+            return bytes.fromhex(compact)
+        except ValueError:
+            return None
+
     def _score_english(self, text: str) -> float:
-        from core.utils.flag_utils import find_first_flag
         if find_first_flag(text):
             return 1000.0 # High priority for actual flags
 

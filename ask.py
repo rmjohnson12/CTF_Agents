@@ -103,6 +103,38 @@ def _load_challenge_json(path: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+
+def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
+    """
+    Expand small challenge directories into files the agents can inspect.
+
+    Wordlist/tool directories are intentionally kept out of challenge files so
+    crypto agents do not waste time treating giant dictionaries as artifacts.
+    """
+    expanded: List[str] = []
+    skip_dir_terms = {"wordlist", "wordlists", "rockyou", "payload", "payloads"}
+    useful_exts = {
+        ".enc", ".bin", ".dat", ".txt", ".json", ".py", ".c", ".cpp", ".java",
+        ".go", ".sh", ".pcap", ".pcapng", ".pdf", ".zip", ".log",
+    }
+
+    for path in paths:
+        p = Path(path)
+        lower_parts = {part.lower() for part in p.parts}
+        if p.is_dir():
+            if lower_parts & skip_dir_terms:
+                continue
+            if (p / "Dockerfile").exists():
+                expanded.append(str(p.resolve()))
+                continue
+            for child in sorted(p.rglob("*")):
+                if child.is_file() and child.suffix.lower() in useful_exts:
+                    expanded.append(str(child.resolve()))
+        else:
+            expanded.append(str(p.resolve()))
+
+    return sorted(set(expanded))
+
 def _heuristic_challenge_from_instruction(
     user_input: str,
     available_tools: List[str],
@@ -142,10 +174,11 @@ def _heuristic_challenge_from_instruction(
         "rockyou",
     ]
 
-    challenge_files = [
+    referenced_artifacts = [
         path for path in files_in_prompt
         if _load_challenge_json(path) is None
     ]
+    challenge_files = _expand_challenge_artifacts(referenced_artifacts)
 
     forensics_terms = ["hidden", "artifact", "forensics", "extract", "embedded", "strings"]
 
@@ -164,12 +197,15 @@ def _heuristic_challenge_from_instruction(
         or any(term in lowered_input for term in ["forensics", "artifact"])
     ):
         category = "forensics"
-    elif any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files) or "authenticate" in lowered_input:
-        category = "reverse"
     elif url or any(term in lowered_input for term in web_terms):
         category = "web"
-    elif any(f.lower().endswith(('.txt', '.doc', '.docx')) for f in challenge_files) or any(term in lowered_input for term in crypto_terms):
+    elif (
+        any(f.lower().endswith(('.txt', '.doc', '.docx', '.enc')) for f in challenge_files)
+        or any(term in lowered_input for term in crypto_terms)
+    ):
         category = "crypto"
+    elif any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files) or "authenticate" in lowered_input:
+        category = "reverse"
     elif any(term in lowered_input for term in coding_terms):
         category = "misc"
 

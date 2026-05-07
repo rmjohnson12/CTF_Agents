@@ -115,3 +115,24 @@ def test_heuristic_mapping_routes_local_docker_folder_to_web(tmp_path, monkeypat
 
     assert challenge["category"] == "web"
     assert challenge["files"] == [str(challenge_dir)]
+
+
+def test_heuristic_mapping_expands_challenge_dir_but_skips_wordlists(tmp_path, monkeypatch):
+    challenge_dir = tmp_path / "challenge"
+    wordlists_dir = tmp_path / "WordLists"
+    challenge_dir.mkdir()
+    wordlists_dir.mkdir()
+    chall_py = challenge_dir / "chall.py"
+    msg_enc = challenge_dir / "msg.enc"
+    chall_py.write_text("print('cipher')")
+    msg_enc.write_text("00")
+    (wordlists_dir / "rockyou.txt").write_text("password\n" * 10)
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Decrypt it. Files are in challenge wordlists are in WordLists",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "crypto"
+    assert challenge["files"] == sorted([str(chall_py), str(msg_enc)])

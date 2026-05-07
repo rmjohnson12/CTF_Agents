@@ -35,6 +35,7 @@ _ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 _RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError)
 _MAX_LLM_RETRIES = 3
 _LLM_BACKOFF_BASE = 1.0
+_DEFAULT_LLM_TIMEOUT_SECONDS = 15.0
 
 
 class LLMReasoner:
@@ -59,6 +60,7 @@ class LLMReasoner:
         self.provider = (provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
         self._nvidia_keys: List[str] = []
         self._nvidia_key_index = 0
+        self.timeout_seconds = self._load_timeout_seconds()
 
         if client is not None:
             self.client = client
@@ -83,13 +85,13 @@ class LLMReasoner:
 
                 if candidate == "anthropic" and anthropic_key:
                     self.provider = "anthropic"
-                    self.client = Anthropic(api_key=anthropic_key)
+                    self.client = Anthropic(api_key=anthropic_key, timeout=self.timeout_seconds)
                     self.model = model or os.getenv("ANTHROPIC_MODEL") or _ANTHROPIC_DEFAULT_MODEL
                     break
 
                 if candidate == "openai" and openai_key:
                     self.provider = "openai"
-                    self.client = OpenAI(api_key=openai_key)
+                    self.client = OpenAI(api_key=openai_key, timeout=self.timeout_seconds)
                     self.model = model or os.getenv("OPENAI_MODEL") or "gpt-4o"
                     break
 
@@ -111,11 +113,27 @@ class LLMReasoner:
                 keys.append(key)
         return keys
 
+    @staticmethod
+    def _load_timeout_seconds() -> float:
+        raw_timeout = os.getenv("LLM_TIMEOUT_SECONDS", "").strip()
+        if not raw_timeout:
+            return _DEFAULT_LLM_TIMEOUT_SECONDS
+        try:
+            return max(1.0, float(raw_timeout))
+        except ValueError:
+            logger.warning(
+                "Invalid LLM_TIMEOUT_SECONDS=%r; using %.1fs.",
+                raw_timeout,
+                _DEFAULT_LLM_TIMEOUT_SECONDS,
+            )
+            return _DEFAULT_LLM_TIMEOUT_SECONDS
+
     def _configure_nvidia_client(self, key_index: int) -> None:
         self._nvidia_key_index = key_index
         self.client = OpenAI(
             api_key=self._nvidia_keys[key_index],
             base_url=_NVIDIA_NIM_BASE_URL,
+            timeout=self.timeout_seconds,
         )
 
     def _rotate_nvidia_key(self) -> bool:
@@ -455,6 +473,25 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
+        has_crypto_file_pair = (
+            any(f.endswith(('.enc', '.cipher', '.ct', '.out', '.txt')) for f in files)
+            and any(f.endswith(('.py', '.sage', '.js')) for f in files)
+        )
+        if (
+            challenge.get("category") == "crypto"
+            or has_crypto_file_pair
+            or self._kw(text, "cipher", "decrypt", "decode", "encrypted", "xor", "aes", "caesar", "affine")
+        ):
+            indicators.append("crypto_terms")
+            return ChallengeAnalysis(
+                category_guess="crypto",
+                confidence=0.94,
+                reasoning="Detected crypto wording or a source-plus-ciphertext challenge bundle.",
+                recommended_target="crypto_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
         # Priority 2: Reverse Engineering (Source/Binary analysis)
         if any(f.endswith('.py') or f.endswith('.exe') or f.endswith('.bin') or f.endswith('.elf') for f in files) or \
            self._kw(text, "reverse", "source code", "analyze program", "authenticate the program"):
@@ -500,7 +537,7 @@ class LLMReasoner:
         # Priority 5: Crypto / Decoding
         # Special check for numerical strings (decimal/octal encoding)
         if re.search(r'\b(?:\d{1,3}[\s,]+){3,}', text) or \
-           self._kw(text, "cipher", "decrypt", "decode", "base64", "hex", "xor", "caesar", "password", "rockyou", "crack"):
+           self._kw(text, "base64", "hex", "password", "rockyou", "crack"):
             indicators.append("crypto_terms")
             return ChallengeAnalysis(
                 category_guess="crypto",

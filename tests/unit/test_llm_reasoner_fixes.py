@@ -40,6 +40,7 @@ def clear_llm_env(monkeypatch):
     """Keep provider-selection tests independent from the developer's shell."""
     for key in (
         "LLM_PROVIDER",
+        "NVAPI_KEYS",
         "NVAPI_KEY",
         "NGC_API_KEY",
         "NVIDIA_MODEL",
@@ -47,6 +48,7 @@ def clear_llm_env(monkeypatch):
         "ANTHROPIC_MODEL",
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
+        "LLM_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -117,7 +119,34 @@ def test_nvapi_key_selects_nvidia_nim(monkeypatch):
     call_kwargs = MockOpenAI.call_args.kwargs
     assert call_kwargs["api_key"] == "nvapi-fake-key"
     assert call_kwargs["base_url"] == _NVIDIA_NIM_BASE_URL
+    assert call_kwargs["timeout"] == 15.0
     assert reasoner.model == _NVIDIA_DEFAULT_MODEL
+
+
+def test_llm_timeout_seconds_configures_sdk_clients(monkeypatch):
+    monkeypatch.setenv("NVAPI_KEY", "nvapi-fake-key")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "3.5")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["timeout"] == 3.5
+    assert reasoner.timeout_seconds == 3.5
+
+
+def test_invalid_llm_timeout_seconds_uses_default(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-openai")
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "eventually")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["timeout"] == 15.0
+    assert reasoner.timeout_seconds == 15.0
 
 
 def test_nvapi_keys_selects_first_nvidia_key(monkeypatch):
@@ -367,6 +396,24 @@ def test_call_llm_disables_client_on_authorization_error():
 def test_heuristic_fallback_when_no_client():
     reasoner = LLMReasoner(client=None)
     analysis = reasoner.analyze_challenge(SAMPLE_CHALLENGE)
+    assert analysis.category_guess == "crypto"
+    assert analysis.recommended_target == "crypto_agent"
+
+
+def test_crypto_source_and_ciphertext_pair_routes_to_crypto_before_reverse():
+    reasoner = LLMReasoner(client=None)
+    challenge = {
+        "id": "affine_bundle",
+        "name": "Negotiation Message",
+        "category": "crypto",
+        "description": "Decrypt this confidential message.",
+        "files": ["/tmp/chall.py", "/tmp/msg.enc"],
+        "hints": [],
+        "tags": [],
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
     assert analysis.category_guess == "crypto"
     assert analysis.recommended_target == "crypto_agent"
 

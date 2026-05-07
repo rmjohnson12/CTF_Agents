@@ -61,3 +61,29 @@ def test_crypto_agent_tries_caesar_for_simple_cipher_prompt():
     assert result["status"] == "solved"
     assert result["flag"].startswith("if he had anything confidential to say")
     assert any("Detected types: caesar_cipher" in step for step in result["steps"])
+
+
+def test_crypto_agent_solves_affine_mod256_source_and_hex_ciphertext(tmp_path):
+    msg = b"Delivery on Friday.\nHTB{aff1n3_mod_256_shortcut}"
+    encrypted = bytes((123 * b + 18) % 256 for b in msg)
+    source = tmp_path / "chall.py"
+    ciphertext = tmp_path / "msg.enc"
+    source.write_text(
+        "def encryption(msg):\n"
+        "    ct = []\n"
+        "    for char in msg:\n"
+        "        ct.append((123 * char + 18) % 256)\n"
+        "    return bytes(ct)\n"
+    )
+    ciphertext.write_text(encrypted.hex())
+
+    result = CryptographyAgent().solve_challenge({
+        "id": "affine_mod256",
+        "category": "crypto",
+        "description": "Decrypt the confidential message using the provided challenge script.",
+        "files": [str(source), str(ciphertext)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{aff1n3_mod_256_shortcut}"
+    assert any("affine mod-256" in step for step in result["steps"])
