@@ -101,9 +101,8 @@ class LLMReasoner:
     @staticmethod
     def _load_nvidia_keys() -> List[str]:
         raw_keys = []
-        raw_keys.extend((os.getenv("NVAPI_KEYS") or "").split(","))
-        raw_keys.append(os.getenv("NVAPI_KEY") or "")
-        raw_keys.append(os.getenv("NGC_API_KEY") or "")
+        for env_name in ("NVAPI_KEYS", "NVAPI_KEY", "NGC_API_KEY"):
+            raw_keys.extend((os.getenv(env_name) or "").split(","))
 
         keys: List[str] = []
         for key in raw_keys:
@@ -239,11 +238,22 @@ class LLMReasoner:
                     if self._rotate_nvidia_key():
                         continue
                     logger.error("LLM service temporarily unavailable (503/429). Fast-failing to heuristic mode.")
+                    self._disable_llm()
+                    return ""
+                if "403" in str(exc) or "401" in str(exc) or "Unauthorized" in str(exc) or "Forbidden" in str(exc):
+                    logger.error("LLM authorization failed. Disabling LLM for this run and falling back to heuristic mode.")
+                    self._disable_llm()
                     return ""
                 logger.error("LLM call failed with non-retryable error: %s", exc)
+                self._disable_llm()
                 return ""
 
         return ""
+
+    def _disable_llm(self) -> None:
+        self.client = None
+        self.provider = "none"
+        self.model = "none"
 
     @staticmethod
     def _extract_anthropic_text(response: Any) -> str:

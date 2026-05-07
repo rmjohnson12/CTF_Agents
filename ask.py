@@ -21,7 +21,6 @@ from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
 from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
-from core.decision_engine.llm_reasoner import LLMReasoner
 
 def _unwrap_ask_command(user_input: str) -> str:
     """Accept either a raw instruction or a pasted `python ask.py "..."` command."""
@@ -230,7 +229,6 @@ def main():
     interactive = len(sys.argv) < 2
     user_input = " ".join(sys.argv[1:]) if not interactive else ""
     
-    reasoner = LLMReasoner()
     from core.utils.system_checks import get_available_tools, get_system_context
     available_tools = get_available_tools()
     system_ctx = get_system_context()
@@ -317,9 +315,9 @@ Example shape:
 Do NOT invent, guess, or hallucinate a url (like localhost:8080) if one is not clearly specified in the instruction. If there is no url, omit the field.
 """
             try:
-                if reasoner.client is None:
+                if coordinator.reasoner.client is None:
                     raise Exception("LLM client not configured")
-                raw_json = reasoner._call_llm(prompt)
+                raw_json = coordinator.reasoner._call_llm(prompt)
                 raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
                 llm_dict = json.loads(raw_json)
                 challenge = _normalize_challenge(ChallengeParser().parse_dict(llm_dict))

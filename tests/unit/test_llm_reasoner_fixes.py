@@ -133,6 +133,19 @@ def test_nvapi_keys_selects_first_nvidia_key(monkeypatch):
     assert reasoner._nvidia_keys == ["nvapi-first", "nvapi-second"]
 
 
+def test_nvapi_key_singular_accepts_comma_separated_fallbacks(monkeypatch):
+    monkeypatch.setenv("NVAPI_KEY", "nvapi-first, nvapi-second")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["api_key"] == "nvapi-first"
+    assert reasoner.provider == "nvidia"
+    assert reasoner._nvidia_keys == ["nvapi-first", "nvapi-second"]
+
+
 def test_ngc_api_key_alias_selects_nvidia_nim(monkeypatch):
     monkeypatch.setenv("NGC_API_KEY", "ngc-fake-key")
 
@@ -271,6 +284,8 @@ def test_call_llm_falls_back_on_exception():
     reasoner = LLMReasoner(client=mock_client)
     result = reasoner._call_llm("hello")
     assert result == ""
+    assert reasoner.client is None
+    assert reasoner.provider == "none"
 
 
 def test_call_llm_handles_none_content():
@@ -330,6 +345,21 @@ def test_call_llm_exhausts_retryable_errors_without_final_sleep():
     assert result == ""
     assert mock_client.chat.completions.create.call_count == 3
     assert [call.args[0] for call in sleep.call_args_list] == [1.0, 2.0]
+
+
+def test_call_llm_disables_client_on_authorization_error():
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = Exception("403 Forbidden")
+    reasoner = LLMReasoner(client=mock_client)
+
+    first = reasoner._call_llm("hello")
+    second = reasoner._call_llm("hello again")
+
+    assert first == ""
+    assert second == ""
+    assert reasoner.client is None
+    assert reasoner.provider == "none"
+    mock_client.chat.completions.create.assert_called_once()
 
 
 # ── heuristic fallback still works ───────────────────────────────────
