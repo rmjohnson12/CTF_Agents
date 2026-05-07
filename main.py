@@ -15,6 +15,7 @@ from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineer
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
+from agents.support.recon_agent import ReconAgent
 
 
 def _print_plan_main(
@@ -103,6 +104,7 @@ def main(argv: List[str]) -> int:
     coordinator.register_agent(OSINTAgent(agent_id="osint_agent", browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent(agent_id="log_agent"))
     coordinator.register_agent(NetworkingAgent(agent_id="networking_agent"))
+    coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
 
     if args.plan:
         raw_analysis = coordinator.reasoner.analyze_challenge(challenge)

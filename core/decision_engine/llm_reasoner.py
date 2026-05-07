@@ -323,7 +323,7 @@ class LLMReasoner:
     "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "recommended_target": "recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
@@ -353,7 +353,7 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
@@ -490,6 +490,17 @@ class LLMReasoner:
         ip_pattern = r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\b'
         if url or re.search(ip_pattern, text) or self._kw(text, "url", "http", "login", "form", "page", "cookie", "endpoint", "jwt", "token", "session"):
             indicators.append("web_terms")
+
+            if self._kw(text, "recon", "enumerate", "enumeration", "scan", "fingerprint", "discover"):
+                indicators.append("recon_terms")
+                return ChallengeAnalysis(
+                    category_guess="web",
+                    confidence=0.90,
+                    reasoning="Detected explicit reconnaissance/enumeration request for a web or network target.",
+                    recommended_target="recon_agent",
+                    recommended_action="run_agent",
+                    detected_indicators=indicators,
+                )
 
             # Heuristic pivot: If "inspect", "form", "page", "source", "javascript", or "code" are used
             # prefer browser_snapshot tool for initial reconnaissance.
@@ -657,6 +668,14 @@ class LLMReasoner:
                 "next_action": "run_agent",
                 "target": "web_agent",
                 "reasoning": "Web challenge detected.",
+                "inputs": {},
+            }
+
+        if analysis.recommended_target == "recon_agent":
+            return {
+                "next_action": "run_agent",
+                "target": "recon_agent",
+                "reasoning": "Reconnaissance requested for a live target.",
                 "inputs": {},
             }
 

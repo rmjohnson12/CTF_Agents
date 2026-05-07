@@ -19,6 +19,7 @@ from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineer
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
+from agents.support.recon_agent import ReconAgent
 from core.decision_engine.llm_reasoner import LLMReasoner
 
 def _unwrap_ask_command(user_input: str) -> str:
@@ -251,6 +252,7 @@ def main():
     coordinator.register_agent(OSINTAgent(browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent())
     coordinator.register_agent(NetworkingAgent())
+    coordinator.register_agent(ReconAgent())
 
     if plan_mode:
         if not user_input:

@@ -218,7 +218,7 @@ class CoordinatorAgent(BaseAgent):
                 decision_key = (action, target)
 
                 # Correct common reasoner mixups (agents vs tools)
-                if action == "run_tool" and target in self.specialist_agents:
+                if action == "run_tool" and target in self._all_agent_ids():
                     action = "run_agent"
                 elif action == "run_agent" and target in ["browser_snapshot", "tony_htb_sql"]:
                     action = "run_tool"
@@ -370,7 +370,7 @@ class CoordinatorAgent(BaseAgent):
         """
         Run a registered specialist agent selected by the reasoner.
         """
-        agent = self.specialist_agents.get(target_agent_id)
+        agent = self.specialist_agents.get(target_agent_id) or self.support_agents.get(target_agent_id)
 
         if agent is None:
             return {
@@ -420,7 +420,7 @@ class CoordinatorAgent(BaseAgent):
         steps: List[str],
     ) -> tuple[str, str]:
         """Correct common LLM action/target mismatches before dispatch."""
-        if action == "run_tool" and target in self.specialist_agents:
+        if action == "run_tool" and target in self._all_agent_ids():
             steps.append(f"Corrected decision: run_tool -> {target} should be run_agent.")
             return "run_agent", target
 
@@ -603,6 +603,9 @@ class CoordinatorAgent(BaseAgent):
             "specialists": list(self.specialist_agents.keys()),
             "support": list(self.support_agents.keys()),
         }
+
+    def _all_agent_ids(self) -> set[str]:
+        return set(self.specialist_agents) | set(self.support_agents)
 
     def _publish_result(self, result: Dict[str, Any]) -> None:
         """Broadcast an agent/tool result so other agents can react."""
