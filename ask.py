@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional
 # Ensure we can import from project root
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from challenges.challenge_parser import ChallengeParser, ParseError
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.specialists.cryptography.crypto_agent import CryptographyAgent
 from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
@@ -94,20 +95,12 @@ def _extract_referenced_paths(user_input: str) -> List[str]:
 def _load_challenge_json(path: str) -> Optional[Dict[str, Any]]:
     if not path.lower().endswith(".json"):
         return None
-
     try:
-        with open(path) as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        return ChallengeParser().parse_file(path)
+    except ParseError:
         return None
-
-    if not isinstance(data, dict):
+    except Exception:
         return None
-
-    if not any(key in data for key in ("description", "category", "name")):
-        return None
-
-    return data
 
 def _heuristic_challenge_from_instruction(
     user_input: str,
@@ -267,10 +260,18 @@ Do NOT invent, guess, or hallucinate a url (like localhost:8080) if one is not c
                     raise Exception("LLM client not configured")
                 raw_json = reasoner._call_llm(prompt)
                 raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
-                challenge = _normalize_challenge(json.loads(raw_json))
-            except Exception as e:
+                llm_dict = json.loads(raw_json)
+                challenge = _normalize_challenge(ChallengeParser().parse_dict(llm_dict))
+            except ParseError:
+                print(f"LLM produced an invalid challenge shape, using heuristics...")
+                challenge = _normalize_challenge(ChallengeParser().parse_dict(
+                    _heuristic_challenge_from_instruction(user_input, available_tools)
+                ))
+            except Exception:
                 print(f"LLM mapping failed or not available, using heuristics...")
-                challenge = _normalize_challenge(_heuristic_challenge_from_instruction(user_input, available_tools))
+                challenge = _normalize_challenge(ChallengeParser().parse_dict(
+                    _heuristic_challenge_from_instruction(user_input, available_tools)
+                ))
         else:
             # Follow-up input: append to description and set resume
             challenge["description"] = (challenge.get("description") or "") + f"\n\nUser Hint: {user_input}"

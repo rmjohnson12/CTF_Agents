@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import List
 
+from challenges.challenge_parser import ChallengeParser, ParseError
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.specialists.cryptography.crypto_agent import CryptographyAgent
 from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
@@ -32,11 +33,11 @@ def main(argv: List[str]) -> int:
     )
     args = parser.parse_args(argv[1:])
 
-    challenge_path = Path(args.challenge_json_path)
-    if not challenge_path.exists():
-        raise FileNotFoundError(f"Challenge file not found: {challenge_path}")
-
-    challenge = json.loads(challenge_path.read_text())
+    try:
+        challenge = ChallengeParser().parse_file(args.challenge_json_path)
+    except ParseError as exc:
+        print(f"Error loading challenge: {exc}", file=sys.stderr)
+        return 1
 
     from tools.web.browser_snapshot_tool import BrowserSnapshotTool
     browser_tool = BrowserSnapshotTool()
