@@ -69,6 +69,28 @@ def _normalize_challenge(challenge: Dict[str, Any]) -> Dict[str, Any]:
     target = challenge.get("target")
     if isinstance(target, dict) and target.get("url"):
         target["url"] = _normalize_url(target["url"])
+    if challenge.get("files"):
+        challenge["files"] = _expand_challenge_artifacts([
+            _normalize_path(str(path)) for path in challenge["files"]
+        ])
+    return challenge
+
+def _merge_heuristic_context(
+    challenge: Dict[str, Any],
+    heuristic: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Preserve concrete user-supplied context when LLM mapping omits it."""
+    if not challenge.get("url") and heuristic.get("url"):
+        challenge["url"] = heuristic["url"]
+
+    if not challenge.get("files") and heuristic.get("files"):
+        challenge["files"] = heuristic["files"]
+
+    description = challenge.get("description") or ""
+    heuristic_description = heuristic.get("description") or ""
+    if heuristic.get("url") and heuristic.get("url") not in description:
+        challenge["description"] = f"{description}\n\nOriginal instruction: {heuristic_description}".strip()
+
     return challenge
 
 def _extract_referenced_paths(user_input: str) -> List[str]:
@@ -172,6 +194,16 @@ def _heuristic_challenge_from_instruction(
         "hex",
         "password",
         "rockyou",
+        "crypto",
+        "cryptography",
+        "rsa",
+        "public key",
+        "time capsule",
+    ]
+    strong_crypto_terms = [
+        term
+        for term in crypto_terms
+        if term not in {"password", "rockyou"}
     ]
 
     referenced_artifacts = [
@@ -197,11 +229,13 @@ def _heuristic_challenge_from_instruction(
         or any(term in lowered_input for term in ["forensics", "artifact"])
     ):
         category = "forensics"
+    elif challenge_files and any(term in lowered_input for term in strong_crypto_terms):
+        category = "crypto"
     elif url or any(term in lowered_input for term in web_terms):
         category = "web"
     elif (
         any(f.lower().endswith(('.txt', '.doc', '.docx', '.enc')) for f in challenge_files)
-        or any(term in lowered_input for term in crypto_terms)
+        or any(term in lowered_input for term in strong_crypto_terms)
     ):
         category = "crypto"
     elif any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files) or "authenticate" in lowered_input:
@@ -330,6 +364,7 @@ def main():
         print(f"\n--- Processing Instruction: \"{user_input}\" ---")
 
         if not challenge:
+            heuristic = _heuristic_challenge_from_instruction(user_input, available_tools)
             # Step 1: Use LLM to convert natural language to challenge JSON
             prompt = f"""
 Convert the following natural language security instruction into a standard CTF challenge JSON object.
@@ -356,17 +391,15 @@ Do NOT invent, guess, or hallucinate a url (like localhost:8080) if one is not c
                 raw_json = coordinator.reasoner._call_llm(prompt)
                 raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
                 llm_dict = json.loads(raw_json)
-                challenge = _normalize_challenge(ChallengeParser().parse_dict(llm_dict))
+                challenge = _normalize_challenge(
+                    _merge_heuristic_context(ChallengeParser().parse_dict(llm_dict), heuristic)
+                )
             except ParseError:
                 print(f"LLM produced an invalid challenge shape, using heuristics...")
-                challenge = _normalize_challenge(ChallengeParser().parse_dict(
-                    _heuristic_challenge_from_instruction(user_input, available_tools)
-                ))
+                challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
             except Exception:
                 print(f"LLM mapping failed or not available, using heuristics...")
-                challenge = _normalize_challenge(ChallengeParser().parse_dict(
-                    _heuristic_challenge_from_instruction(user_input, available_tools)
-                ))
+                challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
         else:
             # Follow-up input: append to description and set resume
             challenge["description"] = (challenge.get("description") or "") + f"\n\nUser Hint: {user_input}"

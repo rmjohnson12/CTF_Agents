@@ -87,3 +87,78 @@ def test_crypto_agent_solves_affine_mod256_source_and_hex_ciphertext(tmp_path):
     assert result["status"] == "solved"
     assert result["flag"] == "HTB{aff1n3_mod_256_shortcut}"
     assert any("affine mod-256" in step for step in result["steps"])
+
+
+def test_crypto_agent_solves_chacha_known_plaintext_reuse(tmp_path):
+    known = b"Known diplomatic message with enough bytes to reveal the stream."
+    flag = b"HTB{stream_cipher_nonce_reuse}"
+    keystream = bytes((i * 17 + 31) % 256 for i in range(len(known)))
+    encrypted_known = bytes(a ^ b for a, b in zip(known, keystream))
+    encrypted_flag = bytes(a ^ b for a, b in zip(flag, keystream))
+
+    source = tmp_path / "source.py"
+    output = tmp_path / "out.txt"
+    source.write_text(
+        "from Crypto.Cipher import ChaCha20\n\n"
+        "if __name__ == '__main__':\n"
+        "    message = b'Known diplomatic message with enough bytes '\n"
+        "    message += b'to reveal the stream.'\n"
+        "    encrypted_message = encryptMessage(message, key, iv)\n"
+        "    encrypted_flag = encryptMessage(FLAG, key, iv)\n"
+    )
+    output.write_text(
+        "00" * 12 + "\n" + encrypted_known.hex() + "\n" + encrypted_flag.hex()
+    )
+
+    result = CryptographyAgent().solve_challenge({
+        "id": "chacha_reuse",
+        "category": "crypto",
+        "description": "Cha-Cha Ball stream cipher challenge. Decrypt the rest of the messages.",
+        "files": [str(source), str(output)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{stream_cipher_nonce_reuse}"
+    assert any("stream-cipher keystream reuse" in step for step in result["steps"])
+
+
+def test_crypto_agent_detects_rsa_time_capsule_needs_target(tmp_path):
+    source = tmp_path / "server.py"
+    source.write_text(
+        "class TimeCapsule:\n"
+        "    def __init__(self, msg):\n"
+        "        self.e = 5\n"
+        "    def get_new_time_capsule(self):\n"
+        "        return {'time_capsule': 'AA', 'pubkey': ['BB', '5']}\n"
+    )
+
+    result = CryptographyAgent().solve_challenge({
+        "id": "baby_time_capsule",
+        "category": "crypto",
+        "description": "Very easy crypto challenge.",
+        "files": [str(source)],
+    })
+
+    assert result["status"] == "attempted"
+    assert any("RSA broadcast pattern detected" in step for step in result["steps"])
+
+
+def test_crypto_agent_rsa_broadcast_math_helpers_recover_plaintext():
+    agent = CryptographyAgent()
+    plaintext = b"flag"
+    message = int.from_bytes(plaintext, "big")
+    exponent = 5
+    moduli = [
+        10123457689,
+        10123457701,
+        10123457731,
+        10123457747,
+        10123457761,
+    ]
+    ciphertexts = [pow(message, exponent, modulus) for modulus in moduli]
+
+    combined = agent._crt(ciphertexts, moduli)
+    root, exact = agent._integer_nth_root(combined, exponent)
+
+    assert exact
+    assert agent._int_to_bytes(root) == plaintext

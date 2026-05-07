@@ -6,8 +6,12 @@ Specialized agent for solving cryptography-based CTF challenges.
 
 import os
 import logging
+import ast
+import json
+import socket
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
+from urllib.parse import urlparse
 
 from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
@@ -134,12 +138,40 @@ class CryptographyAgent(BaseAgent):
         
         steps.append(f"Extracted ciphertext: {cipher_text}")
 
+        rsa_broadcast_result = self._try_rsa_broadcast_from_files(challenge, steps)
+        if rsa_broadcast_result:
+            plaintext = rsa_broadcast_result
+            found = find_first_flag(plaintext)
+            if found:
+                steps.append("SUCCESS: Found flag via RSA broadcast attack.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps
+                }
+
         affine_result = self._try_affine_mod256_from_files(challenge.get("files", []), steps)
         if affine_result:
             plaintext = affine_result
             found = find_first_flag(plaintext)
             if found:
                 steps.append("SUCCESS: Found flag via affine mod-256 source analysis.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps
+                }
+
+        stream_reuse_result = self._try_stream_cipher_reuse_from_files(challenge.get("files", []), steps)
+        if stream_reuse_result:
+            plaintext = stream_reuse_result
+            found = find_first_flag(plaintext)
+            if found:
+                steps.append("SUCCESS: Found flag via stream-cipher keystream reuse.")
                 return {
                     "challenge_id": challenge.get("id"),
                     "agent_id": self.agent_id,
@@ -543,6 +575,174 @@ class CryptographyAgent(BaseAgent):
 
         return None
 
+    def _try_rsa_broadcast_from_files(self, challenge: Dict[str, Any], steps: List[str]) -> Optional[str]:
+        source_files = [Path(f) for f in challenge.get("files", []) if str(f).lower().endswith(".py")]
+        if not source_files:
+            return None
+
+        exponent = None
+        for source_path in source_files:
+            try:
+                source = source_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read RSA source file %s: %s", source_path, exc)
+                continue
+
+            if "time_capsule" not in source or "pubkey" not in source:
+                continue
+            exponent = self._extract_small_rsa_exponent(source)
+            if exponent:
+                steps.append(f"  Detected repeated RSA time capsule source with e={exponent}.")
+                break
+
+        if not exponent or exponent < 2 or exponent > 11:
+            return None
+
+        target = self._extract_tcp_target(challenge)
+        if not target:
+            steps.append(
+                "  RSA broadcast pattern detected, but no host:port target was provided. "
+                "Provide the spawned service address to collect capsules."
+            )
+            return None
+
+        host, port = target
+        try:
+            samples = self._collect_time_capsule_samples(host, port, exponent)
+        except Exception as exc:
+            logger.warning("RSA broadcast sample collection failed: %s", exc)
+            steps.append(f"  RSA broadcast sample collection failed: {exc}")
+            return None
+
+        if len(samples) < exponent:
+            steps.append(f"  Collected only {len(samples)}/{exponent} RSA capsules.")
+            return None
+
+        combined = self._crt([c for c, _ in samples], [n for _, n in samples])
+        root, exact = self._integer_nth_root(combined, exponent)
+        if not exact:
+            steps.append("  RSA broadcast CRT complete, but integer root was not exact.")
+            return None
+
+        plaintext = self._int_to_bytes(root).decode("utf-8", errors="replace")
+        steps.append(f"  Collected {len(samples)} capsules from {host}:{port}; recovered RSA plaintext.")
+        return plaintext
+
+    @staticmethod
+    def _extract_small_rsa_exponent(source: str) -> Optional[int]:
+        match = re.search(r"\bself\.e\s*=\s*(\d+)", source)
+        if not match:
+            match = re.search(r"\be\s*=\s*(\d+)", source)
+        if not match:
+            return None
+        return int(match.group(1))
+
+    @staticmethod
+    def _extract_tcp_target(challenge: Dict[str, Any]) -> Optional[Tuple[str, int]]:
+        candidates = []
+        if challenge.get("url"):
+            candidates.append(str(challenge["url"]))
+        target = challenge.get("target")
+        if isinstance(target, dict):
+            candidates.extend(str(v) for v in target.values() if v)
+        candidates.append(challenge.get("description", ""))
+
+        for candidate in candidates:
+            parsed = urlparse(candidate if "://" in candidate else f"tcp://{candidate}")
+            if parsed.hostname and parsed.port:
+                return parsed.hostname, parsed.port
+
+            match = re.search(r"\b((?:\d{1,3}\.){3}\d{1,3}|localhost|127\.0\.0\.1):(\d{2,5})\b", candidate)
+            if match:
+                return match.group(1), int(match.group(2))
+
+        return None
+
+    @staticmethod
+    def _collect_time_capsule_samples(host: str, port: int, count: int) -> List[Tuple[int, int]]:
+        samples: List[Tuple[int, int]] = []
+        seen_moduli = set()
+        attempts = count * 3
+
+        for _ in range(attempts):
+            with socket.create_connection((host, port), timeout=5) as sock:
+                sock.settimeout(5)
+                CryptographyAgent._recv_until(sock, b"(Y/n)")
+                sock.sendall(b"Y\n")
+                line = CryptographyAgent._recv_line(sock)
+                data = json.loads(line.decode("utf-8", errors="ignore"))
+                ciphertext = int(data["time_capsule"], 16)
+                modulus = int(data["pubkey"][0], 16)
+                exponent = int(data["pubkey"][1], 16)
+                if exponent != count or modulus in seen_moduli:
+                    continue
+                seen_moduli.add(modulus)
+                samples.append((ciphertext, modulus))
+                if len(samples) >= count:
+                    break
+
+        return samples
+
+    @staticmethod
+    def _recv_until(sock: socket.socket, marker: bytes) -> bytes:
+        data = b""
+        while marker not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        return data
+
+    @staticmethod
+    def _recv_line(sock: socket.socket) -> bytes:
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        return data.strip()
+
+    @staticmethod
+    def _crt(remainders: List[int], moduli: List[int]) -> int:
+        total = 0
+        product = 1
+        for modulus in moduli:
+            product *= modulus
+
+        for remainder, modulus in zip(remainders, moduli):
+            partial = product // modulus
+            total += remainder * pow(partial, -1, modulus) * partial
+
+        return total % product
+
+    @staticmethod
+    def _integer_nth_root(value: int, degree: int) -> Tuple[int, bool]:
+        if value < 0:
+            raise ValueError("value must be non-negative")
+        if value in (0, 1):
+            return value, True
+
+        low, high = 0, 1
+        while high ** degree <= value:
+            high *= 2
+
+        while low + 1 < high:
+            mid = (low + high) // 2
+            powered = mid ** degree
+            if powered <= value:
+                low = mid
+            else:
+                high = mid
+
+        return low, low ** degree == value
+
+    @staticmethod
+    def _int_to_bytes(value: int) -> bytes:
+        if value == 0:
+            return b"\x00"
+        return value.to_bytes((value.bit_length() + 7) // 8, "big")
+
     @staticmethod
     def _extract_affine_mod256_params(source: str) -> Optional[Tuple[int, int]]:
         compact = re.sub(r"\s+", "", source)
@@ -573,6 +773,149 @@ class CryptographyAgent(BaseAgent):
             return bytes.fromhex(compact)
         except ValueError:
             return None
+
+    def _try_stream_cipher_reuse_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
+        """
+        Detect known-plaintext stream cipher reuse.
+
+        Many CTF ChaCha/XOR stream challenges encrypt a known message and the
+        flag with the same keystream. If the source contains the known message
+        and out.txt contains known_ciphertext + flag_ciphertext, recover:
+            keystream = known_plaintext XOR known_ciphertext
+            flag = flag_ciphertext XOR keystream
+        """
+        source_files = [Path(f) for f in files if str(f).lower().endswith(".py")]
+        data_files = [
+            Path(f)
+            for f in files
+            if not str(f).lower().endswith((".py", ".c", ".cpp", ".java", ".go", ".sh"))
+        ]
+        if not source_files or not data_files:
+            return None
+
+        for source_path in source_files:
+            try:
+                source = source_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read stream-cipher source file %s: %s", source_path, exc)
+                continue
+
+            if "chacha" not in source.lower() and "xor" not in source.lower():
+                continue
+
+            known_plaintext = self._extract_bytes_variable(source, "message")
+            if not known_plaintext:
+                continue
+
+            for data_path in data_files:
+                lines = self._read_hex_lines(data_path)
+                if len(lines) < 2:
+                    continue
+
+                # Common layout: nonce, encrypted_known_message, encrypted_flag.
+                cipher_pairs = [(lines[0], lines[1])]
+                if len(lines) >= 3:
+                    cipher_pairs.insert(0, (lines[1], lines[2]))
+
+                for known_ciphertext, target_ciphertext in cipher_pairs:
+                    if len(known_ciphertext) < len(target_ciphertext):
+                        continue
+                    keystream = bytes(
+                        cipher_byte ^ plain_byte
+                        for cipher_byte, plain_byte in zip(known_ciphertext, known_plaintext)
+                    )
+                    plaintext = bytes(
+                        cipher_byte ^ key_byte
+                        for cipher_byte, key_byte in zip(target_ciphertext, keystream)
+                    )
+                    decoded = plaintext.decode("utf-8", errors="replace")
+                    if find_first_flag(decoded):
+                        steps.append(
+                            "  Detected stream-cipher keystream reuse in "
+                            f"{source_path.name} and {data_path.name}; recovered target ciphertext."
+                        )
+                        return decoded
+
+        return None
+
+    @staticmethod
+    def _read_hex_lines(path: Path) -> List[bytes]:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception as exc:
+            logger.debug("Could not read hex data file %s: %s", path, exc)
+            return []
+
+        decoded: List[bytes] = []
+        for line in lines:
+            compact = re.sub(r"\s+", "", line)
+            if not compact or len(compact) % 2 != 0:
+                continue
+            if not re.fullmatch(r"[0-9a-fA-F]+", compact):
+                continue
+            try:
+                decoded.append(bytes.fromhex(compact))
+            except ValueError:
+                continue
+        return decoded
+
+    @classmethod
+    def _extract_bytes_variable(cls, source: str, variable_name: str) -> Optional[bytes]:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            logger.debug("Could not parse source for bytes extraction: %s", exc)
+            return None
+
+        values: Dict[str, bytes] = {}
+        cls._collect_bytes_assignments(tree.body, values, variable_name)
+        return values.get(variable_name)
+
+    @classmethod
+    def _collect_bytes_assignments(
+        cls,
+        statements: List[ast.stmt],
+        values: Dict[str, bytes],
+        variable_name: str,
+    ) -> None:
+        for stmt in statements:
+            if isinstance(stmt, ast.Assign):
+                value = cls._eval_bytes_expr(stmt.value)
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id == variable_name and value is not None:
+                        values[variable_name] = value
+            elif isinstance(stmt, ast.AugAssign):
+                if isinstance(stmt.target, ast.Name) and stmt.target.id == variable_name:
+                    value = cls._eval_bytes_expr(stmt.value)
+                    if value is not None:
+                        values[variable_name] = values.get(variable_name, b"") + value
+            elif isinstance(stmt, (ast.If, ast.For, ast.While, ast.With, ast.Try)):
+                for child_list in cls._nested_statement_lists(stmt):
+                    cls._collect_bytes_assignments(child_list, values, variable_name)
+
+    @staticmethod
+    def _nested_statement_lists(stmt: ast.stmt) -> List[List[ast.stmt]]:
+        lists = []
+        for attr in ("body", "orelse", "finalbody"):
+            value = getattr(stmt, attr, None)
+            if isinstance(value, list):
+                lists.append(value)
+        handlers = getattr(stmt, "handlers", [])
+        for handler in handlers:
+            if isinstance(getattr(handler, "body", None), list):
+                lists.append(handler.body)
+        return lists
+
+    @classmethod
+    def _eval_bytes_expr(cls, node: ast.AST) -> Optional[bytes]:
+        if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = cls._eval_bytes_expr(node.left)
+            right = cls._eval_bytes_expr(node.right)
+            if left is not None and right is not None:
+                return left + right
+        return None
 
     def _score_english(self, text: str) -> float:
         if find_first_flag(text):

@@ -437,6 +437,18 @@ class CoordinatorAgent(BaseAgent):
         url = challenge.get("url") or challenge.get("target", {}).get("url")
         has_service = bool(url) or bool(re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b", description))
         mentions_jwt_web = any(term in description for term in ("jwt", "session", "token"))
+
+        if (
+            action == "run_agent"
+            and target != "crypto_agent"
+            and "crypto_agent" in self.specialist_agents
+            and challenge.get("category") == "crypto"
+            and has_service
+            and self._has_rsa_time_capsule_source(challenge)
+        ):
+            steps.append("Corrected decision: RSA time-capsule TCP challenge should use crypto_agent.")
+            return "run_agent", "crypto_agent"
+
         if (
             action == "run_agent"
             and target == "crypto_agent"
@@ -448,6 +460,25 @@ class CoordinatorAgent(BaseAgent):
             return "run_agent", "web_agent"
 
         return action, target
+
+    @staticmethod
+    def _has_rsa_time_capsule_source(challenge: Dict[str, Any]) -> bool:
+        for raw_path in challenge.get("files", []):
+            path = Path(str(raw_path))
+            if path.suffix.lower() != ".py" or not path.exists():
+                continue
+            try:
+                source = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            compact = source.lower()
+            if (
+                "time_capsule" in compact
+                and "pubkey" in compact
+                and re.search(r"\bself\.e\s*=\s*(?:3|5|7|11)\b|\be\s*=\s*(?:3|5|7|11)\b", source)
+            ):
+                return True
+        return False
 
     def _run_selected_tool(
         self,

@@ -1,6 +1,12 @@
 import json
 
-from ask import _heuristic_challenge_from_instruction, _normalize_path, _normalize_url, _unwrap_ask_command
+from ask import (
+    _heuristic_challenge_from_instruction,
+    _normalize_challenge,
+    _normalize_path,
+    _normalize_url,
+    _unwrap_ask_command,
+)
 
 
 def test_heuristic_mapping_loads_referenced_challenge_json(tmp_path, monkeypatch):
@@ -136,3 +142,74 @@ def test_heuristic_mapping_expands_challenge_dir_but_skips_wordlists(tmp_path, m
 
     assert challenge["category"] == "crypto"
     assert challenge["files"] == sorted([str(chall_py), str(msg_enc)])
+
+
+def test_normalize_challenge_expands_directory_returned_by_llm(tmp_path):
+    challenge_dir = tmp_path / "baby_time_capsule"
+    challenge_dir.mkdir()
+    server = challenge_dir / "server.py"
+    server.write_text("e = 5\n")
+
+    challenge = _normalize_challenge({
+        "id": "llm_task",
+        "category": "crypto",
+        "description": "Very easy crypto challenge.",
+        "files": [str(challenge_dir)],
+    })
+
+    assert challenge["files"] == [str(server)]
+
+
+def test_heuristic_mapping_routes_explicit_crypto_source_folder_to_crypto(tmp_path, monkeypatch):
+    challenge_dir = tmp_path / "baby_time_capsule"
+    challenge_dir.mkdir()
+    server = challenge_dir / "server.py"
+    server.write_text("e = 5\n")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Very easy crypto challenge. Files are located in baby_time_capsule",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "crypto"
+    assert challenge["files"] == [str(server)]
+
+
+def test_heuristic_mapping_keeps_crypto_source_with_ip_port_as_crypto(tmp_path, monkeypatch):
+    challenge_dir = tmp_path / "baby_time_capsule"
+    challenge_dir.mkdir()
+    server = challenge_dir / "server.py"
+    server.write_text("e = 5\n")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Very easy crypto challenge at 127.0.0.1:1337. Files are in baby_time_capsule",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "crypto"
+    assert challenge["url"] == "http://127.0.0.1:1337"
+    assert challenge["files"] == [str(server)]
+
+
+def test_merge_heuristic_context_preserves_llm_omitted_ip_and_files():
+    from ask import _merge_heuristic_context
+
+    challenge = {
+        "id": "llm_task",
+        "category": "crypto",
+        "description": "Very easy crypto challenge.",
+        "files": [],
+    }
+    heuristic = {
+        "description": "Very easy crypto challenge. Files are in baby_time_capsule. Ip and Port are 127.0.0.1:1337",
+        "files": ["/tmp/baby_time_capsule/server.py"],
+        "url": "http://127.0.0.1:1337",
+    }
+
+    merged = _merge_heuristic_context(challenge, heuristic)
+
+    assert merged["url"] == "http://127.0.0.1:1337"
+    assert merged["files"] == ["/tmp/baby_time_capsule/server.py"]
+    assert "Original instruction" in merged["description"]

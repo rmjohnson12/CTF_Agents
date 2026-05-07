@@ -199,6 +199,44 @@ def test_coordinator_keeps_live_jwt_web_target_on_web_agent():
     assert "Corrected decision: live JWT/session web target should use web_agent." in result["steps"]
 
 
+def test_coordinator_corrects_rsa_time_capsule_service_to_crypto_agent(tmp_path):
+    challenge_dir = tmp_path / "baby_time_capsule"
+    challenge_dir.mkdir()
+    server = challenge_dir / "server.py"
+    server.write_text(
+        "class TimeCapsule:\n"
+        "    def __init__(self):\n"
+        "        self.e = 5\n"
+        "    def get_new_time_capsule(self):\n"
+        "        return {'time_capsule': 'AA', 'pubkey': ['BB', '5']}\n"
+    )
+    decisions = [
+        {"next_action": "run_agent", "target": "web_agent", "reasoning": "IP target looks web-ish"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+
+    crypto_agent = MockAgent("crypto_agent", status_on_solve="solved", flag="HTB{rsa_fixed}")
+    web_agent = MockAgent("web_agent", status_on_solve="attempted")
+    coordinator.register_agent(crypto_agent)
+    coordinator.register_agent(web_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "baby_time_capsule",
+        "category": "crypto",
+        "description": "Very easy crypto challenge. Ip and Port are 154.57.164.65:31813",
+        "files": [str(server)],
+        "url": "http://154.57.164.65:31813",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{rsa_fixed}"
+    assert crypto_agent.solve_called == 1
+    assert web_agent.solve_called == 0
+    assert "Corrected decision: RSA time-capsule TCP challenge should use crypto_agent." in result["steps"]
+
+
 def test_coordinator_writes_checkpoint_for_fast_solve(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     decisions = [
