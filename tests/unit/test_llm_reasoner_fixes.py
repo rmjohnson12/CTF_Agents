@@ -20,6 +20,7 @@ from core.decision_engine.llm_reasoner import (
     ChallengeAnalysis,
     _NVIDIA_NIM_BASE_URL,
     _NVIDIA_DEFAULT_MODEL,
+    _ANTHROPIC_DEFAULT_MODEL,
 )
 
 
@@ -32,6 +33,22 @@ SAMPLE_CHALLENGE = {
     "files": [],
     "metadata": {},
 }
+
+
+@pytest.fixture(autouse=True)
+def clear_llm_env(monkeypatch):
+    """Keep provider-selection tests independent from the developer's shell."""
+    for key in (
+        "LLM_PROVIDER",
+        "NVAPI_KEY",
+        "NGC_API_KEY",
+        "NVIDIA_MODEL",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_MODEL",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
 
 # ── prompt content (f-string fix) ────────────────────────────────────
@@ -70,9 +87,6 @@ def test_next_action_prompt_contains_challenge_and_history():
 # ── model defaults ────────────────────────────────────────────────────
 
 def test_default_model_is_gpt4o_when_no_keys(monkeypatch):
-    monkeypatch.delenv("NVAPI_KEY", raising=False)
-    monkeypatch.delenv("NGC_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     reasoner = LLMReasoner()
     assert reasoner.model == "none"
     assert reasoner.client is None
@@ -95,7 +109,6 @@ def test_explicit_client_defaults_to_gpt4o():
 
 def test_nvapi_key_selects_nvidia_nim(monkeypatch):
     monkeypatch.setenv("NVAPI_KEY", "nvapi-fake-key")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
         MockOpenAI.return_value = MagicMock()
@@ -108,9 +121,7 @@ def test_nvapi_key_selects_nvidia_nim(monkeypatch):
 
 
 def test_ngc_api_key_alias_selects_nvidia_nim(monkeypatch):
-    monkeypatch.delenv("NVAPI_KEY", raising=False)
     monkeypatch.setenv("NGC_API_KEY", "ngc-fake-key")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
         MockOpenAI.return_value = MagicMock()
@@ -136,8 +147,6 @@ def test_nvapi_key_overrides_openai_key(monkeypatch):
 
 
 def test_openai_key_fallback(monkeypatch):
-    monkeypatch.delenv("NVAPI_KEY", raising=False)
-    monkeypatch.delenv("NGC_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-openai")
 
     with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
@@ -148,6 +157,62 @@ def test_openai_key_fallback(monkeypatch):
     assert call_kwargs["api_key"] == "sk-fake-openai"
     assert "base_url" not in call_kwargs, "OpenAI path must not set NVIDIA base_url"
     assert reasoner.model == "gpt-4o"
+
+
+def test_anthropic_key_fallback(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+
+    with patch("core.decision_engine.llm_reasoner.Anthropic") as MockAnthropic:
+        MockAnthropic.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockAnthropic.call_args.kwargs
+    assert call_kwargs["api_key"] == "sk-ant-fake"
+    assert reasoner.provider == "anthropic"
+    assert reasoner.model == _ANTHROPIC_DEFAULT_MODEL
+
+
+def test_provider_preference_selects_anthropic_over_nvidia(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("NVAPI_KEY", "nvapi-fake-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+
+    with patch("core.decision_engine.llm_reasoner.Anthropic") as MockAnthropic, \
+            patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockAnthropic.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    MockAnthropic.assert_called_once()
+    MockOpenAI.assert_not_called()
+    assert reasoner.provider == "anthropic"
+
+
+def test_provider_preference_falls_back_to_nvidia_when_anthropic_missing(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("NVAPI_KEY", "nvapi-fake-key")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI, \
+            patch("core.decision_engine.llm_reasoner.Anthropic") as MockAnthropic:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    MockAnthropic.assert_not_called()
+    MockOpenAI.assert_called_once()
+    assert reasoner.provider == "nvidia"
+    assert reasoner.model == _NVIDIA_DEFAULT_MODEL
+
+
+def test_provider_override_selects_custom_anthropic_model(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "claude")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-test-model")
+
+    with patch("core.decision_engine.llm_reasoner.Anthropic") as MockAnthropic:
+        MockAnthropic.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    assert reasoner.provider == "anthropic"
+    assert reasoner.model == "claude-test-model"
 
 
 # ── _call_llm uses chat.completions ───────────────────────────────────
@@ -183,6 +248,26 @@ def test_call_llm_handles_none_content():
     reasoner = LLMReasoner(client=mock_client)
     result = reasoner._call_llm("hello")
     assert result == ""
+
+
+def test_call_llm_uses_anthropic_messages():
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = MagicMock(
+        content=[MagicMock(text="claude response")]
+    )
+    reasoner = LLMReasoner(
+        client=mock_client,
+        model="claude-test-model",
+        provider="anthropic",
+    )
+    result = reasoner._call_llm("hello")
+
+    mock_client.messages.create.assert_called_once()
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert call_kwargs["model"] == "claude-test-model"
+    assert call_kwargs["max_tokens"] == 2000
+    assert call_kwargs["messages"] == [{"role": "user", "content": "hello"}]
+    assert result == "claude response"
 
 
 def test_call_llm_retries_retryable_exception_before_success():

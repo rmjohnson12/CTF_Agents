@@ -9,8 +9,10 @@ def check():
     load_dotenv()
     
     # 1. Check API Keys & Mode
+    provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
     openai_key = os.getenv("OPENAI_API_KEY")
     nvapi_key = os.getenv("NVAPI_KEY") or os.getenv("NGC_API_KEY")
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     
     has_llm = False
     if nvapi_key:
@@ -18,6 +20,12 @@ def check():
         has_llm = True
     else:
         print("[-] NVIDIA NIM API Key: MISSING")
+
+    if anthropic_key and anthropic_key != "your_anthropic_api_key_here":
+        print("[+] Anthropic API Key: CONFIGURED")
+        has_llm = True
+    else:
+        print("[-] Anthropic API Key: MISSING")
         
     if openai_key and openai_key != "your_openai_api_key_here":
         print("[+] OpenAI API Key: CONFIGURED")
@@ -27,6 +35,18 @@ def check():
 
     if has_llm:
         print("[+] Mode: LLM-assisted (LLM-backed routing and planning enabled)")
+        if provider:
+            print(f"[+] Preferred LLM provider: {provider}")
+            if provider in {"anthropic", "claude"} and not anthropic_key and nvapi_key:
+                print("[+] Selected LLM provider: nvidia (Anthropic key missing; falling back)")
+            elif provider in {"nvidia", "nim"} and not nvapi_key and anthropic_key:
+                print("[+] Selected LLM provider: anthropic (NVIDIA key missing; falling back)")
+        elif nvapi_key:
+            print("[+] Selected LLM provider: nvidia")
+        elif anthropic_key:
+            print("[+] Selected LLM provider: anthropic")
+        elif openai_key:
+            print("[+] Selected LLM provider: openai")
     else:
         print("[!] Mode: HEURISTIC (Running without LLM; using pattern matching for routing)")
 

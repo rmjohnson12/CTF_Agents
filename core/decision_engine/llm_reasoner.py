@@ -9,6 +9,7 @@ from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
+from anthropic import Anthropic
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -29,6 +30,7 @@ class ChallengeAnalysis:
 
 _NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 _NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
+_ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
 _RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError)
 _MAX_LLM_RETRIES = 3
@@ -41,36 +43,75 @@ class LLMReasoner:
 
     Priority order for auto-configuration:
       1. Explicit client passed in
-      2. NVAPI_KEY env var  → NVIDIA NIM (OpenAI-compatible, free tier available)
-      3. OPENAI_API_KEY env var → OpenAI
-      4. Heuristic fallback
+      2. LLM_PROVIDER env var preference: nvidia|anthropic|openai
+      3. NVAPI_KEY/NGC_API_KEY env var → NVIDIA NIM (OpenAI-compatible)
+      4. ANTHROPIC_API_KEY env var → Claude
+      5. OPENAI_API_KEY env var → OpenAI
+      6. Heuristic fallback
     """
 
-    def __init__(self, client: Optional[Any] = None, model: Optional[str] = None):
+    def __init__(
+        self,
+        client: Optional[Any] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
+        self.provider = (provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
+
         if client is not None:
             self.client = client
+            self.provider = self.provider or "openai"
             self.model = model or "gpt-4o"
         else:
             nvapi_key = os.getenv("NVAPI_KEY") or os.getenv("NGC_API_KEY")
+            anthropic_key = os.getenv("ANTHROPIC_API_KEY")
             openai_key = os.getenv("OPENAI_API_KEY")
+            provider_order = self._provider_order(self.provider)
 
-            if nvapi_key:
-                self.client = OpenAI(
-                    api_key=nvapi_key,
-                    base_url=_NVIDIA_NIM_BASE_URL,
-                )
-                self.model = model or _NVIDIA_DEFAULT_MODEL
-            elif openai_key:
-                self.client = OpenAI(api_key=openai_key)
-                self.model = model or "gpt-4o"
-            else:
-                self.client = None
-                self.model = model or "none"
+            self.client = None
+            self.model = model or "none"
+            self.provider = "none"
+
+            for candidate in provider_order:
+                if candidate == "nvidia" and nvapi_key:
+                    self.provider = "nvidia"
+                    self.client = OpenAI(
+                        api_key=nvapi_key,
+                        base_url=_NVIDIA_NIM_BASE_URL,
+                    )
+                    self.model = model or os.getenv("NVIDIA_MODEL") or _NVIDIA_DEFAULT_MODEL
+                    break
+
+                if candidate == "anthropic" and anthropic_key:
+                    self.provider = "anthropic"
+                    self.client = Anthropic(api_key=anthropic_key)
+                    self.model = model or os.getenv("ANTHROPIC_MODEL") or _ANTHROPIC_DEFAULT_MODEL
+                    break
+
+                if candidate == "openai" and openai_key:
+                    self.provider = "openai"
+                    self.client = OpenAI(api_key=openai_key)
+                    self.model = model or os.getenv("OPENAI_MODEL") or "gpt-4o"
+                    break
 
     @property
     def is_available(self) -> bool:
         """Checks if the LLM client is configured and available."""
         return self.client is not None
+
+    @staticmethod
+    def _provider_order(provider: str) -> List[str]:
+        default_order = ["nvidia", "anthropic", "openai"]
+        aliases = {
+            "nim": "nvidia",
+            "claude": "anthropic",
+        }
+        provider = aliases.get(provider, provider)
+
+        if provider in default_order:
+            return [provider] + [p for p in default_order if p != provider]
+
+        return default_order
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> ChallengeAnalysis:
         if self.client is None:
@@ -129,11 +170,19 @@ class LLMReasoner:
 
         for attempt in range(1, _MAX_LLM_RETRIES + 1):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                return response.choices[0].message.content or ""
+                if self.provider == "anthropic":
+                    response = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=2000,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    return self._extract_anthropic_text(response)
+                else:
+                    response = self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    return response.choices[0].message.content or ""
             except _RETRYABLE_EXCEPTIONS as exc:
                 if attempt == _MAX_LLM_RETRIES:
                     logger.error(
@@ -156,6 +205,25 @@ class LLMReasoner:
                 return ""
 
         return ""
+
+    @staticmethod
+    def _extract_anthropic_text(response: Any) -> str:
+        """Extract plain text from Anthropic Messages API responses."""
+        blocks = getattr(response, "content", [])
+        parts: List[str] = []
+
+        for block in blocks:
+            if isinstance(block, str):
+                parts.append(block)
+                continue
+            if isinstance(block, dict):
+                text = block.get("text")
+            else:
+                text = getattr(block, "text", None)
+            if text:
+                parts.append(text)
+
+        return "".join(parts)
 
     def generate_script(self, challenge: Dict[str, Any], task_desc: str) -> str:
         """Use LLM to generate a Python script for a specific task."""
