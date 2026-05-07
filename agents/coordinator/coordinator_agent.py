@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from agents.base_agent import BaseAgent, AgentType, AgentStatus
 from core.communication.message import Message, MessageType, MessagePriority
 from core.communication.message_broker import MessageBroker
 from core.decision_engine.llm_reasoner import LLMReasoner, ChallengeAnalysis
+from core.decision_engine.performance_tracker import PerformanceTracker
 from core.utils.result_manager import ResultManager
 from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
@@ -57,6 +59,7 @@ class CoordinatorAgent(BaseAgent):
         self.specialist_agents: Dict[str, BaseAgent] = {}
         self.support_agents: Dict[str, BaseAgent] = {}
         self.active_challenges: Dict[str, Dict[str, Any]] = {}
+        self.performance_tracker = PerformanceTracker()
 
         self.browser_snapshot_tool = browser_snapshot_tool
         self.tony_sql_adapter = tony_sql_adapter
@@ -130,6 +133,12 @@ class CoordinatorAgent(BaseAgent):
                 f"Initial category guess: {initial_analysis['category']}",
                 f"Initial confidence: {initial_analysis['confidence']:.2f}",
             ]
+            hint = self.performance_tracker.get_routing_hint(initial_analysis["category"])
+            if hint:
+                all_steps.append(
+                    f"Performance hint: '{hint[0]}' has a {hint[1]:.0%} historical solve rate "
+                    f"for '{initial_analysis['category']}' challenges."
+                )
             start_iteration = 0
 
         final_result = {
@@ -382,6 +391,7 @@ class CoordinatorAgent(BaseAgent):
             }
 
         agent.assign_task(challenge)
+        t0 = time.monotonic()
         try:
             result = agent.solve_challenge(challenge)
 
@@ -391,6 +401,13 @@ class CoordinatorAgent(BaseAgent):
                 "selected_target": target_agent_id,
                 "execution_type": "agent",
             }
+            self.performance_tracker.record_outcome(
+                agent_id=target_agent_id,
+                category=challenge.get("category", "misc"),
+                challenge_id=challenge.get("id", "unknown"),
+                status=result.get("status", "attempted"),
+                duration_sec=time.monotonic() - t0,
+            )
             return result
         finally:
             agent.complete_task()
@@ -437,19 +454,27 @@ class CoordinatorAgent(BaseAgent):
         """
         Run a tool or adapter selected by the reasoner.
         """
+        t0 = time.monotonic()
         if target_tool == "browser_snapshot":
-            return self._run_browser_snapshot(challenge, routing_steps)
-
-        if target_tool == "tony_htb_sql":
-            return self._run_tony_sql(challenge, routing_steps)
-
-        return {
-            "challenge_id": challenge.get("id"),
-            "agent_id": self.agent_id,
-            "status": "failed",
-            "flag": None,
-            "steps": routing_steps + [f"Unknown tool target '{target_tool}'."],
-        }
+            result = self._run_browser_snapshot(challenge, routing_steps)
+        elif target_tool == "tony_htb_sql":
+            result = self._run_tony_sql(challenge, routing_steps)
+        else:
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "failed",
+                "flag": None,
+                "steps": routing_steps + [f"Unknown tool target '{target_tool}'."],
+            }
+        self.performance_tracker.record_outcome(
+            agent_id=target_tool,
+            category=challenge.get("category", "misc"),
+            challenge_id=challenge.get("id", "unknown"),
+            status=result.get("status", "attempted"),
+            duration_sec=time.monotonic() - t0,
+        )
+        return result
 
     def _run_browser_snapshot(
         self,
