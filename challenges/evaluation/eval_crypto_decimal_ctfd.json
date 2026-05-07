@@ -1,0 +1,12 @@
+{
+  "id": "eval_crypto_decimal_001",
+  "name": "Numbers Game",
+  "description": "Decode the ASCII decimal values: '67 84 70 123 100 101 99 50 97 115 99 125'",
+  "value": 75,
+  "category": "Cryptography",
+  "type": "standard",
+  "flags": ["CTF{dec2asc}"],
+  "files": [],
+  "tags": ["crypto", "encoding", "decimal", "ascii"],
+  "hints": ["Each number is the ASCII code of one character"]
+}

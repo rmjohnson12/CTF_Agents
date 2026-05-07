@@ -1,0 +1,10 @@
+{
+  "pid": 9001,
+  "name": "Hex-A-Dec",
+  "description": "Decode the hex string: '4354467b6865785f6433633064657d'",
+  "value": 50,
+  "category": "Cryptography",
+  "files": [],
+  "tags": ["crypto", "encoding", "hex"],
+  "hints": ["Each pair of hex digits represents one byte"]
+}

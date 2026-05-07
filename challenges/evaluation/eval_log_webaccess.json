@@ -1,0 +1,9 @@
+{
+  "id": "eval_log_web_001",
+  "name": "Who's Hammering the Server?",
+  "category": "log",
+  "description": "Identify which IP sent the most requests to this web server.",
+  "files": ["challenges/evaluation/artifacts/eval_access.log"],
+  "hints": ["Count the requests per source IP address"],
+  "tags": ["log", "web", "access", "traffic"]
+}
