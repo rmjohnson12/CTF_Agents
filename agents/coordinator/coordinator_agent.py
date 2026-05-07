@@ -173,6 +173,7 @@ class CoordinatorAgent(BaseAgent):
                     final_result["status"] = "solved"
                     final_result["flag"] = result.get("flag")
                     all_steps.append(f"Challenge solved by task {task_id}!")
+                    self._cleanup_run_artifacts(history, all_steps)
                     return final_result
             except Exception as e:
                 all_steps.append(f"Task {task_id} failed: {e}")
@@ -296,6 +297,7 @@ class CoordinatorAgent(BaseAgent):
                     agent_challenge = challenge.copy()
                     if prior_facts:
                         agent_challenge["prior_knowledge"] = prior_facts
+                        self._hydrate_challenge_from_facts(agent_challenge, prior_facts)
                         
                     if decision.get("inputs", {}).get("task"):
                         agent_challenge['current_task_description'] = decision["inputs"]["task"]
@@ -335,6 +337,7 @@ class CoordinatorAgent(BaseAgent):
             final_result["steps"] = all_steps
             final_result["history"] = history
             
+            self._cleanup_run_artifacts(history, all_steps)
             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
             self.result_manager.save_run_result(final_result)
             return final_result
@@ -343,6 +346,7 @@ class CoordinatorAgent(BaseAgent):
             self.update_status(AgentStatus.ERROR)
             final_result["status"] = "failed"
             final_result["steps"] = all_steps + [f"Coordinator error: {exc}"]
+            self._cleanup_run_artifacts(history, final_result["steps"])
             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
             self.active_challenges.pop(challenge_id, None)
             return final_result
@@ -606,6 +610,28 @@ class CoordinatorAgent(BaseAgent):
 
     def _all_agent_ids(self) -> set[str]:
         return set(self.specialist_agents) | set(self.support_agents)
+
+    @staticmethod
+    def _hydrate_challenge_from_facts(challenge: Dict[str, Any], facts: List[Dict[str, Any]]) -> None:
+        if challenge.get("url"):
+            return
+        for fact in reversed(facts):
+            if fact.get("key") == "docker_target_url" and fact.get("value"):
+                challenge["url"] = fact["value"]
+                return
+
+    def _cleanup_run_artifacts(self, history: List[Dict[str, Any]], steps: List[str]) -> None:
+        seen_containers = set()
+        for result in history:
+            artifacts = result.get("artifacts") or {}
+            container_id = artifacts.get("docker_container_id")
+            if not container_id or container_id in seen_containers:
+                continue
+            seen_containers.add(container_id)
+            agent = self.support_agents.get(result.get("agent_id"))
+            cleanup = getattr(agent, "cleanup_artifacts", None)
+            if callable(cleanup):
+                cleanup(artifacts, steps)
 
     def _publish_result(self, result: Dict[str, Any]) -> None:
         """Broadcast an agent/tool result so other agents can react."""

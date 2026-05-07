@@ -18,6 +18,8 @@ the solving loop.
 - Web challenges with browser snapshots, HTTP fetching, directory discovery,
   SQL injection tooling, and local source audits for dependency-level issues
   such as vulnerable React/Next.js versions.
+- Local Docker web challenges. Docker execution is opt-in and binds spawned
+  targets to `127.0.0.1` before handing them to the web/recon agents.
 - Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings, and
   recovered artifacts.
 - Networking tasks using `nmap`, `tshark`, and `scapy` for traffic analysis and
@@ -106,6 +108,7 @@ OPENAI_API_KEY=your_openai_key_here
 - **API Resilience**: Built-in exponential backoff handles transient LLM failures, and NVIDIA NIM can rotate across multiple configured keys.
 - **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
 - **Source-Only Web Audits**: Local web source folders are inspected for framework and dependency clues, including vulnerable React/Next.js combinations.
+- **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
 
 ## 🛠 Prerequisites
 
@@ -136,6 +139,16 @@ OPENAI_API_KEY=your_openai_key_here
    ```text
    > "Analyze ~/Downloads/web_reactoops/challenge for vulnerable React/Next.js package versions. There is no spawned server."
    ```
+
+   Docker-based web challenges are disabled by default. To allow a local
+   container launch, opt in for that command:
+   ```bash
+   CTF_AGENTS_ALLOW_DOCKER=1 python3 ask.py "Solve this local Docker web challenge in ~/Downloads/web_reactoops"
+   ```
+
+   The Docker agent builds the local `Dockerfile`, maps the exposed service to
+   `127.0.0.1` on an ephemeral port, publishes that URL, and cleans up the
+   container when the coordinator run finishes.
 
 ## 📂 Project Structure
 - `agents/`: Specialist agents (Web, Crypto, Networking, Coding).

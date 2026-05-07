@@ -100,3 +100,18 @@ def test_heuristic_mapping_normalizes_bare_ip_port_to_http_url():
 
     assert challenge["category"] == "web"
     assert challenge["url"] == "http://154.57.164.65:30433"
+
+
+def test_heuristic_mapping_routes_local_docker_folder_to_web(tmp_path, monkeypatch):
+    challenge_dir = tmp_path / "docker_challenge"
+    challenge_dir.mkdir()
+    (challenge_dir / "Dockerfile").write_text("FROM python:3.12-alpine\nEXPOSE 8000\n")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Solve this Docker challenge in docker_challenge",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "web"
+    assert challenge["files"] == [str(challenge_dir)]

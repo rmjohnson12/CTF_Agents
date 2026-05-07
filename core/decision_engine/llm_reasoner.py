@@ -323,10 +323,15 @@ class LLMReasoner:
     "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "recommended_target": "docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
+
+    If the challenge references a local Docker/Dockerfile/container challenge folder,
+    prefer recommended_target "docker_agent" with recommended_action "run_agent"
+    before web exploitation. The docker_agent will publish a localhost URL for
+    downstream web/recon agents.
 
     Challenge:
     {json.dumps(challenge, indent=2)}
@@ -353,13 +358,16 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
 
     Use "run_agent" for targets ending in "_agent".
     Use "run_tool" only for browser_snapshot or tony_htb_sql.
+    If prior history shows docker_agent produced docker_target_url, run web_agent next.
+    If the challenge references a local Docker/Dockerfile/container folder and no
+    docker_target_url exists yet, run docker_agent first.
 
     Challenge:
     {json.dumps(challenge, indent=2)}
@@ -387,6 +395,26 @@ class LLMReasoner:
 
         indicators: List[str] = []
         files = challenge.get("files", [])
+
+        wants_docker_run = self._kw(
+            text,
+            "docker",
+            "dockerfile",
+            "container",
+            "spawn",
+            "run locally",
+            "launch",
+        )
+        if self._has_docker_context(files) and wants_docker_run:
+            indicators.append("docker_context")
+            return ChallengeAnalysis(
+                category_guess="web",
+                confidence=0.91,
+                reasoning="Detected a local Docker challenge context.",
+                recommended_target="docker_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
 
         # Priority 0: Network Forensics (PCAP)
         if any(f.endswith('.pcap') or f.endswith('.pcapng') for f in files) or self._kw(text, "pcap"):
@@ -571,6 +599,14 @@ class LLMReasoner:
         last_status = last_result.get("status")
         last_artifacts = last_result.get("artifacts", {})
 
+        if last_agent == "docker_agent" and last_artifacts.get("docker_target_url"):
+            return {
+                "next_action": "run_agent",
+                "target": "web_agent",
+                "reasoning": "Docker challenge is running locally. Handing mapped localhost URL to web_agent.",
+                "inputs": {"url": last_artifacts["docker_target_url"]},
+            }
+
         # Pivot: If any step found a login form, let coding_agent try to bypass it
         # Heuristic 1: If we have a .py file and it's a crypto challenge, and we already tried crypto, pivot to coding
         files = challenge.get("files", [])
@@ -671,6 +707,14 @@ class LLMReasoner:
                 "inputs": {},
             }
 
+        if analysis.recommended_target == "docker_agent":
+            return {
+                "next_action": "run_agent",
+                "target": "docker_agent",
+                "reasoning": "Local Docker challenge context detected.",
+                "inputs": {},
+            }
+
         if analysis.recommended_target == "recon_agent":
             return {
                 "next_action": "run_agent",
@@ -705,3 +749,14 @@ class LLMReasoner:
             "reasoning": "No confident next step.",
             "inputs": {},
         }
+
+    @staticmethod
+    def _has_docker_context(files: List[str]) -> bool:
+        for raw_path in files:
+            path = os.path.expanduser(str(raw_path))
+            if os.path.isfile(path) and os.path.basename(path).lower() == "dockerfile":
+                return True
+            if os.path.isdir(path):
+                if os.path.exists(os.path.join(path, "Dockerfile")):
+                    return True
+        return False

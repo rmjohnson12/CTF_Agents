@@ -19,6 +19,7 @@ from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineer
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
+from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from core.decision_engine.llm_reasoner import LLMReasoner
 
@@ -151,7 +152,7 @@ def _heuristic_challenge_from_instruction(
 
     log_terms = ["log", "auth", "ssh", "brute force", "failed password", "authentication"]
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
-    web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web"]
+    web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web", "docker", "dockerfile", "container"]
 
     if any(term in lowered_input for term in log_terms):
         category = "log"
@@ -252,6 +253,7 @@ def main():
     coordinator.register_agent(OSINTAgent(browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent())
     coordinator.register_agent(NetworkingAgent())
+    coordinator.register_agent(DockerChallengeAgent())
     coordinator.register_agent(ReconAgent())
 
     if plan_mode:
