@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Any
 
 import requests
@@ -16,6 +16,7 @@ class HttpFetchResult:
     headers: Dict[str, str]
     body_preview: str
     elapsed_s: float
+    cookies: Dict[str, str] = field(default_factory=dict)
 
 
 class HttpFetchTool:
@@ -36,6 +37,9 @@ class HttpFetchTool:
         headers: Optional[Dict[str, str]] = None,
         data: Optional[Any] = None,
         json_data: Optional[Dict[str, Any]] = None,
+        files: Optional[Dict[str, Any]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+        params: Optional[Dict[str, Any]] = None,
     ) -> HttpFetchResult:
         resp = requests.request(
             method=method.upper(),
@@ -44,11 +48,17 @@ class HttpFetchTool:
             allow_redirects=allow_redirects,
             headers=headers,
             data=data,
-            json=json_data
+            json=json_data,
+            files=files,
+            cookies=cookies,
+            params=params
         )
 
         # Keep headers simple/serializable
         hdrs = {str(k): str(v) for k, v in resp.headers.items()}
+        captured_cookies = {}
+        if hasattr(resp, 'cookies') and hasattr(resp.cookies, 'get_dict'):
+            captured_cookies = resp.cookies.get_dict()
 
         text = resp.text if resp.text is not None else ""
         preview = text[: self.max_preview_chars]
@@ -63,4 +73,5 @@ class HttpFetchTool:
             headers=hdrs,
             body_preview=preview,
             elapsed_s=float(resp.elapsed.total_seconds()),
+            cookies=captured_cookies
         )

@@ -7,7 +7,8 @@ Specialized agent for forensics-based CTF challenges.
 import json
 import logging
 import os
-from typing import Dict, Any, List, Optional
+import re
+from typing import Dict, Any, List, Optional, Tuple
 
 from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
@@ -91,6 +92,10 @@ class ForensicsAgent(BaseAgent):
 
         files = challenge.get("files", [])
         if not files:
+            live_result = self._try_live_ssh_forensics(challenge, steps)
+            if live_result:
+                return live_result
+
             steps.append("No files provided for forensics analysis.")
             return {
                 "challenge_id": challenge.get("id"),
@@ -279,6 +284,177 @@ class ForensicsAgent(BaseAgent):
             "steps": steps,
             "artifacts": all_artifacts
         }
+
+    def _try_live_ssh_forensics(
+        self,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        context = self._extract_ssh_context(challenge)
+        if not context:
+            return None
+
+        host, port, username, password = context
+        description = challenge.get("description", "").lower()
+        if not any(term in description for term in ("ssh", "rootkit", "library", "ld_preload", "linking", "filesystem")):
+            return None
+
+        steps.append(f"Detected live SSH forensics target: {username}@{host}:{port}")
+        try:
+            import paramiko
+        except ImportError:
+            steps.append("Paramiko is not installed; cannot perform live SSH forensics.")
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "failed",
+                "flag": None,
+                "steps": steps,
+            }
+
+        commands = [
+            "id; uname -a; hostname",
+            "printf '[ld.so.preload]\\n'; cat /etc/ld.so.preload 2>&1 || true",
+            "printf '[loader env]\\n'; env | grep -E '^(LD_|PATH=)' || true",
+            "printf '[library paths]\\n'; ls -la /lib /lib64 /usr/lib /usr/local/lib 2>&1 || true",
+            "printf '[ldd ls]\\n'; ldd /bin/ls 2>&1 || true",
+            "printf '[preload library details]\\n'; p=$(cat /etc/ld.so.preload 2>/dev/null | head -1); [ -n \"$p\" ] && { ls -la \"$p\" 2>&1; sha256sum \"$p\" 2>&1; } || true",
+            "printf '[preload strings]\\n'; p=$(cat /etc/ld.so.preload 2>/dev/null | head -1); [ -n \"$p\" ] && strings -a \"$p\" 2>/dev/null | grep -E 'HTB|flag|hide|hook|secret|rootkit|readdir|open|stat|getdents|preload|/[^ ]+' | head -120 || true",
+            "printf '[preload symbols]\\n'; p=$(cat /etc/ld.so.preload 2>/dev/null | head -1); [ -n \"$p\" ] && readelf -Ws \"$p\" 2>/dev/null | grep -E 'readdir|open|stat|access|fopen|__xstat|getdents|hook|hide|flag' | head -120 || true",
+            "printf '[hidden-ish files]\\n'; find / -maxdepth 4 \\( -iname '*preload*' -o -iname '*rootkit*' -o -iname 'flag*' -o -iname '*hook*' \\) 2>/dev/null | head -80",
+            "printf '[flag grep targeted]\\n'; grep -RIsE 'HTB\\{|CTF\\{|flag\\{' /root /home /tmp /var /opt 2>/dev/null | head -40",
+        ]
+        if os.getenv("CTF_AGENTS_ALLOW_SSH_PRELOAD_BYPASS") == "1":
+            commands.append(
+                "backup=/tmp/ctf_agents_ld_so_preload.bak; "
+                "disabled=/tmp/ctf_agents_ld_so_preload.disabled; "
+                "restore_preload(){ if [ -f \"$disabled\" ]; then mv \"$disabled\" /etc/ld.so.preload 2>/dev/null || true; "
+                "elif [ -f \"$backup\" ] && [ ! -f /etc/ld.so.preload ]; then cp \"$backup\" /etc/ld.so.preload 2>/dev/null || true; fi; }; "
+                "trap restore_preload EXIT; "
+                "printf '[preload bypass search]\\n'; "
+                "if [ -f /etc/ld.so.preload ]; then cp /etc/ld.so.preload \"$backup\" && mv /etc/ld.so.preload \"$disabled\"; fi; "
+                "find / -maxdepth 4 \\( -iname '*flag*' -o -iname '*htb*' -o -iname '*secret*' -o -iname '*hidden*' -o -iname '*rootkit*' -o -iname '*hook*' \\) "
+                "2>/dev/null | head -200 | tee /tmp/ctf_agents_suspicious_paths.txt; "
+                "while IFS= read -r candidate; do [ -f \"$candidate\" ] && { printf '\\n[cat %s]\\n' \"$candidate\"; head -c 4096 \"$candidate\"; printf '\\n'; }; done "
+                "</tmp/ctf_agents_suspicious_paths.txt; "
+                "printf '[flag grep after preload disabled]\\n'; "
+                "grep -RIsE 'HTB\\{|CTF\\{|flag\\{' /root /home /tmp /var /opt /srv /app 2>/dev/null | head -80; "
+                "restore_preload"
+            )
+        elif any(term in description for term in ("rootkit", "preload", "library", "linking")):
+            steps.append(
+                "Live SSH preload bypass is disabled. Set CTF_AGENTS_ALLOW_SSH_PRELOAD_BYPASS=1 "
+                "to temporarily disable /etc/ld.so.preload with backup/restore during authorized CTF analysis."
+            )
+
+        artifacts: Dict[str, Any] = {
+            "ssh_target": f"{host}:{port}",
+            "ssh_username": username,
+            "live_forensics": [],
+        }
+        combined_output = []
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                host,
+                port=port,
+                username=username,
+                password=password,
+                timeout=10,
+                banner_timeout=10,
+                auth_timeout=10,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+
+            for command in commands:
+                steps.append(f"  [SSH] {command}")
+                stdin, stdout, stderr = client.exec_command(command, timeout=20)
+                out = stdout.read().decode("utf-8", errors="replace")
+                err = stderr.read().decode("utf-8", errors="replace")
+                text = (out + "\n" + err).strip()
+                combined_output.append(text)
+                artifacts["live_forensics"].append({
+                    "command": command,
+                    "stdout_preview": out[:4000],
+                    "stderr_preview": err[:1000],
+                })
+
+                found = find_first_flag(text)
+                if found:
+                    steps.append(f"  SUCCESS: Flag found during live SSH forensics: {found}")
+                    return {
+                        "challenge_id": challenge.get("id"),
+                        "agent_id": self.agent_id,
+                        "status": "solved",
+                        "flag": found,
+                        "steps": steps,
+                        "artifacts": artifacts,
+                    }
+
+            suspicious = self._summarize_rootkit_indicators("\n".join(combined_output))
+            if suspicious:
+                steps.extend(f"  Indicator: {item}" for item in suspicious)
+
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "attempted",
+                "flag": None,
+                "steps": steps,
+                "artifacts": artifacts,
+            }
+        except Exception as exc:
+            logger.debug("Live SSH forensics failed: %s", exc)
+            steps.append(f"Live SSH forensics failed: {exc}")
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "failed",
+                "flag": None,
+                "steps": steps,
+                "artifacts": artifacts,
+            }
+        finally:
+            client.close()
+
+    @staticmethod
+    def _extract_ssh_context(challenge: Dict[str, Any]) -> Optional[Tuple[str, int, str, str]]:
+        text = " ".join([
+            str(challenge.get("description", "")),
+            str(challenge.get("url", "")),
+            str(challenge.get("connection_info", "")),
+        ])
+
+        creds = re.search(
+            r"(?:creds?|credentials?)\s*:\s*([A-Za-z0-9_.-]+)\s*:\s*([^\s,;]+)",
+            text,
+            re.IGNORECASE,
+        )
+        target = re.search(
+            r"\b((?:\d{1,3}\.){3}\d{1,3}|localhost|127\.0\.0\.1)\s*:\s*(\d{2,5})\b",
+            text,
+        )
+        if not creds or not target:
+            return None
+
+        return target.group(1), int(target.group(2)), creds.group(1), creds.group(2)
+
+    @staticmethod
+    def _summarize_rootkit_indicators(output: str) -> List[str]:
+        indicators = []
+        lowered = output.lower()
+        if "/etc/ld.so.preload" in lowered:
+            indicators.append("Loader preload configuration referenced.")
+        if "cannot be preloaded" in lowered or "wrong elf class" in lowered:
+            indicators.append("Dynamic loader reported preload/library errors.")
+        if "rootkit" in lowered or "hook" in lowered:
+            indicators.append("Rootkit/hook-related filenames or text appeared in output.")
+        if "no such file" in lowered and ("ld.so.preload" in lowered or "/lib" in lowered):
+            indicators.append("Filesystem/library path inconsistencies observed.")
+        return indicators
 
     def _analyze_raw_protocol(self, data: str) -> Optional[str]:
         """

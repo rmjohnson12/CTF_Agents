@@ -17,11 +17,14 @@ the solving loop.
   John the Ripper, and Hashcat.
 - Web challenges with browser snapshots, HTTP fetching, directory discovery,
   SQL injection tooling, and local source audits for dependency-level issues
-  such as vulnerable React/Next.js versions.
+  such as vulnerable React/Next.js versions. The web agent also includes
+  targeted playbooks for form exploration, archive-upload issues, JSON/XML API
+  fuzzing, mass-assignment checks, and XXE-style CTF patterns.
 - Local Docker web challenges. Docker execution is opt-in and binds spawned
   targets to `127.0.0.1` before handing them to the web/recon agents.
-- Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings, and
-  recovered artifacts.
+- Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings,
+  recovered artifacts, and live SSH triage for userland-rootkit/library-loader
+  anomalies in authorized lab targets.
 - Networking tasks using `nmap`, `tshark`, and `scapy` for traffic analysis and
   port scanning.
 - OSINT and log-analysis tasks for metadata, domains, authentication events, and
@@ -108,7 +111,13 @@ OPENAI_API_KEY=your_openai_key_here
 - **API Resilience**: Built-in exponential backoff handles transient LLM failures, and NVIDIA NIM can rotate across multiple configured keys.
 - **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
 - **Source-Only Web Audits**: Local web source folders are inspected for framework and dependency clues, including vulnerable React/Next.js combinations.
+- **Web Exploitation Playbooks**: Browser-discovered forms can trigger archive
+  upload, JSON/XML API, mass-assignment, XXE, JWT, and interesting-link
+  follow-up checks.
 - **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
+- **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
+  forensics agent can inspect loader/preload state and shared-library hook
+  indicators. Preload bypass searches require an explicit env opt-in.
 
 ## 🛠 Prerequisites
 
@@ -154,6 +163,18 @@ OPENAI_API_KEY=your_openai_key_here
    authorized spawned CTF target, explicitly opt in:
    ```bash
    CTF_AGENTS_ALLOW_REMOTE_R2S=1 python3 ask.py "Solve ReactOOPS at http://TARGET:PORT"
+   ```
+
+   Live SSH forensics prompts can include credentials and a target:
+   ```bash
+   python3 ask.py "Investigate this SSH forensics target for loader anomalies. Creds: root:hackthebox IP and port are TARGET:PORT"
+   ```
+
+   Read-only loader/rootkit triage runs by default. For authorized CTF/lab
+   targets where temporarily disabling `/etc/ld.so.preload` is acceptable, opt
+   in to the backup/restore preload-bypass search:
+   ```bash
+   CTF_AGENTS_ALLOW_SSH_PRELOAD_BYPASS=1 python3 ask.py "Investigate this SSH forensics target for a userland rootkit. Creds: root:hackthebox IP and port are TARGET:PORT"
    ```
 
 ## 📂 Project Structure
