@@ -14,7 +14,14 @@ class PwntoolsWrapper(BaseTool):
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        super().__init__("pwntools", "Binary exploitation toolkit", config)
+        super().__init__()
+
+    @property
+    def tool_name(self) -> str:
+        return "checksec"
+
+    def run(self, binary_path: str) -> Dict[str, Any]:
+        return self.run_checksec(binary_path)
 
     def run_checksec(self, binary_path: str) -> Dict[str, Any]:
         """Run checksec on a binary to identify mitigations."""

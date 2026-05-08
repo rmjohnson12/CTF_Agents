@@ -257,6 +257,22 @@ def test_provider_preference_falls_back_to_nvidia_when_anthropic_missing(monkeyp
     assert reasoner.model == _NVIDIA_DEFAULT_MODEL
 
 
+def test_provider_none_disables_llm_even_when_keys_exist(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    monkeypatch.setenv("NVAPI_KEYS", "nvapi-first,nvapi-second")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-openai")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI, \
+            patch("core.decision_engine.llm_reasoner.Anthropic") as MockAnthropic:
+        reasoner = LLMReasoner()
+
+    MockOpenAI.assert_not_called()
+    MockAnthropic.assert_not_called()
+    assert reasoner.client is None
+    assert reasoner.provider == "none"
+
+
 def test_nvidia_key_rotation_on_429(monkeypatch):
     monkeypatch.setenv("NVAPI_KEYS", "nvapi-first,nvapi-second")
 

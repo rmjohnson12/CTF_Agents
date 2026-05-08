@@ -158,8 +158,14 @@ class LLMReasoner:
         aliases = {
             "nim": "nvidia",
             "claude": "anthropic",
+            "off": "none",
+            "disabled": "none",
+            "heuristic": "none",
         }
         provider = aliases.get(provider, provider)
+
+        if provider == "none":
+            return []
 
         if provider in default_order:
             return [provider] + [p for p in default_order if p != provider]
@@ -351,11 +357,13 @@ class LLMReasoner:
     "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
 
+    Use "pwn_agent" for binary exploitation challenges (buffer overflow, ROP, shellcode,
+    heap exploits, format string bugs, ELF binaries with exploitation intent).
     If the challenge references a local Docker/Dockerfile/container challenge folder,
     prefer recommended_target "docker_agent" with recommended_action "run_agent"
     before web exploitation. The docker_agent will publish a localhost URL for
@@ -386,7 +394,7 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
@@ -492,8 +500,30 @@ class LLMReasoner:
                 detected_indicators=indicators,
             )
 
-        # Priority 2: Reverse Engineering (Source/Binary analysis)
-        if any(f.endswith('.py') or f.endswith('.exe') or f.endswith('.bin') or f.endswith('.elf') for f in files) or \
+        # Priority 2a: PWN / Binary exploitation
+        # Must fire before the generic reverse block so explicit pwn challenges
+        # are not mis-routed to the reverse agent.
+        has_elf = any(f.endswith('.elf') for f in files) or any(
+            self._is_elf_file(f) for f in files
+        )
+        if (
+            challenge.get("category") in ("pwn", "binary")
+            or self._kw(text, "pwn", "overflow", "rop", "ret2libc", "shellcode")
+            or (has_elf and self._kw(text, "exploit", "pwn", "overflow", "binary", "attack"))
+        ):
+            indicators.append("pwn_terms")
+            return ChallengeAnalysis(
+                category_guess="pwn",
+                confidence=0.94,
+                reasoning="Detected binary exploitation indicators.",
+                recommended_target="pwn_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
+        # Priority 2b: Reverse Engineering (Source/Binary analysis)
+        if has_elf or \
+           any(f.endswith('.py') or f.endswith('.exe') or f.endswith('.bin') for f in files) or \
            self._kw(text, "reverse", "source code", "analyze program", "authenticate the program"):
             indicators.append("reverse_terms")
             return ChallengeAnalysis(
@@ -698,6 +728,14 @@ class LLMReasoner:
                     "inputs": {},
                 }
 
+        if analysis.recommended_target == "pwn_agent":
+            return {
+                "next_action": "run_agent",
+                "target": "pwn_agent",
+                "reasoning": "Binary exploitation challenge detected.",
+                "inputs": {},
+            }
+
         if analysis.recommended_target == "crypto_agent":
             return {
                 "next_action": "run_agent",
@@ -796,6 +834,15 @@ class LLMReasoner:
             "reasoning": "No confident next step.",
             "inputs": {},
         }
+
+    @staticmethod
+    def _is_elf_file(path: str) -> bool:
+        """Return True if *path* exists and has ELF magic bytes."""
+        try:
+            from tools.common.elf_utils import is_elf_binary
+            return is_elf_binary(path)
+        except Exception:
+            return False
 
     @staticmethod
     def _has_docker_context(files: List[str]) -> bool:

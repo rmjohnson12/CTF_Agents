@@ -196,6 +196,8 @@ cython_debug/
 .pypirc
 
 .DS_Store
+*.swp
+*.swo
 
 # Ephemeral run artifacts
 results/browser_snapshot_*/

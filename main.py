@@ -17,6 +17,7 @@ from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
 from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
+from agents.specialists.pwn.pwn_agent import PwnAgent
 
 
 def _print_plan_main(
@@ -107,6 +108,7 @@ def main(argv: List[str]) -> int:
     coordinator.register_agent(NetworkingAgent(agent_id="networking_agent"))
     coordinator.register_agent(DockerChallengeAgent(agent_id="docker_agent"))
     coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
+    coordinator.register_agent(PwnAgent(agent_id="pwn_agent"))
 
     if args.plan:
         raw_analysis = coordinator.reasoner.analyze_challenge(challenge)

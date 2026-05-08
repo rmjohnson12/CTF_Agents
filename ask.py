@@ -21,6 +21,8 @@ from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
 from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
+from agents.specialists.pwn.pwn_agent import PwnAgent
+from tools.common.elf_utils import is_elf_binary
 
 def _unwrap_ask_command(user_input: str) -> str:
     """Accept either a raw instruction or a pasted `python ask.py "..."` command."""
@@ -150,7 +152,11 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
                 expanded.append(str(p.resolve()))
                 continue
             for child in sorted(p.rglob("*")):
-                if child.is_file() and child.suffix.lower() in useful_exts:
+                if not child.is_file():
+                    continue
+                if child.suffix.lower() in useful_exts:
+                    expanded.append(str(child.resolve()))
+                elif not child.suffix and is_elf_binary(str(child)):
                     expanded.append(str(child.resolve()))
         else:
             expanded.append(str(p.resolve()))
@@ -238,7 +244,19 @@ def _heuristic_challenge_from_instruction(
         or any(term in lowered_input for term in strong_crypto_terms)
     ):
         category = "crypto"
-    elif any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files) or "authenticate" in lowered_input:
+    elif (
+        any(term in lowered_input for term in ["pwn", "overflow", "rop", "ret2libc", "shellcode", "buffer overflow"])
+        or (
+            any(f.lower().endswith('.elf') or (not Path(f).suffix and is_elf_binary(f)) for f in challenge_files)
+            and any(term in lowered_input for term in ["exploit", "pwn", "overflow", "binary", "attack"])
+        )
+    ):
+        category = "pwn"
+    elif (
+        any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files)
+        or any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
+        or "authenticate" in lowered_input
+    ):
         category = "reverse"
     elif any(term in lowered_input for term in coding_terms):
         category = "misc"
@@ -323,6 +341,7 @@ def main():
     coordinator.register_agent(NetworkingAgent())
     coordinator.register_agent(DockerChallengeAgent())
     coordinator.register_agent(ReconAgent())
+    coordinator.register_agent(PwnAgent())
 
     if plan_mode:
         if not user_input:

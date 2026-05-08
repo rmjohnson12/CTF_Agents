@@ -12,6 +12,7 @@ def disable_live_llm_keys(monkeypatch):
     """Keep tests deterministic even when developer shells have API keys set."""
     for key in (
         "LLM_PROVIDER",
+        "NVAPI_KEYS",
         "NVAPI_KEY",
         "NGC_API_KEY",
         "NVIDIA_MODEL",
