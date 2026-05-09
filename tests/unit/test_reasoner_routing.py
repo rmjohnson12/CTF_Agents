@@ -133,6 +133,32 @@ def test_reasoner_routes_auth_text_file_to_log_agent():
     assert analysis.recommended_action == "run_agent"
 
 
+def test_reasoner_routes_live_ssh_rootkit_to_forensics_before_log():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "live_rootkit_001",
+        "name": "Suspicious Threat",
+        "category": "forensics",
+        "description": (
+            "Our SSH server is showing strange library linking errors and "
+            "critical folders seem to be missing. Investigate hidden "
+            "filesystem manipulations that could indicate a userland rootkit. "
+            "Creds: root:hackthebox IP and port are 127.0.0.1:31361"
+        ),
+        "hints": [],
+        "tags": [],
+        "files": [],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "forensics"
+    assert analysis.recommended_target == "forensics_agent"
+    assert analysis.recommended_action == "run_agent"
+
+
 def test_reasoner_routes_prime_sum_task_to_coding_agent():
     reasoner = LLMReasoner(client=None)
 
