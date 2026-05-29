@@ -205,6 +205,7 @@ results/**
 !results/
 !results/README.md
 logs/checkpoints/
+logs/knowledge.db
 logs/performance.db
 
 # Cursor
