@@ -178,3 +178,69 @@ def test_reasoner_routes_prime_sum_task_to_coding_agent():
     assert analysis.category_guess == "misc"
     assert analysis.recommended_target == "coding_agent"
     assert analysis.recommended_action == "run_agent"
+
+
+def test_reasoner_routes_web_prime_product_runner_to_web_agent():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "primed_for_action",
+        "name": "Primed for Action",
+        "category": "web",
+        "description": (
+            "A list of numbers contains garbage, but two are prime. "
+            "The key is obtained by multiplying the two prime numbers."
+        ),
+        "url": "http://154.57.164.77:30498",
+        "hints": [],
+        "tags": [],
+        "files": [],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "web"
+    assert analysis.recommended_target == "web_agent"
+    assert analysis.recommended_action == "run_agent"
+    assert "coding_runner_prime_product" in analysis.detected_indicators
+
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+    assert next_action["next_action"] == "run_agent"
+    assert next_action["target"] == "web_agent"
+
+
+def test_reasoner_routes_hardware_logic_to_hardware_agent():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "low_logic",
+        "name": "Low Logic",
+        "category": "hardware",
+        "description": "Understand how this simple chip works and give me the output.",
+        "hints": [],
+        "tags": [],
+        "files": ["chip.jpg", "input.csv"],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert analysis.category_guess == "hardware"
+    assert analysis.recommended_target == "hardware_agent"
+    assert next_action["target"] == "hardware_agent"
+
+
+def test_reasoner_decision_guard_keeps_hardware_from_reverse_agent():
+    reasoner = LLMReasoner(client=None)
+    challenge = {
+        "id": "low_logic",
+        "category": "reverse",
+        "description": "Understand this simple chip and give me the output.",
+        "files": ["chip.jpg", "input.csv"],
+    }
+    analysis = reasoner.analyze_challenge(challenge)
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert next_action["target"] == "hardware_agent"

@@ -15,6 +15,7 @@ from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineer
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
+from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
 from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
@@ -106,6 +107,7 @@ def main(argv: List[str]) -> int:
     coordinator.register_agent(OSINTAgent(agent_id="osint_agent", browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent(agent_id="log_agent"))
     coordinator.register_agent(NetworkingAgent(agent_id="networking_agent"))
+    coordinator.register_agent(HardwareLogicAgent(agent_id="hardware_agent"))
     coordinator.register_agent(DockerChallengeAgent(agent_id="docker_agent"))
     coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
     coordinator.register_agent(PwnAgent(agent_id="pwn_agent"))

@@ -19,6 +19,7 @@ from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineer
 from agents.specialists.osint.osint_agent import OSINTAgent
 from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
 from agents.specialists.networking.networking_agent import NetworkingAgent
+from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
 from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
@@ -88,6 +89,19 @@ def _merge_heuristic_context(
     if not challenge.get("files") and heuristic.get("files"):
         challenge["files"] = heuristic["files"]
 
+    if (
+        heuristic.get("url")
+        and heuristic.get("category") == "web"
+        and challenge.get("category") in {None, "", "misc", "unknown"}
+    ):
+        challenge["category"] = "web"
+
+    if (
+        heuristic.get("category") == "hardware"
+        and challenge.get("category") in {None, "", "misc", "unknown", "reverse"}
+    ):
+        challenge["category"] = "hardware"
+
     description = challenge.get("description") or ""
     heuristic_description = heuristic.get("description") or ""
     if heuristic.get("url") and heuristic.get("url") not in description:
@@ -140,6 +154,7 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
     useful_exts = {
         ".enc", ".bin", ".dat", ".txt", ".json", ".py", ".c", ".cpp", ".java",
         ".go", ".sh", ".pcap", ".pcapng", ".pdf", ".zip", ".log",
+        ".csv", ".jpg", ".jpeg", ".png", ".v", ".sv", ".vhdl", ".vhd",
     }
 
     for path in paths:
@@ -224,8 +239,17 @@ def _heuristic_challenge_from_instruction(
     log_terms = ["log", "auth", "ssh", "brute force", "failed password", "authentication"]
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
     web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web", "docker", "dockerfile", "container"]
+    hardware_terms = ["hardware", "chip", "logic", "circuit", "gate", "verilog", "vhdl", "schematic"]
 
-    if any(term in lowered_input for term in log_terms):
+    if (
+        any(term in lowered_input for term in hardware_terms)
+        or (
+            any(f.lower().endswith((".csv", ".v", ".sv", ".vhdl", ".vhd")) for f in challenge_files)
+            and any(f.lower().endswith((".jpg", ".jpeg", ".png")) for f in challenge_files)
+        )
+    ):
+        category = "hardware"
+    elif any(term in lowered_input for term in log_terms):
         category = "log"
     elif (
         any(f.lower().endswith(('.pdf', '.pcap', '.pcapng')) for f in challenge_files)
@@ -340,6 +364,7 @@ def main():
     coordinator.register_agent(OSINTAgent(browser_tool=browser_tool))
     coordinator.register_agent(LogAnalysisAgent())
     coordinator.register_agent(NetworkingAgent())
+    coordinator.register_agent(HardwareLogicAgent())
     coordinator.register_agent(DockerChallengeAgent())
     coordinator.register_agent(ReconAgent())
     coordinator.register_agent(PwnAgent())
@@ -401,7 +426,7 @@ Example shape:
 {{
   "id": "transient_task",
   "name": "Manual Task",
-  "category": "forensics|web|crypto|misc",
+  "category": "forensics|web|crypto|hardware|misc",
   "description": "...",
   "files": ["path/to/file"],
   "url": "..."

@@ -238,6 +238,45 @@ app.post('/', async (c) => {
     assert result["flag"] != "HTB{FAKE_FLAG_FOR_TESTING}"
 
 
+def test_web_agent_solves_prime_product_code_runner():
+    class PrimeRunnerHttpTool:
+        def __init__(self):
+            self.calls = []
+
+        def fetch(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            if url.endswith("/run") and kwargs.get("method") == "POST":
+                return HttpFetchResult(
+                    url,
+                    url,
+                    "POST",
+                    200,
+                    {},
+                    '{"flag":"HTB{prime_runner}","input":"4 7 9 11","result":"77\\n","stderr":""}',
+                    0.1,
+                )
+            return HttpFetchResult(url, url, "GET", 404, {}, "", 0.1)
+
+    http = PrimeRunnerHttpTool()
+    agent = WebExploitationAgent(
+        browser_tool=MockBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "primed_for_action",
+        "category": "web",
+        "description": "A list of numbers contains two primes. The key is the product of the two prime numbers.",
+        "url": "http://127.0.0.1:30498",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{prime_runner}"
+    assert "coding_runner_prime_product" in result["vulnerabilities_found"]
+    assert http.calls[0][0] == "http://127.0.0.1:30498/run"
+
+
 def test_react2shell_tool_refuses_non_local_targets_by_default(monkeypatch):
     monkeypatch.delenv("CTF_AGENTS_ALLOW_REMOTE_R2S", raising=False)
     with pytest.raises(PermissionError):

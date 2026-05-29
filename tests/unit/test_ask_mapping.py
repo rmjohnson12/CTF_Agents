@@ -214,3 +214,60 @@ def test_merge_heuristic_context_preserves_llm_omitted_ip_and_files():
     assert merged["url"] == "http://127.0.0.1:1337"
     assert merged["files"] == ["/tmp/baby_time_capsule/server.py"]
     assert "Original instruction" in merged["description"]
+
+
+def test_merge_heuristic_context_preserves_web_category_for_ip_port():
+    from ask import _merge_heuristic_context
+
+    challenge = {
+        "id": "llm_task",
+        "category": "unknown",
+        "description": "Solve this coding challenge.",
+    }
+    heuristic = {
+        "category": "web",
+        "description": "Solve this coding challenge at 154.57.164.77:30498.",
+        "url": "http://154.57.164.77:30498",
+    }
+
+    merged = _merge_heuristic_context(challenge, heuristic)
+
+    assert merged["category"] == "web"
+    assert merged["url"] == "http://154.57.164.77:30498"
+
+
+def test_heuristic_mapping_routes_chip_csv_folder_to_hardware(tmp_path, monkeypatch):
+    challenge_dir = tmp_path / "hw_lowlogic"
+    challenge_dir.mkdir()
+    chip = challenge_dir / "chip.jpg"
+    table = challenge_dir / "input.csv"
+    chip.write_bytes(b"image")
+    table.write_text("in0,in1,in2,in3\n1,1,0,0\n")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "I have this simple chip. Files are in hw_lowlogic",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "hardware"
+    assert challenge["files"] == sorted([str(chip), str(table)])
+
+
+def test_merge_heuristic_context_preserves_hardware_category():
+    from ask import _merge_heuristic_context
+
+    challenge = {
+        "id": "llm_task",
+        "category": "reverse",
+        "description": "Analyze this file.",
+    }
+    heuristic = {
+        "category": "hardware",
+        "description": "Analyze this simple chip.",
+        "files": ["/tmp/chip.jpg", "/tmp/input.csv"],
+    }
+
+    merged = _merge_heuristic_context(challenge, heuristic)
+
+    assert merged["category"] == "hardware"

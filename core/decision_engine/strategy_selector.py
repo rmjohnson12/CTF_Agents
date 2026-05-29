@@ -155,7 +155,7 @@ class StrategySelector:
         _AGENT_TARGETS = {
             "pwn_agent", "crypto_agent", "coding_agent", "forensics_agent",
             "reverse_agent", "osint_agent", "log_agent", "web_agent",
-            "docker_agent", "recon_agent", "networking_agent",
+            "docker_agent", "recon_agent", "networking_agent", "hardware_agent",
         }
         target = analysis.recommended_target
 

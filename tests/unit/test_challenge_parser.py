@@ -116,6 +116,17 @@ def test_parse_dict_normalizes_category_to_lowercase(parser):
     assert result["category"] == "crypto"
 
 
+def test_parse_dict_accepts_hardware_category(parser):
+    result = parser.parse_dict({
+        "id": "hw",
+        "name": "Low Logic",
+        "description": "Analyze this chip.",
+        "category": "hardware",
+    })
+
+    assert result["category"] == "hardware"
+
+
 def test_parse_dict_normalizes_id_to_string(parser):
     result = parser.parse_dict({
         "id": 42,

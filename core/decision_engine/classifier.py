@@ -70,6 +70,26 @@ class ChallengeClassifier:
                 detected_indicators=indicators,
             )
 
+        # Hardware / logic circuits
+        has_logic_table = any(f.endswith(".csv") for f in files)
+        has_circuit_image = any(f.endswith((".jpg", ".jpeg", ".png")) for f in files)
+        has_hdl = any(f.endswith((".v", ".sv", ".vhdl", ".vhd")) for f in files)
+        if (
+            challenge.get("category") == "hardware"
+            or has_hdl
+            or (has_logic_table and has_circuit_image)
+            or self._kw(text, "hardware", "chip", "logic", "circuit", "gate", "verilog", "vhdl")
+        ):
+            indicators.append("hardware_logic")
+            return ChallengeAnalysis(
+                category_guess="hardware",
+                confidence=0.91,
+                reasoning="Detected hardware logic or circuit-analysis challenge.",
+                recommended_target="hardware_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
         # Binary artifacts with forensics intent
         if (
             any(f.endswith((".bin", ".dat")) for f in files)
@@ -235,6 +255,21 @@ class ChallengeClassifier:
             "cookie", "endpoint", "jwt", "token", "session",
         ):
             indicators.append("web_terms")
+
+            if (
+                self._kw(text, "prime")
+                and self._kw(text, "product", "multiply", "multiplying")
+                and self._kw(text, "number", "numbers", "list", "key")
+            ):
+                indicators.append("coding_runner_prime_product")
+                return ChallengeAnalysis(
+                    category_guess="web",
+                    confidence=0.91,
+                    reasoning="Detected HTB-style web code-runner prime-product challenge.",
+                    recommended_target="web_agent",
+                    recommended_action="run_agent",
+                    detected_indicators=indicators,
+                )
 
             if self._kw(text, "recon", "enumerate", "enumeration", "scan", "fingerprint", "discover"):
                 indicators.append("recon_terms")

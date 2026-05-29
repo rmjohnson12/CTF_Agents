@@ -198,6 +198,22 @@ class LLMReasoner:
         analysis: ChallengeAnalysis,
         history: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        if self._is_web_prime_product_runner(challenge):
+            return {
+                "next_action": "run_agent",
+                "target": "web_agent",
+                "reasoning": "Detected a web-hosted prime-product code-runner challenge.",
+                "inputs": {},
+            }
+
+        if self._is_hardware_logic_challenge(challenge):
+            return {
+                "next_action": "run_agent",
+                "target": "hardware_agent",
+                "reasoning": "Detected a hardware logic challenge with schematic/table inputs.",
+                "inputs": {},
+            }
+
         # MASTER PIVOT: If we have a .py file and it's a crypto challenge, and we already tried crypto, pivot to coding
         files = challenge.get("files", [])
         has_script = any(f.endswith(".py") for f in files)
@@ -423,3 +439,36 @@ class LLMReasoner:
         history: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         return self._strategy_selector.select_next(challenge, analysis, history)
+
+    @staticmethod
+    def _is_web_prime_product_runner(challenge: Dict[str, Any]) -> bool:
+        text = " ".join([
+            str(challenge.get("name", "")),
+            str(challenge.get("description", "")),
+            " ".join(challenge.get("hints", [])),
+            " ".join(challenge.get("tags", [])),
+        ]).lower()
+        has_url = bool(challenge.get("url") or challenge.get("target", {}).get("url"))
+        return (
+            has_url
+            and "prime" in text
+            and any(word in text for word in ["product", "multiply", "multiplying"])
+            and any(word in text for word in ["number", "numbers", "list", "key"])
+        )
+
+    @staticmethod
+    def _is_hardware_logic_challenge(challenge: Dict[str, Any]) -> bool:
+        text = " ".join([
+            str(challenge.get("name", "")),
+            str(challenge.get("description", "")),
+            " ".join(challenge.get("hints", [])),
+            " ".join(challenge.get("tags", [])),
+        ]).lower()
+        files = [str(f).lower() for f in challenge.get("files", [])]
+        has_csv = any(f.endswith(".csv") for f in files)
+        has_image = any(f.endswith((".jpg", ".jpeg", ".png")) for f in files)
+        return (
+            challenge.get("category") == "hardware"
+            or (has_csv and has_image)
+            or any(word in text for word in ["hardware", "chip", "logic", "circuit", "gate"])
+        )

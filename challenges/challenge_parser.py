@@ -20,7 +20,7 @@ class ParseError(ValueError):
 
 KNOWN_CATEGORIES = frozenset({
     "crypto", "web", "reverse", "pwn", "forensics",
-    "osint", "log", "misc", "networking", "unknown",
+    "osint", "log", "misc", "networking", "hardware", "unknown",
 })
 
 _REQUIRED_FIELDS = ("id", "name", "description")
@@ -50,6 +50,9 @@ _CATEGORY_MAP: Dict[str, str] = {
     "log": "log",
     "networking": "networking",
     "network": "networking",
+    "hardware": "hardware",
+    "hw": "hardware",
+    "logic": "hardware",
     "unknown": "unknown",
 }
 
@@ -223,6 +226,7 @@ class ChallengeParser:
             (r"\bosint\b|whois|social.?media|geolocation",            "osint"),
             (r"\blog\b|auth.?log|access.?log|brute.?force",           "log"),
             (r"\bnetwork\b|nmap|port.?scan|packet",                    "networking"),
+            (r"\bhardware\b|\bchip\b|\blogic\b|circuit|verilog|vhdl", "hardware"),
         ]
         for pattern, category in patterns:
             if re.search(pattern, text):
