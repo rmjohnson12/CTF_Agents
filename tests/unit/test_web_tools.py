@@ -188,6 +188,56 @@ def test_web_agent_uses_react2shell_tool_for_local_vulnerable_source(tmp_path):
     assert "react2shell_attempt" in result["artifacts"]
 
 
+def test_web_agent_uses_json_length_coercion_palindrome_bypass(tmp_path):
+    challenge_dir = tmp_path / "challenge"
+    app_dir = challenge_dir / "app"
+    app_dir.mkdir(parents=True)
+    (challenge_dir / "flag.txt").write_text("HTB{FAKE_FLAG_FOR_TESTING}")
+    (app_dir / "index.mjs").write_text("""
+const IsPalinDrome = (string) => {
+  if (string.length < 1000) return 'Tootus Shortus';
+  for (const i of Array(string.length).keys()) {
+    if (string[i] !== string[string.length - i - 1]) return 'Nope';
+  }
+}
+app.post('/', async (c) => {
+  const {palindrome} = await c.req.json();
+});
+""")
+
+    class PalindromeHttpTool:
+        def __init__(self):
+            self.calls = []
+
+        def fetch(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            if kwargs.get("method") == "POST" and kwargs.get("json_data") == {
+                "palindrome": {"0": "x", "999": "x", "length": "1000"}
+            }:
+                return HttpFetchResult(url, url, "POST", 200, {}, "Hii Harry!!! HTB{real_remote_flag}", 0.1)
+            return HttpFetchResult(url, url, "GET", 404, {}, "", 0.1)
+
+    http = PalindromeHttpTool()
+    agent = WebExploitationAgent(
+        browser_tool=MockBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "magical_palindrome",
+        "category": "web",
+        "description": "JSON palindrome challenge.",
+        "files": [str(challenge_dir)],
+        "url": "http://127.0.0.1:31049",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{real_remote_flag}"
+    assert "json_length_coercion_palindrome" in result["vulnerabilities_found"]
+    assert result["flag"] != "HTB{FAKE_FLAG_FOR_TESTING}"
+
+
 def test_react2shell_tool_refuses_non_local_targets_by_default(monkeypatch):
     monkeypatch.delenv("CTF_AGENTS_ALLOW_REMOTE_R2S", raising=False)
     with pytest.raises(PermissionError):
