@@ -19,9 +19,13 @@ the solving loop.
   SQL injection tooling, and local source audits for dependency-level issues
   such as vulnerable React/Next.js versions. The web agent also includes
   targeted playbooks for form exploration, archive-upload issues, JSON/XML API
-  fuzzing, mass-assignment checks, and XXE-style CTF patterns.
+  fuzzing, mass-assignment checks, source-guided JSON coercion, HTB-style
+  code-runner endpoints, and XXE-style CTF patterns.
 - Local Docker web challenges. Docker execution is opt-in and binds spawned
   targets to `127.0.0.1` before handing them to the web/recon agents.
+- Hardware logic challenges involving schematic images, gate/transistor
+  descriptions, and CSV input tables that need Boolean derivation and output
+  bitstream decoding.
 - Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings,
   recovered artifacts, and live SSH triage for userland-rootkit/library-loader
   anomalies in authorized lab targets.
@@ -111,9 +115,18 @@ OPENAI_API_KEY=your_openai_key_here
 - **API Resilience**: Built-in exponential backoff handles transient LLM failures, and NVIDIA NIM can rotate across multiple configured keys.
 - **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
 - **Source-Only Web Audits**: Local web source folders are inspected for framework and dependency clues, including vulnerable React/Next.js combinations.
+- **Source-Guided Web Exploits**: Local source can drive live payloads for
+  JSON length/type coercion and palindrome-style validation bugs while ignoring
+  fake local flags when a spawned target is available.
 - **Web Exploitation Playbooks**: Browser-discovered forms can trigger archive
   upload, JSON/XML API, mass-assignment, XXE, JWT, and interesting-link
   follow-up checks.
+- **HTB Code-Runner Playbooks**: Web challenges exposing `/run`-style Python
+  execution endpoints can submit compact solvers for coding/math tasks such as
+  prime-product key recovery.
+- **Hardware Logic Agent**: Hardware/chip/circuit prompts can route to a
+  specialist that combines challenge text, local files, images, and CSV tables
+  to derive logic and decode output streams.
 - **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
 - **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
   forensics agent can inspect loader/preload state and shared-library hook
@@ -165,6 +178,16 @@ OPENAI_API_KEY=your_openai_key_here
    CTF_AGENTS_ALLOW_REMOTE_R2S=1 python3 ask.py "Solve ReactOOPS at http://TARGET:PORT"
    ```
 
+   HTB-style code-runner tasks can be given directly as a spawned target:
+   ```bash
+   python3 ask.py "Solve Primed for Action at TARGET:PORT. The answer is the product of the two prime numbers."
+   ```
+
+   Hardware logic challenge folders can point at local images and CSV files:
+   ```bash
+   python3 ask.py "Solve this hardware chip challenge. The files are in ~/Downloads/hw_lowlogic"
+   ```
+
    Live SSH forensics prompts can include credentials and a target:
    ```bash
    python3 ask.py "Investigate this SSH forensics target for loader anomalies. Creds: root:hackthebox IP and port are TARGET:PORT"
@@ -178,7 +201,7 @@ OPENAI_API_KEY=your_openai_key_here
    ```
 
 ## 📂 Project Structure
-- `agents/`: Specialist agents (Web, Crypto, Networking, Coding).
+- `agents/`: Specialist agents (Web, Crypto, Hardware, Pwn, Networking, Coding, etc.).
 - `core/`: The "Brain" (LLM Reasoner, Coordinator, Message Broker).
 - `tools/`: Wrapped security binaries (TShark, Nmap, John, Hashcat).
 - `ask.py`: The main interactive CLI entry point.
