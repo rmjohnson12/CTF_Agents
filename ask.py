@@ -178,6 +178,7 @@ def _heuristic_challenge_from_instruction(
         challenge = challenge_jsons[0]
         metadata = dict(challenge.get("metadata") or {})
         metadata.setdefault("system_tools", available_tools)
+        metadata["loaded_from_challenge_json"] = True
         challenge["metadata"] = metadata
         return challenge
 
@@ -384,8 +385,11 @@ def main():
 
         if not challenge:
             heuristic = _heuristic_challenge_from_instruction(user_input, available_tools)
-            # Step 1: Use LLM to convert natural language to challenge JSON
-            prompt = f"""
+            if (heuristic.get("metadata") or {}).get("loaded_from_challenge_json"):
+                challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
+            else:
+                # Step 1: Use LLM to convert natural language to challenge JSON
+                prompt = f"""
 Convert the following natural language security instruction into a standard CTF challenge JSON object.
 Instruction: {user_input}
 
@@ -404,21 +408,21 @@ Example shape:
 }}
 Do NOT invent, guess, or hallucinate a url (like localhost:8080) if one is not clearly specified in the instruction. If there is no url, omit the field.
 """
-            try:
-                if coordinator.reasoner.client is None:
-                    raise Exception("LLM client not configured")
-                raw_json = coordinator.reasoner._call_llm(prompt)
-                raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
-                llm_dict = json.loads(raw_json)
-                challenge = _normalize_challenge(
-                    _merge_heuristic_context(ChallengeParser().parse_dict(llm_dict), heuristic)
-                )
-            except ParseError:
-                print(f"LLM produced an invalid challenge shape, using heuristics...")
-                challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
-            except Exception:
-                print(f"LLM mapping failed or not available, using heuristics...")
-                challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
+                try:
+                    if coordinator.reasoner.client is None:
+                        raise Exception("LLM client not configured")
+                    raw_json = coordinator.reasoner._call_llm(prompt)
+                    raw_json = raw_json.strip().replace("```json", "").replace("```", "").strip()
+                    llm_dict = json.loads(raw_json)
+                    challenge = _normalize_challenge(
+                        _merge_heuristic_context(ChallengeParser().parse_dict(llm_dict), heuristic)
+                    )
+                except ParseError:
+                    print(f"LLM produced an invalid challenge shape, using heuristics...")
+                    challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
+                except Exception:
+                    print(f"LLM mapping failed or not available, using heuristics...")
+                    challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
         else:
             # Follow-up input: append to description and set resume
             challenge["description"] = (challenge.get("description") or "") + f"\n\nUser Hint: {user_input}"

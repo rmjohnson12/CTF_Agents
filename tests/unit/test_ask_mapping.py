@@ -31,6 +31,7 @@ def test_heuristic_mapping_loads_referenced_challenge_json(tmp_path, monkeypatch
     assert challenge["files"] == []
     assert challenge["metadata"]["author"] == "test"
     assert challenge["metadata"]["system_tools"] == ["python3"]
+    assert challenge["metadata"]["loaded_from_challenge_json"] is True
 
 
 def test_heuristic_mapping_keeps_non_json_artifacts_as_files(tmp_path, monkeypatch):
