@@ -11,16 +11,24 @@ the solving loop.
 
 ## What It Can Work On
 
-- Reverse engineering tasks involving Python files, executables, binaries, and
-  constraint-style password checks.
+- Reverse engineering tasks involving Python files, ELF binaries, and
+  constraint-style password checks. The reverse agent automatically unpacks
+  UPX-compressed binaries, reverses glibc `rand()`-based XOR+ROL encryption
+  (recovering the seed from the encrypted file), extracts crackme passwords
+  from `.rodata` fragments, decodes numeric-encoded flags (char_code × N
+  stored as integer sequences), and handles anti-decompilation patterns such
+  as `ud2`/SIGILL signal-handler tricks.
 - Cryptography and password-cracking tasks using hashes, encodings, wordlists,
   John the Ripper, and Hashcat.
 - Web challenges with browser snapshots, HTTP fetching, directory discovery,
   SQL injection tooling, and local source audits for dependency-level issues
-  such as vulnerable React/Next.js versions. The web agent also includes
-  targeted playbooks for form exploration, archive-upload issues, JSON/XML API
-  fuzzing, mass-assignment checks, source-guided JSON coercion, HTB-style
-  code-runner endpoints, and XXE-style CTF patterns.
+  such as vulnerable React/Next.js versions. The web agent includes targeted
+  playbooks for form exploration, archive-upload issues, JSON/XML API fuzzing,
+  mass-assignment checks, source-guided JSON coercion, HTB-style code-runner
+  endpoints, and XXE-style CTF patterns.
+- Binary exploitation (pwn) via ret2win discovery (symbol lookup with `nm`/
+  `objdump`), cyclic overflow-offset detection, x86-64 stack-alignment gadget
+  insertion, and remote payload delivery with pwntools.
 - Local Docker web challenges. Docker execution is opt-in and binds spawned
   targets to `127.0.0.1` before handing them to the web/recon agents.
 - Hardware logic challenges involving schematic images, gate/transistor
@@ -134,7 +142,7 @@ OPENAI_API_KEY=your_openai_key_here
 
 ## 🛠 Prerequisites
 
-- Python 3.8+
+- Python 3.10+
 - `.env` file with at least one supported LLM key, such as `NVAPI_KEY`,
   `NVAPI_KEYS`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`.
 - Essential security tools: `nmap`, `tshark`, `binwalk`, `john`, `hashcat`.
