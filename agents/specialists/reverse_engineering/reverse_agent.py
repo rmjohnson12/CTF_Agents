@@ -24,6 +24,32 @@ from tools.common.python_tool import PythonTool
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# AES S-box / inverse S-box (for AES-NI instruction simulation)
+# ---------------------------------------------------------------------------
+
+_AES_SBOX = [
+    0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
+    0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
+    0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
+    0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75,
+    0x09, 0x83, 0x2c, 0x1a, 0x1b, 0x6e, 0x5a, 0xa0, 0x52, 0x3b, 0xd6, 0xb3, 0x29, 0xe3, 0x2f, 0x84,
+    0x53, 0xd1, 0x00, 0xed, 0x20, 0xfc, 0xb1, 0x5b, 0x6a, 0xcb, 0xbe, 0x39, 0x4a, 0x4c, 0x58, 0xcf,
+    0xd0, 0xef, 0xaa, 0xfb, 0x43, 0x4d, 0x33, 0x85, 0x45, 0xf9, 0x02, 0x7f, 0x50, 0x3c, 0x9f, 0xa8,
+    0x51, 0xa3, 0x40, 0x8f, 0x92, 0x9d, 0x38, 0xf5, 0xbc, 0xb6, 0xda, 0x21, 0x10, 0xff, 0xf3, 0xd2,
+    0xcd, 0x0c, 0x13, 0xec, 0x5f, 0x97, 0x44, 0x17, 0xc4, 0xa7, 0x7e, 0x3d, 0x64, 0x5d, 0x19, 0x73,
+    0x60, 0x81, 0x4f, 0xdc, 0x22, 0x2a, 0x90, 0x88, 0x46, 0xee, 0xb8, 0x14, 0xde, 0x5e, 0x0b, 0xdb,
+    0xe0, 0x32, 0x3a, 0x0a, 0x49, 0x06, 0x24, 0x5c, 0xc2, 0xd3, 0xac, 0x62, 0x91, 0x95, 0xe4, 0x79,
+    0xe7, 0xc8, 0x37, 0x6d, 0x8d, 0xd5, 0x4e, 0xa9, 0x6c, 0x56, 0xf4, 0xea, 0x65, 0x7a, 0xae, 0x08,
+    0xba, 0x78, 0x25, 0x2e, 0x1c, 0xa6, 0xb4, 0xc6, 0xe8, 0xdd, 0x74, 0x1f, 0x4b, 0xbd, 0x8b, 0x8a,
+    0x70, 0x3e, 0xb5, 0x66, 0x48, 0x03, 0xf6, 0x0e, 0x61, 0x35, 0x57, 0xb9, 0x86, 0xc1, 0x1d, 0x9e,
+    0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
+    0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
+]
+_AES_INV_SBOX: List[int] = [0] * 256
+for _i, _v in enumerate(_AES_SBOX):
+    _AES_INV_SBOX[_v] = _i
+
+# ---------------------------------------------------------------------------
 # glibc rand() reimplementation
 # ---------------------------------------------------------------------------
 # glibc uses a degree-31 LFSR with a 310-call warmup after srand().
@@ -185,13 +211,20 @@ class ReverseEngineeringAgent(BaseAgent):
                 if result:
                     return result
 
-        # --- Strategy 5: source code constraint solving ---
+        # --- Strategy 5: AES-NI self-decrypting shellcode (PE) ---
+        for binary in binaries:
+            if is_pe_binary(binary):
+                result = self._try_aes_ni_shellcode(binary, challenge, steps)
+                if result:
+                    return result
+
+        # --- Strategy 6: source code constraint solving ---
         for file_path in source_files:
             result = self._try_source_analysis(file_path, challenge, steps)
             if result:
                 return result
 
-        # --- Strategy 5: strings + LLM on any remaining file ---
+        # --- Strategy 7: strings + LLM on any remaining file ---
         for file_path in effective_files:
             steps.append(f"Running strings on {file_path}")
             try:
@@ -559,6 +592,263 @@ class ReverseEngineeringAgent(BaseAgent):
         except Exception as exc:
             steps.append(f"UPX unpack error: {exc}")
         return file_path
+
+    # ------------------------------------------------------------------
+    # Strategy 5: AES-NI self-decrypting shellcode (Windows PE)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _aeskeygenassist(src: List[int], rcon: int) -> List[int]:
+        """
+        Simulate Intel AESKEYGENASSIST xmm1, xmm2, imm8.
+
+        Intel SDM layout (little-endian byte order in XMM register):
+          X1 = src[4:8]   (bits [63:32])
+          X3 = src[12:16] (bits [127:96])
+          DEST[31:0]   (bytes 0-3)  = SubWord(X1)
+          DEST[63:32]  (bytes 4-7)  = RotWord(SubWord(X1)) XOR {rcon,0,0,0}
+          DEST[95:64]  (bytes 8-11) = SubWord(X3)
+          DEST[127:96] (bytes 12-15)= RotWord(SubWord(X3)) XOR {rcon,0,0,0}
+        """
+        def _subword(w: List[int]) -> List[int]:
+            return [_AES_SBOX[b] for b in w]
+
+        def _rotword(w: List[int]) -> List[int]:
+            return [w[1], w[2], w[3], w[0]]
+
+        X1, X3 = list(src[4:8]), list(src[12:16])
+        sw1, sw3 = _subword(X1), _subword(X3)
+        rw1, rw3 = _rotword(sw1), _rotword(sw3)
+        rw1[0] ^= rcon
+        rw3[0] ^= rcon
+        return sw1 + rw1 + sw3 + rw3
+
+    @staticmethod
+    def _aesdeclast(state: List[int], rk: List[int]) -> List[int]:
+        """
+        Simulate Intel AESDECLAST xmm1, xmm2: InvShiftRows → InvSubBytes → XOR.
+        """
+        s = list(state)
+        # InvShiftRows
+        s[1], s[5], s[9],  s[13] = s[13], s[1],  s[5],  s[9]
+        s[2], s[6], s[10], s[14] = s[10], s[14], s[2],  s[6]
+        s[3], s[7], s[11], s[15] = s[7],  s[11], s[15], s[3]
+        # InvSubBytes
+        s = [_AES_INV_SBOX[b] for b in s]
+        # AddRoundKey
+        return [s[i] ^ rk[i] for i in range(16)]
+
+    @staticmethod
+    def _aes_ni_decrypt_block(block: List[int], key: List[int]) -> List[int]:
+        """
+        Decrypt one 16-byte block using the AES-NI 1-round cipher:
+          rk0 = AESKEYGENASSIST(key, 0x00)
+          rk1 = AESKEYGENASSIST(key, 0x10)
+          tmp = block XOR rk1
+          result = AESDECLAST(tmp, rk0)
+        """
+        rk0 = ReverseEngineeringAgent._aeskeygenassist(key, 0x00)
+        rk1 = ReverseEngineeringAgent._aeskeygenassist(key, 0x10)
+        tmp = [block[j] ^ rk1[j] for j in range(16)]
+        return ReverseEngineeringAgent._aesdeclast(tmp, rk0)
+
+    @staticmethod
+    def _parse_pe_sections(data: bytes) -> List[tuple]:
+        """
+        Parse PE section table.
+        Returns list of (name, vaddr, rawoff, rawsz, vsize) tuples.
+        """
+        try:
+            pe_off = struct.unpack_from("<I", data, 0x3C)[0]
+            num_sections = struct.unpack_from("<H", data, pe_off + 6)[0]
+            opt_size = struct.unpack_from("<H", data, pe_off + 20)[0]
+            sect_base = pe_off + 24 + opt_size
+            sections = []
+            for i in range(num_sections):
+                s = sect_base + i * 40
+                name   = data[s:s+8].rstrip(b"\x00").decode("ascii", errors="replace")
+                vsize  = struct.unpack_from("<I", data, s + 8)[0]
+                vaddr  = struct.unpack_from("<I", data, s + 12)[0]
+                rawsz  = struct.unpack_from("<I", data, s + 16)[0]
+                rawoff = struct.unpack_from("<I", data, s + 20)[0]
+                sections.append((name, vaddr, rawoff, rawsz, vsize))
+            return sections
+        except Exception:
+            return []
+
+    @staticmethod
+    def _pe_image_base(data: bytes) -> int:
+        """Read the preferred load address from the PE optional header."""
+        try:
+            pe_off = struct.unpack_from("<I", data, 0x3C)[0]
+            magic  = struct.unpack_from("<H", data, pe_off + 24)[0]
+            if magic == 0x10B:   # PE32
+                return struct.unpack_from("<I", data, pe_off + 52)[0]
+            return struct.unpack_from("<Q", data, pe_off + 48)[0]  # PE32+
+        except Exception:
+            return 0x140000000
+
+    def _find_aes_ni_blobs(
+        self, objout: str, image_base: int
+    ) -> List[tuple]:
+        """
+        Scan objdump output for (rva, size) pairs corresponding to encrypted blobs.
+
+        Recognises the pattern emitted by MSVC for AES-NI shellcode loaders:
+          mov edx, <SIZE>
+          lea rcx, [rip + N]  # <ADDR>
+          call <decrypt_func>
+        """
+        blobs: List[tuple] = []
+        lines = objout.splitlines()
+        for i, line in enumerate(lines):
+            m_size = re.search(r'\bmov\s+edx,\s*(0x[0-9a-f]+|\d+)', line)
+            if not m_size:
+                continue
+            size = int(m_size.group(1), 0)
+            if size < 16 or size > 0x8000 or (size % 16) != 0:
+                continue
+            # Look for `lea rcx, [...] # ADDR` within the next 4 lines
+            for j in range(i + 1, min(i + 5, len(lines))):
+                m_addr = re.search(r'#\s*(0x[0-9a-f]+)', lines[j])
+                if m_addr and "lea" in lines[j] and "rcx" in lines[j]:
+                    addr = int(m_addr.group(1), 16)
+                    rva  = addr - image_base
+                    if 0 < rva < 0x200000:
+                        blobs.append((rva, size))
+                    break
+        # deduplicate, preserving order
+        seen: set = set()
+        unique = []
+        for item in blobs:
+            if item not in seen:
+                seen.add(item)
+                unique.append(item)
+        return unique
+
+    @staticmethod
+    def _extract_aes_ni_char_checks(shellcode: bytes, md) -> Dict[int, int]:
+        """
+        Disassemble decrypted shellcode and extract {flag_position: expected_char}.
+
+        The shellcode performs per-character validation with this pattern:
+          imul rcx, rcx, <POSITION>   ; flag index
+          movsx eax, byte ptr [...]   ; load argv[1][pos]
+          cmp eax, <CHAR>             ; expected character
+        """
+        checks: Dict[int, int] = {}
+        insns = list(md.disasm(shellcode, 0))
+        for idx, insn in enumerate(insns):
+            if insn.mnemonic != "imul" or "rcx, rcx," not in insn.op_str:
+                continue
+            op = insn.op_str.split(",")[-1].strip()
+            try:
+                pos = int(op, 16) if op.startswith("0x") else int(op)
+            except ValueError:
+                continue
+            for ni in insns[idx + 1 : idx + 10]:
+                if ni.mnemonic == "cmp" and ni.op_str.startswith("eax,"):
+                    char_str = ni.op_str.split(",")[1].strip()
+                    try:
+                        char_val = int(char_str, 16) if char_str.startswith("0x") else int(char_str)
+                        checks[pos] = char_val
+                    except ValueError:
+                        pass
+                    break
+        return checks
+
+    def _try_aes_ni_shellcode(
+        self,
+        binary: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Reverse AES-NI self-decrypting shellcode PE challenges.
+
+        Pattern (MSVC/Windows):
+        - Encrypted code blobs live in .data, referenced by RVA from .text.
+        - A loader function allocates RWX memory, decrypts each blob using a
+          1-round AES cipher (key = [block_index]*16), then executes it.
+        - Each shellcode stub calls putchar() per character (usage/response
+          strings) or compares argv[1] character-by-character against expected
+          values, ORing a running failure flag.
+        Detection: AESKEYGENASSIST + AESDECLAST in the binary disassembly.
+        """
+        try:
+            objout = subprocess.run(
+                ["objdump", "-d", "-M", "intel", binary],
+                capture_output=True, text=True, timeout=30,
+            ).stdout
+        except Exception:
+            return None
+
+        objout_lower = objout.lower()
+        if "aesdeclast" not in objout_lower or "aeskeygenassist" not in objout_lower:
+            return None
+
+        steps.append(
+            f"AES-NI self-decrypting shellcode detected in {os.path.basename(binary)}"
+        )
+
+        try:
+            data = open(binary, "rb").read()
+        except Exception:
+            return None
+
+        image_base = self._pe_image_base(data)
+        sections   = self._parse_pe_sections(data)
+
+        def rva2off(rva: int) -> Optional[int]:
+            for _name, vaddr, rawoff, rawsz, vsize in sections:
+                if vaddr <= rva < vaddr + max(rawsz, vsize):
+                    return rawoff + (rva - vaddr)
+            return None
+
+        blobs = self._find_aes_ni_blobs(objout, image_base)
+        if not blobs:
+            steps.append("Could not locate encrypted blob RVAs from disassembly")
+            return None
+
+        steps.append(f"Found {len(blobs)} encrypted blob(s): {blobs}")
+
+        try:
+            import capstone  # type: ignore
+            md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+        except ImportError:
+            steps.append("capstone not installed; cannot disassemble shellcodes")
+            return None
+
+        all_checks: Dict[int, int] = {}
+        for rva, size in blobs:
+            fo = rva2off(rva)
+            if fo is None or fo + size > len(data):
+                continue
+            blob = data[fo : fo + size]
+            decrypted = bytearray()
+            for bi in range(size // 16):
+                block = list(blob[bi * 16 : (bi + 1) * 16])
+                key   = [bi & 0xFF] * 16
+                decrypted.extend(self._aes_ni_decrypt_block(block, key))
+            checks = self._extract_aes_ni_char_checks(bytes(decrypted), md)
+            all_checks.update(checks)
+
+        if len(all_checks) < 4:
+            steps.append(f"Too few character checks found ({len(all_checks)}); skipping")
+            return None
+
+        max_pos   = max(all_checks.keys())
+        flag_chars = [chr(all_checks.get(p, ord("?"))) for p in range(max_pos + 1)]
+        candidate  = "".join(flag_chars)
+        flag       = find_first_flag(candidate)
+        if flag:
+            steps.append(
+                f"AES-NI shellcode: {len(all_checks)} checks → {flag}"
+            )
+            return self._result(challenge, "solved", steps, flag=flag)
+
+        steps.append(f"Assembled candidate '{candidate}' — no valid flag pattern found")
+        return None
 
     # ------------------------------------------------------------------
     # Strategy 3: numeric-encoded flag  (char_code × N stored as ints)

@@ -11,6 +11,8 @@ import pytest
 
 from agents.specialists.reverse_engineering.reverse_agent import (
     ReverseEngineeringAgent,
+    _AES_SBOX,
+    _AES_INV_SBOX,
     _glibc_rand,
     _glibc_srand,
     _ror8,
@@ -575,3 +577,297 @@ class TestDecryptMethods:
 
         flag = agent._decrypt_xor_only(seed, bytes(ciphertext), [])
         assert flag == "CTF{xor_only_test}"
+
+
+# ---------------------------------------------------------------------------
+# AES-NI instruction simulation (AESKEYGENASSIST + AESDECLAST)
+# ---------------------------------------------------------------------------
+
+class TestAesNiCrypto:
+    """Known-answer tests for the AES-NI instruction simulation helpers."""
+
+    def test_sbox_inverts_correctly(self):
+        for i in range(256):
+            assert _AES_INV_SBOX[_AES_SBOX[i]] == i
+
+    def test_aeskeygenassist_rcon0_uniform_key(self):
+        # key = [2]*16 → all SubWord bytes = S[2] = 0x77
+        key = [2] * 16
+        result = ReverseEngineeringAgent._aeskeygenassist(key, 0x00)
+        assert result == [0x77] * 16
+
+    def test_aeskeygenassist_rcon10_uniform_key(self):
+        # key = [2]*16, rcon=0x10 → bytes 4 and 12 differ (RotWord gets XOR'd)
+        key = [2] * 16
+        result = ReverseEngineeringAgent._aeskeygenassist(key, 0x10)
+        expected = [0x77] * 16
+        expected[4]  = 0x77 ^ 0x10  # 0x67
+        expected[12] = 0x77 ^ 0x10  # 0x67
+        assert result == expected
+
+    def test_aesdeclast_known_vector(self):
+        # From partialencryption.exe: block_idx=2, enc=9d9d...8d9d...
+        # Expected plaintext: 0xcc * 16
+        enc  = list(bytes.fromhex("9d9d9d9d8d9d9d9d9d9d9d9d8d9d9d9d"))
+        key  = [2] * 16
+        rk0  = ReverseEngineeringAgent._aeskeygenassist(key, 0x00)
+        rk1  = ReverseEngineeringAgent._aeskeygenassist(key, 0x10)
+        tmp  = [enc[j] ^ rk1[j] for j in range(16)]
+        result = ReverseEngineeringAgent._aesdeclast(tmp, rk0)
+        assert result == [0xcc] * 16
+
+    def test_decrypt_block_roundtrip(self):
+        # block_idx=0 key=[0]*16, known ciphertext → known plaintext
+        key   = [0] * 16
+        rk0   = ReverseEngineeringAgent._aeskeygenassist(key, 0x00)
+        rk1   = ReverseEngineeringAgent._aeskeygenassist(key, 0x10)
+        plain = [0xAB] * 16
+        # Encrypt: ShiftRows(SubBytes(plain XOR rk0)) XOR rk1
+        import itertools
+        sr_state = list(plain)
+        sr_state = [_AES_SBOX[p ^ rk0[i]] for i, p in enumerate(sr_state)]
+        # ShiftRows
+        sr_state[1], sr_state[5], sr_state[9],  sr_state[13] = sr_state[5],  sr_state[9],  sr_state[13], sr_state[1]
+        sr_state[2], sr_state[6], sr_state[10], sr_state[14] = sr_state[10], sr_state[14], sr_state[2],  sr_state[6]
+        sr_state[3], sr_state[7], sr_state[11], sr_state[15] = sr_state[15], sr_state[3],  sr_state[7],  sr_state[11]
+        enc = [sr_state[i] ^ rk1[i] for i in range(16)]
+        # Decrypt and check
+        result = ReverseEngineeringAgent._aes_ni_decrypt_block(enc, key)
+        assert result == plain
+
+    def test_decrypt_block_block2_cc_padding(self):
+        # Concrete vector from partialencryption.exe
+        enc = list(bytes.fromhex("9d9d9d9d8d9d9d9d9d9d9d9d8d9d9d9d"))
+        key = [2] * 16
+        assert ReverseEngineeringAgent._aes_ni_decrypt_block(enc, key) == [0xcc] * 16
+
+
+# ---------------------------------------------------------------------------
+# PE section parser
+# ---------------------------------------------------------------------------
+
+class TestPeSectionParser:
+    def _build_minimal_pe(self, sections: list) -> bytes:
+        """
+        Build a minimal PE32+ with the given sections.
+        sections = list of (name, vaddr, rawoff, rawsz, vsize)
+        """
+        pe_off = 0x80
+        num_sections = len(sections)
+        # DOS header
+        dos = bytearray(pe_off)
+        dos[0:2] = b"MZ"
+        struct.pack_into("<I", dos, 0x3C, pe_off)
+
+        # PE signature + COFF header (20 bytes)
+        coff = bytearray(4 + 20)
+        coff[0:4] = b"PE\x00\x00"
+        struct.pack_into("<H", coff, 4 + 2, num_sections)  # NumberOfSections
+        opt_size = 112  # PE32+ optional header size
+        struct.pack_into("<H", coff, 4 + 16, opt_size)
+
+        # Optional header (PE32+, 112 bytes minimum)
+        opt = bytearray(opt_size)
+        struct.pack_into("<H", opt, 0, 0x20B)   # PE32+ magic
+        struct.pack_into("<Q", opt, 24, 0x140000000)  # ImageBase
+
+        # Section table
+        sect_table = bytearray(num_sections * 40)
+        for i, (name, vaddr, rawoff, rawsz, vsize) in enumerate(sections):
+            base = i * 40
+            sect_table[base:base+8] = name.encode()[:8].ljust(8, b"\x00")
+            struct.pack_into("<I", sect_table, base + 8,  vsize)
+            struct.pack_into("<I", sect_table, base + 12, vaddr)
+            struct.pack_into("<I", sect_table, base + 16, rawsz)
+            struct.pack_into("<I", sect_table, base + 20, rawoff)
+
+        return bytes(dos) + bytes(coff) + bytes(opt) + bytes(sect_table)
+
+    def test_parses_two_sections(self):
+        pe = self._build_minimal_pe([
+            (".text",  0x1000, 0x400, 0x200, 0x180),
+            (".data",  0x3000, 0x600, 0x100, 0x80),
+        ])
+        result = ReverseEngineeringAgent._parse_pe_sections(pe)
+        assert len(result) == 2
+        assert result[0][0] == ".text"
+        assert result[0][1] == 0x1000    # vaddr
+        assert result[0][2] == 0x400     # rawoff
+        assert result[0][3] == 0x200     # rawsz
+        assert result[0][4] == 0x180     # vsize
+        assert result[1][0] == ".data"
+        assert result[1][1] == 0x3000
+
+    def test_image_base_pe32plus(self):
+        pe = self._build_minimal_pe([])
+        base = ReverseEngineeringAgent._pe_image_base(pe)
+        assert base == 0x140000000
+
+    def test_returns_empty_on_truncated_data(self):
+        result = ReverseEngineeringAgent._parse_pe_sections(b"MZ\x00\x00")
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# AES-NI blob finder (parses objdump output)
+# ---------------------------------------------------------------------------
+
+class TestAesNiBlobFinder:
+    def _make_agent(self):
+        return ReverseEngineeringAgent()
+
+    def test_finds_blob_from_objdump_pattern(self):
+        objout = (
+            "14000115a:\tmov\tedx,0x70\n"
+            "14000115f:\tlea\trcx,[rip+0x2e9a]\t\t# 0x140004000\n"
+            "140001166:\tcall\t0x140001050\n"
+        )
+        agent = ReverseEngineeringAgent()
+        blobs = agent._find_aes_ni_blobs(objout, image_base=0x140000000)
+        assert (0x4000, 0x70) in blobs
+
+    def test_ignores_non_16_aligned_sizes(self):
+        objout = (
+            "14000115a:\tmov\tedx,0x71\n"
+            "14000115f:\tlea\trcx,[rip+0x2e9a]\t\t# 0x140004000\n"
+        )
+        agent = ReverseEngineeringAgent()
+        blobs = agent._find_aes_ni_blobs(objout, image_base=0x140000000)
+        assert blobs == []
+
+    def test_deduplicates_repeated_references(self):
+        line = (
+            "14000115a:\tmov\tedx,0x30\n"
+            "14000115f:\tlea\trcx,[rip+0x100]\t\t# 0x140001100\n"
+        )
+        agent = ReverseEngineeringAgent()
+        blobs = agent._find_aes_ni_blobs(line * 3, image_base=0x140000000)
+        assert blobs.count((0x1100, 0x30)) == 1
+
+    def test_multiple_blobs(self):
+        objout = (
+            "000:\tmov\tedx,0x70\n"
+            "001:\tlea\trcx,[rip+0x0]\t\t# 0x140004000\n"
+            "002:\tmov\tedx,0x30\n"
+            "003:\tlea\trcx,[rip+0x0]\t\t# 0x1400040b0\n"
+        )
+        blobs = ReverseEngineeringAgent()._find_aes_ni_blobs(
+            objout, image_base=0x140000000
+        )
+        assert (0x4000, 0x70) in blobs
+        assert (0x40b0, 0x30) in blobs
+
+
+# ---------------------------------------------------------------------------
+# AES-NI character check extractor (capstone-based)
+# ---------------------------------------------------------------------------
+
+class TestAesNiCharExtraction:
+    """Test _extract_aes_ni_char_checks using real decrypted shellcode bytes."""
+
+    def test_extracts_h_at_position_0(self):
+        pytest.importorskip("capstone")
+        import capstone
+        md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+
+        # Minimal stub: imul rcx,rcx,0 + cmp eax,0x48 ('H')
+        # 48 6B C9 00          imul rcx, rcx, 0x0
+        # 3D 48 00 00 00       cmp  eax, 0x48
+        stub = bytes([
+            0x48, 0x6B, 0xC9, 0x00,        # imul rcx, rcx, 0
+            0x3D, 0x48, 0x00, 0x00, 0x00,  # cmp eax, 0x48
+        ])
+        checks = ReverseEngineeringAgent._extract_aes_ni_char_checks(stub, md)
+        assert checks.get(0) == 0x48
+
+    def test_extracts_multiple_positions(self):
+        pytest.importorskip("capstone")
+        import capstone
+        md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+
+        # pos 0 → 'H' (0x48), pos 1 → 'T' (0x54)
+        stub = bytes([
+            0x48, 0x6B, 0xC9, 0x00,        # imul rcx, rcx, 0
+            0x3D, 0x48, 0x00, 0x00, 0x00,  # cmp eax, 0x48
+            0x48, 0x6B, 0xC9, 0x01,        # imul rcx, rcx, 1
+            0x3D, 0x54, 0x00, 0x00, 0x00,  # cmp eax, 0x54
+        ])
+        checks = ReverseEngineeringAgent._extract_aes_ni_char_checks(stub, md)
+        assert checks.get(0) == 0x48
+        assert checks.get(1) == 0x54
+
+    def test_empty_on_no_checks(self):
+        pytest.importorskip("capstone")
+        import capstone
+        md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+        # Just nops and ret
+        stub = bytes([0x90, 0x90, 0x90, 0xC3])
+        checks = ReverseEngineeringAgent._extract_aes_ni_char_checks(stub, md)
+        assert checks == {}
+
+
+# ---------------------------------------------------------------------------
+# _try_aes_ni_shellcode integration (mocked)
+# ---------------------------------------------------------------------------
+
+class TestAesNiStrategy:
+    def _make_pe(self) -> str:
+        f = tempfile.NamedTemporaryFile(delete=False, suffix=".exe")
+        f.write(b"MZ" + b"\x00" * 60)
+        f.close()
+        return f.name
+
+    def _make_agent(self):
+        return ReverseEngineeringAgent()
+
+    def test_skips_non_pe(self):
+        agent = self._make_agent()
+        steps = []
+        f = tempfile.NamedTemporaryFile(delete=False, suffix=".elf")
+        f.write(b"\x7fELF" + b"\x00" * 60)
+        f.close()
+        try:
+            result = agent._try_aes_ni_shellcode(f.name, {"id": "t"}, steps)
+            assert result is None
+        finally:
+            os.unlink(f.name)
+
+    def test_skips_pe_without_aes_ni(self):
+        agent = self._make_agent()
+        steps = []
+        tmp = self._make_pe()
+        try:
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout="normal x86 disassembly without aes instructions",
+                    returncode=0,
+                )
+                result = agent._try_aes_ni_shellcode(tmp, {"id": "t"}, steps)
+            assert result is None
+        finally:
+            os.unlink(tmp)
+
+    def test_detects_aes_ni_and_reports(self):
+        pytest.importorskip("capstone")
+        agent = self._make_agent()
+        steps = []
+        tmp = self._make_pe()
+        fake_objdump = (
+            "aeskeygenassist xmm0, xmm0, 0x0\n"
+            "aesdeclast xmm1, xmm0\n"
+            "000:\tmov\tedx,0x70\n"
+            "001:\tlea\trcx,[rip+0x0]\t\t# 0x140004000\n"
+        )
+        try:
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout=fake_objdump, returncode=0
+                )
+                # File open will fail on fake PE, so _try_aes_ni_shellcode
+                # should record the detection step then return None
+                with patch("builtins.open", side_effect=Exception("no real PE")):
+                    result = agent._try_aes_ni_shellcode(tmp, {"id": "t"}, steps)
+        finally:
+            os.unlink(tmp)
+        # Detection message must have been recorded before the open
+        assert any("AES-NI" in s for s in steps)

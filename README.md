@@ -17,9 +17,12 @@ the solving loop.
   (recovering the seed from the encrypted file), extracts crackme passwords
   from `.rodata`/`.rdata` fragments, decodes numeric-encoded flags (char_code
   × N stored as integer sequences), handles anti-decompilation patterns such
-  as `ud2`/SIGILL signal-handler tricks, and decrypts obfuscated .NET
-  assemblies by extracting and AES-decrypting the embedded managed resource
-  then parsing the `BinaryReader` string table.
+  as `ud2`/SIGILL signal-handler tricks, decrypts obfuscated .NET assemblies
+  by extracting and AES-decrypting the embedded managed resource then parsing
+  the `BinaryReader` string table, and reverses AES-NI self-decrypting
+  shellcode PE challenges (AESKEYGENASSIST + AESDECLAST 1-round cipher with
+  block-index key, extracting per-character flag comparisons from decrypted
+  shellcode stubs via capstone disassembly).
 - Cryptography and password-cracking tasks using hashes, encodings, wordlists,
   John the Ripper, and Hashcat.
 - Web challenges with browser snapshots, HTTP fetching, directory discovery,
