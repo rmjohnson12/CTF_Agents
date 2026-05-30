@@ -162,6 +162,7 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
         ".enc", ".bin", ".dat", ".txt", ".json", ".py", ".c", ".cpp", ".java",
         ".go", ".sh", ".pcap", ".pcapng", ".pdf", ".zip", ".log",
         ".csv", ".jpg", ".jpeg", ".png", ".v", ".sv", ".vhdl", ".vhd",
+        ".exe", ".pck", ".gd", ".gdc",
     }
 
     for path in paths:
@@ -247,16 +248,20 @@ def _heuristic_challenge_from_instruction(
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
     web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web", "docker", "dockerfile", "container"]
     hardware_terms = ["hardware", "chip", "logic", "circuit", "gate", "verilog", "vhdl", "schematic"]
+    has_hardware_term = any(
+        re.search(r"\b" + re.escape(term) + r"\b", lowered_input)
+        for term in hardware_terms
+    )
 
     if (
-        any(term in lowered_input for term in hardware_terms)
+        has_hardware_term
         or (
             any(f.lower().endswith((".csv", ".v", ".sv", ".vhdl", ".vhd")) for f in challenge_files)
             and any(f.lower().endswith((".jpg", ".jpeg", ".png")) for f in challenge_files)
         )
     ):
         category = "hardware"
-    elif any(f.lower().endswith('.exe') for f in challenge_files):
+    elif any(f.lower().endswith((".exe", ".pck", ".gdc")) for f in challenge_files):
         # PE/Windows binaries are always reversing — never pwn or log
         category = "reverse"
     elif any(term in lowered_input for term in log_terms):
@@ -275,7 +280,11 @@ def _heuristic_challenge_from_instruction(
         any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
         and any(f.lower().endswith(('.enc', '.encrypted', '.bin', '.dat')) for f in challenge_files)
     ) or (
-        any(term in lowered_input for term in ["ransomware", "encryption program", "reverse", "decompile", "disassemble", "crackme"])
+        any(term in lowered_input for term in [
+            "ransomware", "encryption program", "reverse", "reversing",
+            "decompile", "disassemble", "crackme", "godot", "game loader",
+            "compromised",
+        ])
         and any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
     ):
         category = "reverse"

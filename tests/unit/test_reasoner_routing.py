@@ -244,3 +244,19 @@ def test_reasoner_decision_guard_keeps_hardware_from_reverse_agent():
     next_action = reasoner.choose_next_action(challenge, analysis, [])
 
     assert next_action["target"] == "hardware_agent"
+
+
+def test_reasoner_does_not_match_gate_inside_investigate():
+    reasoner = LLMReasoner(client=None)
+    challenge = {
+        "id": "game_loader",
+        "category": "reverse",
+        "description": "Investigate this compromised game and uncover the flag.",
+        "files": ["Platformer 2D.exe", "Platformer 2D.pck"],
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert analysis.category_guess == "reverse"
+    assert next_action["target"] == "reverse_agent"

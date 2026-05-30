@@ -10,9 +10,13 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
+import re
+import struct
 import zipfile
+from bisect import bisect_right
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agents.base_agent import AgentType, BaseAgent
 from core.utils.flag_utils import find_first_flag
@@ -173,6 +177,19 @@ class HardwareLogicAgent(BaseAgent):
                     steps.append(f"Inspected {member} ({len(payload)} bytes, sha256 {digest[:12]}...).")
                     if payload.startswith(b"<SALEAE>"):
                         steps.append("Detected Saleae digital capture payload.")
+                    generic_result = HardwareLogicAgent._decode_saleae_uart_payload(payload)
+                    if generic_result.get("decoded_text"):
+                        decoded = generic_result["decoded_text"]
+                        baud = generic_result.get("baud")
+                        steps.append(
+                            f"Decoded async serial from {member}"
+                            f"{f' at {baud} baud' if baud else ''}: {decoded[:120]}"
+                        )
+                        flag = find_first_flag(decoded)
+                        if flag:
+                            return {"steps": steps, "flag": flag, "decoded_text": decoded}
+                        return {"steps": steps, "decoded_text": decoded}
+
                     if digest in known_digital_flags:
                         steps.append(
                             "Recognized the HTB Debugging Interface UART capture; "
@@ -191,3 +208,158 @@ class HardwareLogicAgent(BaseAgent):
             "Try opening it in Logic 2 and adding an Async Serial analyzer."
         )
         return {"steps": steps}
+
+    @staticmethod
+    def _decode_saleae_uart_payload(payload: bytes) -> Dict[str, Any]:
+        parsed = HardwareLogicAgent._parse_saleae_binary_export(payload)
+        if not parsed:
+            return {}
+
+        initial_state, transition_times = parsed
+        candidates = []
+        for baud in HardwareLogicAgent._uart_baud_candidates(transition_times):
+            for inverted in (False, True):
+                decoded = HardwareLogicAgent._decode_uart_8n1(
+                    initial_state=initial_state,
+                    transition_times=transition_times,
+                    baud=baud,
+                    inverted=inverted,
+                )
+                if decoded:
+                    candidates.append({
+                        "baud": baud,
+                        "decoded_text": decoded,
+                        "score": HardwareLogicAgent._score_serial_text(decoded),
+                    })
+
+        if not candidates:
+            return {}
+
+        candidates.sort(key=lambda item: (find_first_flag(item["decoded_text"]) is not None, item["score"]), reverse=True)
+        best = candidates[0]
+        if best["score"] < 0.45 and not find_first_flag(best["decoded_text"]):
+            return {}
+        return best
+
+    @staticmethod
+    def _parse_saleae_binary_export(payload: bytes) -> Optional[Tuple[int, List[float]]]:
+        if not payload.startswith(b"<SALEAE>") or len(payload) < 48:
+            return None
+
+        version, data_type = struct.unpack_from("<II", payload, 8)
+        if version <= 0 or data_type not in {0, 100}:
+            return None
+
+        layouts = [
+            ("<QddQ", 16, 40),
+            ("<IddQ", 16, 36),
+        ]
+        for fmt, header_offset, data_offset in layouts:
+            try:
+                unpacked = struct.unpack_from(fmt, payload, header_offset)
+            except struct.error:
+                continue
+
+            initial_state = int(unpacked[0]) & 1
+            begin_time = float(unpacked[1])
+            end_time = float(unpacked[2])
+            transition_count = int(unpacked[3])
+            if (
+                not math.isfinite(begin_time)
+                or not math.isfinite(end_time)
+                or begin_time < 0
+                or end_time <= begin_time
+                or transition_count <= 0
+                or transition_count > 1_000_000
+            ):
+                continue
+
+            expected_size = data_offset + (transition_count * 8)
+            if expected_size > len(payload):
+                continue
+
+            try:
+                transition_times = list(struct.unpack_from(f"<{transition_count}d", payload, data_offset))
+            except struct.error:
+                continue
+            if HardwareLogicAgent._valid_transition_times(transition_times, begin_time, end_time):
+                return initial_state, transition_times
+
+        return None
+
+    @staticmethod
+    def _valid_transition_times(transition_times: List[float], begin_time: float, end_time: float) -> bool:
+        previous = begin_time
+        for timestamp in transition_times:
+            if not math.isfinite(timestamp) or timestamp < begin_time or timestamp > end_time or timestamp < previous:
+                return False
+            previous = timestamp
+        return True
+
+    @staticmethod
+    def _uart_baud_candidates(transition_times: List[float]) -> List[int]:
+        common_rates = [115200, 57600, 38400, 31250, 31230, 31200, 19200, 9600, 4800, 2400, 1200]
+        if len(transition_times) < 2:
+            return common_rates
+
+        deltas = [
+            round(transition_times[idx + 1] - transition_times[idx], 9)
+            for idx in range(len(transition_times) - 1)
+            if transition_times[idx + 1] > transition_times[idx]
+        ]
+        inferred = []
+        for delta in sorted(set(deltas)):
+            if delta <= 0:
+                continue
+            baud = round(1 / delta)
+            if 300 <= baud <= 1_000_000:
+                inferred.append(baud)
+
+        ordered = []
+        for baud in inferred + common_rates:
+            if baud not in ordered:
+                ordered.append(baud)
+        return ordered[:32]
+
+    @staticmethod
+    def _decode_uart_8n1(
+        initial_state: int,
+        transition_times: List[float],
+        baud: int,
+        inverted: bool = False,
+    ) -> str:
+        bit_period = 1 / baud
+
+        def state_at(timestamp: float) -> int:
+            state = initial_state if bisect_right(transition_times, timestamp) % 2 == 0 else 1 - initial_state
+            return 1 - state if inverted else state
+
+        decoded: List[str] = []
+        idx = 0
+        while idx < len(transition_times):
+            edge_time = transition_times[idx]
+            before = state_at(max(0.0, edge_time - (bit_period * 0.05)))
+            after = state_at(edge_time + (bit_period * 0.05))
+            if before == 1 and after == 0 and state_at(edge_time + (bit_period * 0.5)) == 0:
+                value = 0
+                for bit_index in range(8):
+                    value |= state_at(edge_time + (bit_period * (1.5 + bit_index))) << bit_index
+                stop_bit = state_at(edge_time + (bit_period * 9.5))
+                if stop_bit == 1:
+                    decoded.append(chr(value) if 9 <= value <= 126 else ".")
+                    while idx < len(transition_times) and transition_times[idx] < edge_time + (bit_period * 9.5):
+                        idx += 1
+                    continue
+            idx += 1
+
+        return "".join(decoded)
+
+    @staticmethod
+    def _score_serial_text(text: str) -> float:
+        if not text:
+            return 0.0
+        if find_first_flag(text):
+            return 2.0
+        printable = sum(1 for char in text if char == "\n" or char == "\r" or char == "\t" or 32 <= ord(char) <= 126)
+        useful = sum(1 for char in text if re.match(r"[A-Za-z0-9{}_:\-.,/ \r\n]", char))
+        return (printable / len(text)) + (useful / len(text))

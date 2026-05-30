@@ -174,8 +174,13 @@ class ChallengeClassifier:
         # Reverse engineering
         if (
             has_elf
-            or any(f.endswith((".py", ".exe", ".bin")) for f in files)
-            or self._kw(text, "reverse", "source code", "analyze program", "authenticate the program")
+            or any(f.endswith((".py", ".exe", ".bin", ".pck", ".gd", ".gdc")) for f in files)
+            or self._kw(
+                text,
+                "reverse", "reversing", "source code", "analyze program",
+                "authenticate the program", "game", "godot", "malware",
+                "compromised",
+            )
         ):
             indicators.append("reverse_terms")
             return ChallengeAnalysis(

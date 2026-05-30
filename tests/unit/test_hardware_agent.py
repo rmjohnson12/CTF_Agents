@@ -1,5 +1,6 @@
 import csv
 import json
+import struct
 import zipfile
 
 from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
@@ -11,6 +12,29 @@ def _bits_for_text(text):
         value = ord(char)
         bits.extend((value >> shift) & 1 for shift in range(7, -1, -1))
     return bits
+
+
+def _saleae_uart_payload(text, baud=9600):
+    initial_state = 1
+    bit_period = 1 / baud
+    current_time = bit_period * 3
+    current_state = initial_state
+    transitions = []
+
+    for char in text:
+        value = ord(char)
+        frame = [0]
+        frame.extend((value >> bit_index) & 1 for bit_index in range(8))
+        frame.append(1)
+        for bit in frame:
+            if bit != current_state:
+                transitions.append(current_time)
+                current_state = bit
+            current_time += bit_period
+        current_time += bit_period
+
+    header = b"<SALEAE>" + struct.pack("<IIQddQ", 1, 0, initial_state, 0.0, current_time, len(transitions))
+    return header + struct.pack(f"<{len(transitions)}d", *transitions)
 
 
 def test_hardware_agent_solves_low_logic_style_csv(tmp_path):
@@ -75,3 +99,33 @@ def test_hardware_agent_recognizes_known_saleae_debugging_interface(monkeypatch,
     assert result["status"] == "solved"
     assert result["flag"].startswith("HTB{d38u991n9")
     assert any("31230 baud" in step for step in result["steps"])
+
+
+def test_hardware_agent_decodes_generic_saleae_uart_export(tmp_path):
+    sal_path = tmp_path / "serial_capture.sal"
+
+    with zipfile.ZipFile(sal_path, "w") as archive:
+        archive.writestr("digital-0.bin", _saleae_uart_payload("boot ready\nHTB{uart_ok}\n", baud=19200))
+        archive.writestr(
+            "meta.json",
+            json.dumps({
+                "data": {
+                    "captureSettings": {
+                        "connectedDevice": {
+                            "settings": {"sampleRate": {"digital": 1000000}}
+                        }
+                    }
+                }
+            }),
+        )
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "serial_capture",
+        "category": "hardware",
+        "description": "Decode this asynchronous serial debugging interface capture.",
+        "files": [str(sal_path)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{uart_ok}"
+    assert any("19200 baud" in step for step in result["steps"])

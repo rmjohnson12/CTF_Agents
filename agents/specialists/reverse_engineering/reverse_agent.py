@@ -5,7 +5,9 @@ Handles both source-code analysis challenges (Python/C constraint solving)
 and binary reversing challenges (ELF + encrypted-output patterns).
 """
 
+import base64
 import ctypes
+import http.client
 import io
 import logging
 import os
@@ -13,6 +15,9 @@ import re
 import shutil
 import struct
 import subprocess
+import tempfile
+from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
 
 from agents.base_agent import BaseAgent, AgentType
@@ -136,6 +141,7 @@ class ReverseEngineeringAgent(BaseAgent):
             "verification",
             "encryptor_reversal",
             "crackme_rodata_extraction",
+            "godot_game_loader",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -184,7 +190,12 @@ class ReverseEngineeringAgent(BaseAgent):
 
         binaries = [f for f in effective_files if is_native_binary(f)]
         enc_files = [f for f in effective_files if f.endswith(".enc") or f.endswith(".encrypted")]
-        source_files = [f for f in effective_files if f.endswith((".py", ".c", ".cpp", ".js"))]
+        source_files = [f for f in effective_files if f.endswith((".py", ".c", ".cpp", ".js", ".gd"))]
+
+        # --- Strategy 0: Godot game-loader bundles (.exe + encrypted .pck) ---
+        result = self._try_godot_game_loader(effective_files, challenge, steps)
+        if result:
+            return result
 
         # --- Strategy 1: encryptor binary + .enc output ---
         if binaries and enc_files:
@@ -258,6 +269,446 @@ class ReverseEngineeringAgent(BaseAgent):
                 steps.append(f"strings error on {file_path}: {exc}")
 
         return self._result(challenge, "attempted", steps)
+
+    # ------------------------------------------------------------------
+    # Strategy 0: Godot game loader / encrypted PCK recovery
+    # ------------------------------------------------------------------
+
+    def _try_godot_game_loader(
+        self,
+        files: List[str],
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        exe_files = [f for f in files if f.lower().endswith(".exe")]
+        pck_files = [f for f in files if f.lower().endswith(".pck")]
+        gd_files = [f for f in files if f.lower().endswith(".gd")]
+
+        if not (pck_files or gd_files):
+            return None
+
+        steps.append("Checking for Godot game-loader indicators.")
+        recovered_scripts = list(gd_files)
+
+        if exe_files and pck_files:
+            key = self._extract_godot_pck_key_from_pe(exe_files[0], steps)
+            if key:
+                steps.append(f"Extracted Godot PCK AES key: {key}")
+                recovered_scripts.extend(self._recover_godot_scripts_with_gdre(pck_files[0], key, steps))
+            else:
+                steps.append("Could not extract a Godot PCK key from the executable.")
+
+        for script_path in sorted(set(recovered_scripts)):
+            try:
+                script_text = open(script_path, "r", encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+
+            decoded = self._decode_godot_loader_script(script_text)
+            if not decoded:
+                continue
+
+            steps.append(f"Decoded Godot loader script: {script_path}")
+            if decoded.get("target_host"):
+                steps.append(f"C2 host from script: {decoded['target_host']}")
+            if decoded.get("payload_path"):
+                steps.append(f"Payload path from script: /{decoded['payload_path']}")
+            if decoded.get("flag_tail"):
+                steps.append(f"Decoded second flag half: {decoded['flag_tail']}")
+            if decoded.get("cookie"):
+                steps.append("Decoded decimal-joined cookie value from GDScript arrays.")
+
+            flag = self._fetch_godot_loader_flag(challenge, decoded, steps)
+            if flag:
+                return self._result(challenge, "solved", steps, flag=flag)
+
+            flag_tail = decoded.get("flag_tail")
+            if flag_tail:
+                return self._result(challenge, "attempted", steps, flag=flag_tail)
+
+        return None
+
+    @staticmethod
+    def _decode_godot_loader_script(script_text: str) -> Optional[Dict[str, str]]:
+        env: Dict[str, List[int]] = {}
+        statements = re.split(r";|\n", script_text)
+
+        for raw_stmt in statements:
+            stmt = raw_stmt.strip()
+            if not stmt:
+                continue
+            if stmt.startswith("var "):
+                stmt = stmt[4:].strip()
+
+            append_match = re.match(r"^([A-Za-z_]\w*)\.append_array\((\[.*\])\)$", stmt)
+            if append_match:
+                env.setdefault(append_match.group(1), []).extend(
+                    ReverseEngineeringAgent._parse_godot_int_array(append_match.group(2))
+                )
+                continue
+
+            assign_match = re.match(r"^([A-Za-z_]\w*)\s*=\s*(.+)$", stmt)
+            if assign_match:
+                name, expr = assign_match.groups()
+                value = ReverseEngineeringAgent._eval_godot_array_expr(expr, env)
+                if value is not None:
+                    env[name] = value
+
+        def b64_var(name: str) -> Optional[str]:
+            if name not in env:
+                return None
+            try:
+                raw = "".join(chr(value) for value in env[name])
+                return base64.b64decode(raw).decode("utf-8", errors="replace")
+            except Exception:
+                return None
+
+        decoded = {
+            "target_host": b64_var("jkoq"),
+            "payload_path": b64_var("ioqw"),
+            "flag_tail": b64_var("loap"),
+        }
+        if "aklq" in env and "paic" in env:
+            decoded["cookie"] = "".join(str(value) for value in env["aklq"] + env["paic"])
+
+        return {key: value for key, value in decoded.items() if value}
+
+    @staticmethod
+    def _parse_godot_int_array(array_text: str) -> List[int]:
+        values = []
+        for token in array_text.strip()[1:-1].split(","):
+            token = token.strip()
+            if not token:
+                continue
+            values.append(int(token, 0))
+        return values
+
+    @staticmethod
+    def _eval_godot_array_expr(expr: str, env: Dict[str, List[int]]) -> Optional[List[int]]:
+        parts = ReverseEngineeringAgent._split_godot_concat(expr)
+        if not parts:
+            return None
+
+        output: List[int] = []
+        for part in parts:
+            part = part.strip()
+            if part.startswith("[") and part.endswith("]"):
+                output.extend(ReverseEngineeringAgent._parse_godot_int_array(part))
+            elif re.match(r"^[A-Za-z_]\w*$", part) and part in env:
+                output.extend(env[part])
+            else:
+                return None
+        return output
+
+    @staticmethod
+    def _split_godot_concat(expr: str) -> List[str]:
+        parts: List[str] = []
+        start = depth = 0
+        for idx, char in enumerate(expr):
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            elif char == "+" and depth == 0:
+                parts.append(expr[start:idx])
+                start = idx + 1
+        parts.append(expr[start:])
+        return [part.strip() for part in parts if part.strip()]
+
+    def _fetch_godot_loader_flag(
+        self,
+        challenge: Dict[str, Any],
+        decoded: Dict[str, str],
+        steps: List[str],
+    ) -> Optional[str]:
+        url = challenge.get("url")
+        target_host = decoded.get("target_host")
+        payload_path = decoded.get("payload_path")
+        cookie = decoded.get("cookie")
+        flag_tail = decoded.get("flag_tail")
+        if not (url and target_host and payload_path and cookie and flag_tail):
+            return None
+
+        parsed = urlparse(url if re.match(r"^https?://", url) else f"http://{url}")
+        if parsed.scheme != "http" or not parsed.hostname:
+            return None
+
+        port = parsed.port or 80
+        body = (
+            '{"os_name":"Windows","processor_name":"Generic","cpu_cores":4,'
+            '"is_64bit":true,"locale":"en_US","user_dir":"user://"}'
+        )
+        headers = {
+            "Host": target_host,
+            "User-Agent": "GodotEngine/4.1.1.stable (Windows)",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            conn = http.client.HTTPConnection(parsed.hostname, port, timeout=10)
+            conn.request("POST", "/enum", body=body, headers=headers)
+            response = conn.getresponse()
+            response.read()
+            steps.append(f"POST /enum returned HTTP {response.status}.")
+            conn.close()
+
+            conn = http.client.HTTPConnection(parsed.hostname, port, timeout=15)
+            get_headers = {
+                "Host": target_host,
+                "User-Agent": "GodotEngine/4.1.1.stable (Windows)",
+                "Cookie": cookie,
+            }
+            conn.request("GET", f"/{payload_path}", headers=get_headers)
+            response = conn.getresponse()
+            payload = response.read(128)
+            half_flag = response.getheader("X-Half-Flag")
+            steps.append(f"GET /{payload_path} returned HTTP {response.status}.")
+            conn.close()
+            if half_flag:
+                steps.append(f"Recovered first flag half from X-Half-Flag: {half_flag}")
+                return half_flag + flag_tail
+            if response.status == 200:
+                flag = find_first_flag(payload.decode("utf-8", errors="replace"))
+                if flag:
+                    return flag
+        except Exception as exc:
+            steps.append(f"Godot C2 request failed: {exc}")
+
+        return None
+
+    @staticmethod
+    def _recover_godot_scripts_with_gdre(pck_file: str, key: str, steps: List[str]) -> List[str]:
+        gdre = ReverseEngineeringAgent._find_gdre_tool()
+        if not gdre:
+            steps.append("GDRE Tools not found; skipping encrypted PCK script recovery.")
+            return []
+
+        output_dir = tempfile.mkdtemp(prefix="ctf_agents_godot_")
+        try:
+            result = subprocess.run(
+                [
+                    gdre,
+                    "--headless",
+                    f"--recover={pck_file}",
+                    f"--key={key}",
+                    f"--output={output_dir}",
+                    "--scripts-only",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+        except Exception as exc:
+            steps.append(f"GDRE recovery failed: {exc}")
+            return []
+
+        if result.returncode != 0:
+            steps.append(f"GDRE recovery exited with {result.returncode}: {(result.stderr or result.stdout)[:200]}")
+            return []
+
+        scripts = [str(path) for path in Path(output_dir).rglob("*.gd")]
+        steps.append(f"Recovered {len(scripts)} GDScript file(s) with GDRE Tools.")
+        return scripts
+
+    @staticmethod
+    def _find_gdre_tool() -> Optional[str]:
+        candidates = [
+            os.environ.get("GDRE_TOOLS"),
+            shutil.which("gdre_tools"),
+            shutil.which("gdre"),
+            "/tmp/gdre/Godot RE Tools.app/Contents/MacOS/Godot RE Tools",
+            "/Applications/Godot RE Tools.app/Contents/MacOS/Godot RE Tools",
+        ]
+        for candidate in candidates:
+            if candidate and os.path.exists(candidate):
+                return candidate
+        return None
+
+    @staticmethod
+    def _extract_godot_pck_key_from_pe(exe_file: str, steps: List[str]) -> Optional[str]:
+        try:
+            data = open(exe_file, "rb").read()
+        except OSError:
+            return None
+
+        try:
+            image_base, sections = ReverseEngineeringAgent._parse_pe_image(data)
+        except Exception as exc:
+            steps.append(f"Could not parse PE headers for Godot key extraction: {exc}")
+            return None
+
+        text = next((section for section in sections if section["name"] == ".text"), None)
+        rdata = next((section for section in sections if section["name"] == ".rdata"), None)
+        if not text or not rdata:
+            return None
+
+        anchors = [
+            b"Can't open encrypted pack directory.",
+            b"Can't open encrypted pack-referenced file '%s'.",
+            b'Condition "fae.is_null()" is true.',
+            b"GDScript::load_byte_code",
+        ]
+
+        for anchor in anchors:
+            idx = data.find(anchor, rdata["raw"], rdata["raw"] + rdata["raw_size"])
+            while idx != -1:
+                anchor_va = image_base + rdata["vaddr"] + (idx - rdata["raw"])
+                lea_va = ReverseEngineeringAgent._find_pe_lea_to_va(data, image_base, text, anchor_va)
+                if lea_va:
+                    blob_va = ReverseEngineeringAgent._find_godot_key_blob_near(data, image_base, sections, text, lea_va)
+                    if blob_va:
+                        blob = ReverseEngineeringAgent._pe_read_va(data, image_base, sections, blob_va, 32)
+                        if blob:
+                            return blob.hex().upper()
+                idx = data.find(anchor, idx + 1, rdata["raw"] + rdata["raw_size"])
+
+        return None
+
+    @staticmethod
+    def _parse_pe_image(data: bytes) -> tuple[int, List[Dict[str, int | str]]]:
+        pe_off = struct.unpack_from("<I", data, 0x3C)[0]
+        opt_off = pe_off + 24
+        opt_size = struct.unpack_from("<H", data, pe_off + 20)[0]
+        section_count = struct.unpack_from("<H", data, pe_off + 6)[0]
+        magic = struct.unpack_from("<H", data, opt_off)[0]
+        image_base = struct.unpack_from("<Q" if magic == 0x20B else "<I", data, opt_off + 24)[0]
+        sect_off = opt_off + opt_size
+        sections: List[Dict[str, int | str]] = []
+        for idx in range(section_count):
+            base = sect_off + idx * 40
+            name = data[base : base + 8].split(b"\0", 1)[0].decode("ascii", errors="replace")
+            sections.append({
+                "name": name,
+                "vaddr": struct.unpack_from("<I", data, base + 12)[0],
+                "vsize": struct.unpack_from("<I", data, base + 8)[0],
+                "raw": struct.unpack_from("<I", data, base + 20)[0],
+                "raw_size": struct.unpack_from("<I", data, base + 16)[0],
+            })
+        return image_base, sections
+
+    @staticmethod
+    def _pe_va_to_off(image_base: int, sections: List[Dict[str, int | str]], va: int) -> Optional[int]:
+        rva = va - image_base
+        for section in sections:
+            start = int(section["vaddr"])
+            size = max(int(section["vsize"]), int(section["raw_size"]))
+            if start <= rva < start + size:
+                return int(section["raw"]) + (rva - start)
+        return None
+
+    @staticmethod
+    def _pe_read_va(
+        data: bytes,
+        image_base: int,
+        sections: List[Dict[str, int | str]],
+        va: int,
+        size: int,
+    ) -> Optional[bytes]:
+        offset = ReverseEngineeringAgent._pe_va_to_off(image_base, sections, va)
+        if offset is None or offset + size > len(data):
+            return None
+        return data[offset : offset + size]
+
+    @staticmethod
+    def _pe_va_in_named_section(image_base: int, sections: List[Dict[str, int | str]], va: int, prefixes: tuple[str, ...]) -> bool:
+        rva = va - image_base
+        for section in sections:
+            if not str(section["name"]).startswith(prefixes):
+                continue
+            start = int(section["vaddr"])
+            size = max(int(section["vsize"]), int(section["raw_size"]))
+            if start <= rva < start + size:
+                return True
+        return False
+
+    @staticmethod
+    def _find_pe_lea_to_va(data: bytes, image_base: int, text: Dict[str, int | str], target_va: int) -> Optional[int]:
+        valid_modrm = {0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D}
+        raw = int(text["raw"])
+        text_data = data[raw : raw + int(text["raw_size"])]
+        text_va = image_base + int(text["vaddr"])
+        for idx in range(1, len(text_data) - 6):
+            if text_data[idx] != 0x8D:
+                continue
+            rex = text_data[idx - 1]
+            if (rex & 0xF0) != 0x40 or (rex & 0x08) == 0 or text_data[idx + 1] not in valid_modrm:
+                continue
+            disp = struct.unpack_from("<i", text_data, idx + 2)[0]
+            instr_va = text_va + idx - 1
+            if instr_va + 7 + disp == target_va:
+                return instr_va
+        return None
+
+    @staticmethod
+    def _match_pe_rip_relative_load(
+        data: bytes,
+        image_base: int,
+        sections: List[Dict[str, int | str]],
+        text_data: bytes,
+        text_va: int,
+        offset: int,
+        allowed_prefixes: Optional[tuple[str, ...]] = None,
+    ) -> Optional[tuple[int, int, int]]:
+        valid_modrm = {0x05, 0x0D, 0x15, 0x1D, 0x25, 0x2D, 0x35, 0x3D}
+        if offset + 7 > len(text_data):
+            return None
+        rex, opcode, modrm = text_data[offset], text_data[offset + 1], text_data[offset + 2]
+        if (rex & 0xF0) != 0x40 or (rex & 0x08) == 0 or opcode not in (0x8B, 0x8D) or modrm not in valid_modrm:
+            return None
+        disp = struct.unpack_from("<i", text_data, offset + 3)[0]
+        instr_va = text_va + offset
+        target_va = instr_va + 7 + disp
+        final_va = target_va
+        if opcode == 0x8B:
+            pointer = ReverseEngineeringAgent._pe_read_va(data, image_base, sections, target_va, 8)
+            if not pointer:
+                return None
+            final_va = struct.unpack("<Q", pointer)[0]
+        if allowed_prefixes and not ReverseEngineeringAgent._pe_va_in_named_section(image_base, sections, final_va, allowed_prefixes):
+            return None
+        if not ReverseEngineeringAgent._pe_read_va(data, image_base, sections, final_va, 32):
+            return None
+        return instr_va, target_va, final_va
+
+    @staticmethod
+    def _find_godot_key_blob_near(
+        data: bytes,
+        image_base: int,
+        sections: List[Dict[str, int | str]],
+        text: Dict[str, int | str],
+        lea_va: int,
+    ) -> Optional[int]:
+        raw = int(text["raw"])
+        text_data = data[raw : raw + int(text["raw_size"])]
+        text_va = image_base + int(text["vaddr"])
+        lea_offset = ReverseEngineeringAgent._pe_va_to_off(image_base, sections, lea_va)
+        if lea_offset is None:
+            return None
+        lea_index = lea_offset - raw
+        start = max(0, lea_index - 0x4000)
+        end = min(len(text_data), lea_index + 0x4000)
+
+        for idx in range(start, end - 5):
+            if text_data[idx : idx + 5] != b"\xBA\x20\x00\x00\x00":
+                continue
+            for inner in range(idx + 5, min(idx + 0x300, len(text_data) - 7)):
+                match = ReverseEngineeringAgent._match_pe_rip_relative_load(
+                    data, image_base, sections, text_data, text_va, inner, (".data",)
+                )
+                if match:
+                    return match[2]
+
+        best: Optional[tuple[int, int]] = None
+        for idx in range(start, end - 7):
+            match = ReverseEngineeringAgent._match_pe_rip_relative_load(
+                data, image_base, sections, text_data, text_va, idx, None
+            )
+            if not match:
+                continue
+            distance = abs(idx - lea_index)
+            if best is None or distance < best[0]:
+                best = (distance, match[2])
+        return best[1] if best else None
 
     # ------------------------------------------------------------------
     # Strategy 1: encryptor reversal

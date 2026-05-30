@@ -254,6 +254,24 @@ def test_heuristic_mapping_routes_chip_csv_folder_to_hardware(tmp_path, monkeypa
     assert challenge["files"] == sorted([str(chip), str(table)])
 
 
+def test_heuristic_mapping_routes_godot_bundle_to_reverse(tmp_path, monkeypatch):
+    challenge_dir = tmp_path / "rev_gameloader"
+    challenge_dir.mkdir()
+    exe = challenge_dir / "Platformer 2D.exe"
+    pck = challenge_dir / "Platformer 2D.pck"
+    exe.write_bytes(b"MZ placeholder")
+    pck.write_bytes(b"GDPC placeholder")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Investigate this compromised game. Files are in rev_gameloader",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "reverse"
+    assert challenge["files"] == sorted([str(exe), str(pck)])
+
+
 def test_merge_heuristic_context_preserves_hardware_category():
     from ask import _merge_heuristic_context
 

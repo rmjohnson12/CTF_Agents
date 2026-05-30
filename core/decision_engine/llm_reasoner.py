@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
@@ -489,5 +490,8 @@ class LLMReasoner:
         return (
             challenge.get("category") == "hardware"
             or (has_csv and has_image)
-            or any(word in text for word in ["hardware", "chip", "logic", "circuit", "gate"])
+            or any(
+                re.search(r"\b" + re.escape(word) + r"\b", text)
+                for word in ["hardware", "chip", "logic", "circuit", "gate"]
+            )
         )
