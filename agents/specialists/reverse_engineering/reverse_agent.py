@@ -1,27 +1,101 @@
 """
 Reverse Engineering Specialist Agent
 
-Specialized agent for binary and source code analysis.
+Handles both source-code analysis challenges (Python/C constraint solving)
+and binary reversing challenges (ELF + encrypted-output patterns).
 """
 
+import ctypes
 import logging
-from typing import Dict, Any, List, Optional
+import os
+import re
+import struct
+import subprocess
+from typing import Any, Dict, List, Optional
 
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
+from core.utils.flag_utils import find_first_flag
+from tools.common.elf_utils import is_elf_binary
 from tools.common.python_tool import PythonTool
-import re
-import sys
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# glibc rand() reimplementation
+# ---------------------------------------------------------------------------
+# glibc uses a degree-31 LFSR with a 310-call warmup after srand().
+# macOS libc has a different algorithm so we can't use ctypes directly.
+
+_DEG_3 = 31
+_SEP_3 = 3
+
+
+def _glibc_srand(seed: int):
+    """Return (state, fptr, rptr) after seeding glibc's rand()."""
+    state = [0] * _DEG_3
+    state[0] = int(seed) & 0xFFFFFFFF
+    if state[0] == 0:
+        state[0] = 1
+    word = state[0]
+    for i in range(1, _DEG_3):
+        word = (word % 127773) * 16807 - (word // 127773) * 2836
+        if word < 0:
+            word += 2147483647
+        state[i] = word
+    fptr, rptr = _SEP_3, 0
+    # warmup
+    for _ in range(10 * _DEG_3):
+        fptr, rptr = _glibc_rand_step(state, fptr, rptr)
+    return state, fptr, rptr
+
+
+def _glibc_rand_step(state: list, fptr: int, rptr: int):
+    """Advance one step and return (new_fptr, new_rptr). Mutates state."""
+    val = ctypes.c_int32(state[fptr] + state[rptr]).value
+    state[fptr] = val
+    fptr = (fptr + 1) % _DEG_3
+    rptr = (rptr + 1) % _DEG_3
+    return fptr, rptr
+
+
+def _glibc_rand(state: list, fptr: int, rptr: int):
+    """Return (rand_value, new_fptr, new_rptr)."""
+    val = ctypes.c_int32(state[fptr] + state[rptr]).value
+    state[fptr] = val
+    result = (val >> 1) & 0x7FFFFFFF
+    fptr = (fptr + 1) % _DEG_3
+    rptr = (rptr + 1) % _DEG_3
+    return result, fptr, rptr
+
+
+def _ror8(b: int, n: int) -> int:
+    n &= 7
+    return ((b >> n) | (b << (8 - n))) & 0xFF
+
+
+# ---------------------------------------------------------------------------
+# Agent
+# ---------------------------------------------------------------------------
 
 class ReverseEngineeringAgent(BaseAgent):
     """
     Specialist agent for reverse engineering challenges.
-    Handles source code analysis and binary reversing.
+
+    Handles:
+    - Source code analysis (Python/C constraint solving)
+    - ELF + encrypted-file ransomware-style challenges:
+        * Reads the seed from the first 4 bytes of the .enc file
+        * Simulates glibc rand() to reverse XOR+ROL encryption
+    - LLM fallback for complex logic when a model is configured
     """
 
-    def __init__(self, agent_id: str = "reverse_agent", reasoner: Optional[LLMReasoner] = None, python_tool: Optional[PythonTool] = None):
+    def __init__(
+        self,
+        agent_id: str = "reverse_agent",
+        reasoner: Optional[LLMReasoner] = None,
+        python_tool: Optional[PythonTool] = None,
+    ):
         super().__init__(agent_id, AgentType.SPECIALIST)
         self.reasoner = reasoner or LLMReasoner()
         self.python_tool = python_tool or PythonTool()
@@ -31,124 +105,311 @@ class ReverseEngineeringAgent(BaseAgent):
             "python_analysis",
             "decompilation",
             "static_analysis",
-            "verification"
+            "verification",
+            "encryptor_reversal",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
         description = challenge.get("description", "").lower()
         files = challenge.get("files", [])
-        
-        indicators = ["reverse", "analyze", "source code", "authenticate the program"]
-        is_reverse = any(f.endswith('.py') or f.endswith('.exe') or f.endswith('.bin') for f in files) or \
-                     any(word in description for word in indicators)
-        
-        detected = [k for k in indicators if k in description]
-        confidence = 0.9 if is_reverse or challenge.get("category") == "reverse" else 0.2
+        tags = " ".join(challenge.get("tags", [])).lower()
+
+        has_binary = any(is_elf_binary(f) for f in files)
+        has_enc = any(f.endswith(".enc") or f.endswith(".encrypted") for f in files)
+        has_source = any(f.endswith((".py", ".c", ".cpp", ".js")) for f in files)
+
+        indicators = ["reverse", "analyze", "source code", "authenticate", "encrypt", "ransomware"]
+        keyword_hit = any(w in description or w in tags for w in indicators)
+
+        can_handle = has_binary or has_enc or has_source or keyword_hit or \
+                     challenge.get("category") in ("reverse", "rev", "reversing")
+
+        detected = [w for w in indicators if w in description or w in tags]
+        if has_binary:
+            detected.append("elf_binary")
+        if has_enc:
+            detected.append("enc_file")
 
         return {
             "agent_id": self.agent_id,
-            "can_handle": is_reverse or challenge.get("category") == "reverse",
-            "confidence": confidence,
+            "can_handle": can_handle,
+            "confidence": 0.9 if can_handle else 0.2,
             "approach": self._plan_approach(detected),
         }
 
     def solve_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
-        steps = []
+        steps: List[str] = []
         files = challenge.get("files", [])
-        
+
         if not files:
-            return {"status": "failed", "steps": ["No files provided for analysis"]}
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "failed",
+                "flag": None,
+                "steps": ["No files provided for analysis"],
+            }
 
+        binaries = [f for f in files if is_elf_binary(f)]
+        enc_files = [f for f in files if f.endswith(".enc") or f.endswith(".encrypted")]
+        source_files = [f for f in files if f.endswith((".py", ".c", ".cpp", ".js"))]
+
+        # --- Strategy 1: encryptor binary + .enc output ---
+        if binaries and enc_files:
+            result = self._try_encryptor_reversal(binaries[0], enc_files[0], challenge, steps)
+            if result:
+                return result
+
+        # --- Strategy 2: source code constraint solving ---
+        for file_path in source_files:
+            result = self._try_source_analysis(file_path, challenge, steps)
+            if result:
+                return result
+
+        # --- Strategy 3: strings + LLM on any remaining file ---
         for file_path in files:
-            steps.append(f"Analyzing file: {file_path}")
+            steps.append(f"Running strings on {file_path}")
             try:
-                with open(file_path, "r") as f:
-                    content = f.read()
-                
-                steps.append("File content read successfully.")
-                
-                # Logic Analysis
-                target_sum_match = re.search(r"builder\s*==\s*(\d+)", content)
-                length_match = re.search(r"len\(password\)\s*[=!]=\s*(\d+)", content)
-                # Improved regex for index access patterns: password[idx], password[idx], etc.
-                fixed_char_match = re.search(r"password\[(\d+)\]\s*==\s*(\d+)", content) or \
-                                   re.search(r"ord\(password\[(\d+)\]\)\s*==\s*(\d+)", content)
-
-                if target_sum_match and length_match:
-                    target_sum = int(target_sum_match.group(1))
-                    target_len = int(length_match.group(1))
-                    
-                    steps.append(f"1. Extracted Constraints: Sum={target_sum}, Length={target_len}")
-                    
-                    fixed_idx = None
-                    fixed_val = None
-                    if fixed_char_match:
-                        fixed_idx = int(fixed_char_match.group(1))
-                        fixed_val = int(fixed_char_match.group(2))
-                        steps.append(f"2. Fixed Character: Index {fixed_idx} must be '{chr(fixed_val)}' (ASCII {fixed_val})")
-
-                    # Solve
-                    steps.append("3. Calculating balanced ASCII distribution...")
-                    candidate = self._solve_sum_constraint(target_sum, target_len, fixed_idx, fixed_val)
-                    if candidate:
-                        steps.append(f"4. Candidate Derived: {candidate}")
-                        steps.append(f"5. Verifying candidate by executing {file_path}...")
-                        
-                        res = self.python_tool.execute([file_path, candidate], timeout_s=5)
-                        if "correct" in res.stdout.lower():
-                            steps.append("✅ Verification SUCCESS: Program returned 'correct'.")
-                            return {
-                                "challenge_id": challenge.get("id"),
-                                "agent_id": self.agent_id,
-                                "status": "solved",
-                                "flag": candidate,
-                                "steps": steps
-                            }
-                        else:
-                            steps.append(f"❌ Verification FAILED: Program returned '{res.stdout.strip()}'.")
-                
-                if not self.reasoner.is_available:
-                    steps.append("LLM not available for complex code analysis.")
-                    continue
-
-                # Fallback to LLM analysis for non-trivial logic
-                steps.append("Requesting logic analysis from LLM...")
-                analysis_prompt = f"Analyze this code and find a valid input: \n{content}"
-                result = self.reasoner._call_llm(analysis_prompt).strip()
-                if result:
-                    steps.append(f"LLM suggested input: {result}. Verifying...")
-                    res = self.python_tool.execute([file_path, result], timeout_s=5)
-                    if "correct" in res.stdout.lower():
-                        return {"challenge_id": challenge.get("id"), "agent_id": self.agent_id, "status": "solved", "flag": result, "steps": steps}
-
+                r = subprocess.run(
+                    ["strings", "-n", "6", file_path],
+                    capture_output=True, timeout=15,
+                )
+                printable = r.stdout.decode("utf-8", errors="replace")
+                flag = find_first_flag(printable)
+                if flag:
+                    steps.append(f"Flag found in strings output: {flag}")
+                    return self._result(challenge, "solved", steps, flag=flag)
+                if self.reasoner.is_available and printable.strip():
+                    steps.append("Requesting LLM analysis of strings output...")
+                    prompt = (
+                        f"Binary strings output from a CTF reverse engineering challenge "
+                        f"(description: {challenge.get('description', '')[:300]}):\n\n"
+                        f"{printable[:3000]}\n\n"
+                        "Identify any encryption algorithm, keys, or flags."
+                    )
+                    try:
+                        advice = self.reasoner._call_llm(prompt)
+                        steps.append(f"LLM analysis: {advice[:500]}")
+                        flag = find_first_flag(advice)
+                        if flag:
+                            return self._result(challenge, "solved", steps, flag=flag)
+                    except Exception as exc:
+                        steps.append(f"LLM unavailable: {exc}")
             except Exception as exc:
-                logger.warning("Error during reverse analysis of %s: %s", file_path, exc)
-                steps.append(f"Error during analysis: {exc}")
+                logger.debug("strings failed on %s: %s", file_path, exc)
+                steps.append(f"strings error on {file_path}: {exc}")
 
-        return {"challenge_id": challenge.get("id"), "agent_id": self.agent_id, "status": "attempted", "steps": steps}
+        return self._result(challenge, "attempted", steps)
 
-    def _solve_sum_constraint(self, target_sum, length, fixed_idx=None, fixed_val=None) -> Optional[str]:
-        """Balanced solver: calculates average ASCII and distributes remainder."""
+    # ------------------------------------------------------------------
+    # Strategy 1: encryptor reversal
+    # ------------------------------------------------------------------
+
+    def _try_encryptor_reversal(
+        self,
+        binary: str,
+        enc_file: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        steps.append(f"Detected encryptor binary ({os.path.basename(binary)}) + encrypted file ({os.path.basename(enc_file)})")
+
+        raw = open(enc_file, "rb").read()
+        if len(raw) < 5:
+            steps.append("Encrypted file too small to analyse")
+            return None
+
+        # Inspect binary for srand/rand/time usage
+        try:
+            sym_out = subprocess.run(
+                ["strings", "-n", "4", binary], capture_output=True, timeout=10
+            ).stdout.decode("utf-8", errors="replace")
+        except Exception:
+            sym_out = ""
+
+        uses_srand = "srand" in sym_out
+        uses_time = "time" in sym_out
+        uses_rand = "rand" in sym_out
+        steps.append(
+            f"Binary imports: srand={'yes' if uses_srand else 'no'}, "
+            f"rand={'yes' if uses_rand else 'no'}, "
+            f"time={'yes' if uses_time else 'no'}"
+        )
+
+        # --- Pattern: seed prepended to encrypted file (4-byte LE uint32) ---
+        if uses_srand and uses_rand:
+            seed_le = struct.unpack("<I", raw[:4])[0]
+            enc_data = raw[4:]
+            steps.append(f"Seed from first 4 bytes of encrypted file: {seed_le} (0x{seed_le:08x})")
+
+            # Try XOR+ROL (the simpleencryptor pattern)
+            flag = self._decrypt_xor_rol(seed_le, enc_data, steps)
+            if flag:
+                return self._result(challenge, "solved", steps, flag=flag)
+
+            # Try plain XOR (simpler variant)
+            flag = self._decrypt_xor_only(seed_le, enc_data, steps)
+            if flag:
+                return self._result(challenge, "solved", steps, flag=flag)
+
+        # --- Fallback: brute-force seed from file mtime ---
+        if uses_srand and uses_rand and uses_time:
+            steps.append("Brute-forcing seed from file mtime ± 120 seconds...")
+            mtime = int(os.stat(enc_file).st_mtime)
+            enc_data = raw  # treat whole file as ciphertext if seed isn't prepended
+
+            for seed in range(mtime - 120, mtime + 121):
+                flag = self._decrypt_xor_rol(seed, enc_data, steps=[])
+                if flag:
+                    steps.append(f"Seed found via mtime brute-force: {seed}")
+                    steps.append(f"Flag: {flag}")
+                    return self._result(challenge, "solved", steps, flag=flag)
+
+        return None
+
+    def _decrypt_xor_rol(self, seed: int, data: bytes, steps: List[str]) -> Optional[str]:
+        """Reverse XOR+ROL encryption (glibc rand, 2 rand() calls per byte)."""
+        try:
+            state, fptr, rptr = _glibc_srand(seed)
+            out = bytearray(len(data))
+            for i, b in enumerate(data):
+                r1, fptr, rptr = _glibc_rand(state, fptr, rptr)
+                r2, fptr, rptr = _glibc_rand(state, fptr, rptr)
+                k1 = r1 & 0xFF
+                k2 = r2 & 7
+                out[i] = _ror8(b, k2) ^ k1
+            plaintext = out.decode("utf-8", errors="replace")
+            flag = find_first_flag(plaintext)
+            if flag:
+                steps.append(f"XOR+ROL decryption succeeded: {flag}")
+            return flag
+        except Exception as exc:
+            logger.debug("XOR+ROL decryption failed: %s", exc)
+            return None
+
+    def _decrypt_xor_only(self, seed: int, data: bytes, steps: List[str]) -> Optional[str]:
+        """Reverse plain XOR encryption (glibc rand, 1 rand() call per byte)."""
+        try:
+            state, fptr, rptr = _glibc_srand(seed)
+            out = bytearray(len(data))
+            for i, b in enumerate(data):
+                r, fptr, rptr = _glibc_rand(state, fptr, rptr)
+                out[i] = b ^ (r & 0xFF)
+            plaintext = out.decode("utf-8", errors="replace")
+            flag = find_first_flag(plaintext)
+            if flag:
+                steps.append(f"XOR-only decryption succeeded: {flag}")
+            return flag
+        except Exception as exc:
+            logger.debug("XOR-only decryption failed: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Strategy 2: source code analysis
+    # ------------------------------------------------------------------
+
+    def _try_source_analysis(
+        self,
+        file_path: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        steps.append(f"Analyzing source file: {file_path}")
+        try:
+            with open(file_path, "r", errors="replace") as f:
+                content = f.read()
+        except Exception as exc:
+            steps.append(f"Could not read {file_path}: {exc}")
+            return None
+
+        steps.append("File read successfully.")
+
+        target_sum_match = re.search(r"builder\s*==\s*(\d+)", content)
+        length_match = re.search(r"len\(password\)\s*[=!]=\s*(\d+)", content)
+        fixed_char_match = (
+            re.search(r"password\[(\d+)\]\s*==\s*(\d+)", content)
+            or re.search(r"ord\(password\[(\d+)\]\)\s*==\s*(\d+)", content)
+        )
+
+        if target_sum_match and length_match:
+            target_sum = int(target_sum_match.group(1))
+            target_len = int(length_match.group(1))
+            steps.append(f"Constraints: sum={target_sum}, length={target_len}")
+
+            fixed_idx = fixed_val = None
+            if fixed_char_match:
+                fixed_idx = int(fixed_char_match.group(1))
+                fixed_val = int(fixed_char_match.group(2))
+                steps.append(f"Fixed char: index {fixed_idx} = '{chr(fixed_val)}'")
+
+            candidate = self._solve_sum_constraint(target_sum, target_len, fixed_idx, fixed_val)
+            if candidate:
+                steps.append(f"Candidate: {candidate!r}")
+                res = self.python_tool.execute([file_path, candidate], timeout_s=5)
+                if "correct" in res.stdout.lower():
+                    steps.append("Verification succeeded.")
+                    return self._result(challenge, "solved", steps, flag=candidate)
+                steps.append(f"Verification failed: {res.stdout.strip()!r}")
+
+        if not self.reasoner.is_available:
+            steps.append("LLM not available for complex code analysis.")
+            return None
+
+        steps.append("Requesting LLM analysis...")
+        try:
+            result = self.reasoner._call_llm(
+                f"Analyze this code and find a valid input:\n{content}"
+            ).strip()
+            if result:
+                steps.append(f"LLM suggested: {result!r}")
+                res = self.python_tool.execute([file_path, result], timeout_s=5)
+                if "correct" in res.stdout.lower():
+                    return self._result(challenge, "solved", steps, flag=result)
+        except Exception as exc:
+            steps.append(f"LLM error: {exc}")
+
+        return None
+
+    def _solve_sum_constraint(
+        self, target_sum: int, length: int,
+        fixed_idx: Optional[int], fixed_val: Optional[int],
+    ) -> Optional[str]:
         slots = length - (1 if fixed_idx is not None else 0)
-        remaining_sum = target_sum - (fixed_val if fixed_val is not None else 0)
-        
-        if slots <= 0: return None
-        
-        avg_val = remaining_sum // slots
-        remainder = remaining_sum % slots
-        
-        # Build the password list
-        password = [chr(avg_val)] * length
+        remaining = target_sum - (fixed_val or 0)
+        if slots <= 0:
+            return None
+        avg = remaining // slots
+        remainder = remaining % slots
+        password = [chr(avg)] * length
         if fixed_idx is not None:
             password[fixed_idx] = chr(fixed_val)
-            
-        # Distribute the remainder to the first available slot
         for i in range(length):
-            if i == fixed_idx: continue
+            if i == fixed_idx:
+                continue
             password[i] = chr(ord(password[i]) + remainder)
             break
-            
         return "".join(password)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _result(
+        challenge: Dict[str, Any],
+        status: str,
+        steps: List[str],
+        flag: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "challenge_id": challenge.get("id"),
+            "agent_id": "reverse_agent",
+            "status": status,
+            "steps": steps,
+        }
+        if flag is not None:
+            out["flag"] = flag
+        return out
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities

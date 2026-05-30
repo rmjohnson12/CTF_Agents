@@ -86,21 +86,28 @@ def _merge_heuristic_context(
     if not challenge.get("url") and heuristic.get("url"):
         challenge["url"] = heuristic["url"]
 
-    if not challenge.get("files") and heuristic.get("files"):
-        challenge["files"] = heuristic["files"]
+    # Heuristic files are guaranteed to exist on disk; LLM files may be hallucinated.
+    # Always prefer real files the heuristic found from the user's paths.
+    if heuristic.get("files"):
+        llm_files = [f for f in (challenge.get("files") or [])
+                     if os.path.exists(_normalize_path(f))]
+        challenge["files"] = sorted(set(heuristic["files"] + llm_files))
+    elif not challenge.get("files"):
+        challenge["files"] = []
 
-    if (
+    # When the heuristic derived a specific category from real files on disk,
+    # trust it over the LLM — the LLM can misclassify based on keywords alone.
+    _HEURISTIC_WINS = {"reverse", "pwn", "hardware", "forensics"}
+    heuristic_cat = heuristic.get("category", "")
+    llm_cat = challenge.get("category", "")
+    if heuristic_cat in _HEURISTIC_WINS and heuristic.get("files"):
+        challenge["category"] = heuristic_cat
+    elif (
         heuristic.get("url")
-        and heuristic.get("category") == "web"
-        and challenge.get("category") in {None, "", "misc", "unknown"}
+        and heuristic_cat == "web"
+        and llm_cat in {None, "", "misc", "unknown"}
     ):
         challenge["category"] = "web"
-
-    if (
-        heuristic.get("category") == "hardware"
-        and challenge.get("category") in {None, "", "misc", "unknown", "reverse"}
-    ):
-        challenge["category"] = "hardware"
 
     description = challenge.get("description") or ""
     heuristic_description = heuristic.get("description") or ""
@@ -260,6 +267,15 @@ def _heuristic_challenge_from_instruction(
         or any(term in lowered_input for term in ["forensics", "artifact"])
     ):
         category = "forensics"
+    elif (
+        # Binary + encrypted output = encryptor reversing, not pure crypto
+        any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
+        and any(f.lower().endswith(('.enc', '.encrypted', '.bin', '.dat')) for f in challenge_files)
+    ) or (
+        any(term in lowered_input for term in ["ransomware", "encryption program", "reverse", "decompile", "disassemble", "crackme"])
+        and any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
+    ):
+        category = "reverse"
     elif challenge_files and any(term in lowered_input for term in strong_crypto_terms):
         category = "crypto"
     elif url or any(term in lowered_input for term in web_terms):
@@ -414,12 +430,17 @@ def main():
                 challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
             else:
                 # Step 1: Use LLM to convert natural language to challenge JSON
+                actual_files = heuristic.get("files") or []
+                files_hint = (
+                    f"\nActual files found on disk (use EXACTLY these paths, do not invent others): {actual_files}"
+                    if actual_files else ""
+                )
                 prompt = f"""
 Convert the following natural language security instruction into a standard CTF challenge JSON object.
 Instruction: {user_input}
 
 Current working directory: {os.getcwd()}
-{system_ctx}
+{system_ctx}{files_hint}
 
 Return ONLY the JSON object.
 Example shape:
@@ -431,7 +452,7 @@ Example shape:
   "files": ["path/to/file"],
   "url": "..."
 }}
-Do NOT invent, guess, or hallucinate a url (like localhost:8080) if one is not clearly specified in the instruction. If there is no url, omit the field.
+Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) if one is not clearly specified in the instruction. If there is no url, omit the field.
 """
                 try:
                     if coordinator.reasoner.client is None:
