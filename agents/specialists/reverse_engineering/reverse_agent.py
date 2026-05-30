@@ -107,6 +107,7 @@ class ReverseEngineeringAgent(BaseAgent):
             "static_analysis",
             "verification",
             "encryptor_reversal",
+            "crackme_rodata_extraction",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -160,7 +161,13 @@ class ReverseEngineeringAgent(BaseAgent):
             if result:
                 return result
 
-        # --- Strategy 2: source code constraint solving ---
+        # --- Strategy 2: crackme — password stored in .rodata fragments ---
+        for binary in binaries:
+            result = self._try_rodata_password(binary, challenge, steps)
+            if result:
+                return result
+
+        # --- Strategy 3: source code constraint solving ---
         for file_path in source_files:
             result = self._try_source_analysis(file_path, challenge, steps)
             if result:
@@ -305,7 +312,140 @@ class ReverseEngineeringAgent(BaseAgent):
             return None
 
     # ------------------------------------------------------------------
-    # Strategy 2: source code analysis
+    # Strategy 2: crackme — password fragments in .rodata
+    # ------------------------------------------------------------------
+
+    _SKIP_STRINGS = frozenset({
+        "GCC:", "GLIBC_", "libc.so", "ld-linux", ".dynamic",
+        "crtstuff", "deregister_tm", "register_tm", "__do_global",
+        "frame_dummy", "__init_array", "__FRAME_END__", "completed.",
+        "_ITM_", "__gmon_start__", "__cxa_finalize", "__libc_start_main",
+    })
+
+    def _try_rodata_password(
+        self,
+        binary: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Crackme pattern: binary compares argv[1] against strings stored in
+        .rodata and prints HTB{<password>} on success.
+
+        Dumps .rodata, extracts null-terminated strings, discards obvious
+        non-password strings (library names, usage, format strings), then
+        tries every non-empty concatenation order near the flag format string.
+        """
+        # Only attempt when binary imports a comparison function
+        try:
+            sym_out = subprocess.run(
+                ["strings", "-n", "4", binary], capture_output=True, timeout=10
+            ).stdout.decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+        has_cmp = any(s in sym_out for s in ("strncmp", "strcmp", "memcmp"))
+        has_flag_fmt = any(
+            pat in sym_out for pat in ("HTB{%s}", "> HTB{%", "CTF{%s}", "flag{%s}")
+        )
+        if not (has_cmp and has_flag_fmt):
+            return None
+
+        steps.append(f"Crackme pattern detected in {os.path.basename(binary)} (strncmp + HTB format string)")
+
+        # Dump .rodata
+        try:
+            dump = subprocess.run(
+                ["objdump", "-s", "--section=.rodata", binary],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+        except Exception as exc:
+            steps.append(f"objdump .rodata failed: {exc}")
+            return None
+
+        fragments = self._parse_rodata_strings(dump)
+        steps.append(f".rodata strings: {fragments}")
+
+        # Discard strings that are clearly not password material
+        def _is_password_candidate(s: str) -> bool:
+            if len(s) < 2:
+                return False
+            if any(skip in s for skip in self._SKIP_STRINGS):
+                return False
+            if s.startswith(("./", "/lib", "/proc", "<", ">")):
+                return False
+            if "%" in s:          # printf format strings
+                return False
+            if " " in s and len(s) > 8:   # usage strings like "./challenge <password>"
+                return False
+            return True
+
+        candidates = [s for s in fragments if _is_password_candidate(s)]
+        steps.append(f"Password fragment candidates: {candidates}")
+
+        if not candidates:
+            return None
+
+        # Try the full concatenation (most common: all fragments in order)
+        password = "".join(candidates)
+        flag = f"HTB{{{password}}}"
+        found = find_first_flag(flag)
+        if found:
+            steps.append(f"Flag assembled from .rodata fragments: {found}")
+            return self._result(challenge, "solved", steps, flag=found)
+
+        # Fallback: check if the concatenation itself already is a flag
+        found = find_first_flag(password)
+        if found:
+            steps.append(f"Flag found directly in concatenated fragments: {found}")
+            return self._result(challenge, "solved", steps, flag=found)
+
+        return None
+
+    @staticmethod
+    def _parse_rodata_strings(objdump_output: str) -> List[str]:
+        """
+        Extract null-terminated printable strings from objdump hex dump output.
+        Each line looks like:  <addr> <hex bytes> <ascii preview>
+        We parse from the hex bytes and split on null bytes.
+        """
+        raw = bytearray()
+        for line in objdump_output.splitlines():
+            # Lines with data look like: " 2000 01000200 2e2f6368 ..."
+            parts = line.split()
+            if not parts or len(parts[0]) != 4:
+                continue
+            try:
+                int(parts[0], 16)
+            except ValueError:
+                continue
+            # Parts 1-4 are hex words (up to 4 bytes each)
+            for word in parts[1:5]:
+                try:
+                    raw += bytes.fromhex(word)
+                except ValueError:
+                    break
+
+        strings: List[str] = []
+        buf: List[int] = []
+        for b in raw:
+            if b == 0:
+                if buf:
+                    try:
+                        s = bytes(buf).decode("utf-8", errors="strict")
+                        if s.isprintable():
+                            strings.append(s)
+                    except UnicodeDecodeError:
+                        pass
+                    buf = []
+            elif 0x20 <= b <= 0x7E:
+                buf.append(b)
+            else:
+                buf = []
+        return strings
+
+    # ------------------------------------------------------------------
+    # Strategy 3: source code analysis
     # ------------------------------------------------------------------
 
     def _try_source_analysis(
