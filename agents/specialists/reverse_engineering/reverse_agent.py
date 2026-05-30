@@ -6,9 +6,11 @@ and binary reversing challenges (ELF + encrypted-output patterns).
 """
 
 import ctypes
+import io
 import logging
 import os
 import re
+import shutil
 import struct
 import subprocess
 from typing import Any, Dict, List, Optional
@@ -176,7 +178,14 @@ class ReverseEngineeringAgent(BaseAgent):
             if result:
                 return result
 
-        # --- Strategy 4: source code constraint solving ---
+        # --- Strategy 4: .NET assembly with encrypted embedded resource ---
+        for binary in binaries:
+            if is_pe_binary(binary):
+                result = self._try_dotnet_resource(binary, challenge, steps)
+                if result:
+                    return result
+
+        # --- Strategy 5: source code constraint solving ---
         for file_path in source_files:
             result = self._try_source_analysis(file_path, challenge, steps)
             if result:
@@ -319,6 +328,201 @@ class ReverseEngineeringAgent(BaseAgent):
         except Exception as exc:
             logger.debug("XOR-only decryption failed: %s", exc)
             return None
+
+    # ------------------------------------------------------------------
+    # Strategy 4: .NET assembly — encrypted embedded resource
+    # ------------------------------------------------------------------
+
+    _ILSPYCMD_PATHS = [
+        "ilspycmd",
+        os.path.expanduser("~/.dotnet/tools/ilspycmd"),
+    ]
+
+    def _find_ilspycmd(self) -> Optional[str]:
+        for p in self._ILSPYCMD_PATHS:
+            if shutil.which(p) or os.path.isfile(p):
+                return p
+        return None
+
+    def _try_dotnet_resource(
+        self,
+        binary: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        .NET assemblies can embed an AES-CBC encrypted resource that stores all
+        strings (BinaryReader format, UTF-16LE).  Pattern:
+          - PE is a Mono/.NET assembly (check strings for 'v4.0.30319' or '#Strings')
+          - Resource blob: [32B key][16B IV][ciphertext]
+          - Strings format: 7-bit varint length + UTF-16LE data
+        Extracts every string and searches for a valid flag.
+        """
+        try:
+            hdr = subprocess.run(
+                ["strings", "-n", "6", binary],
+                capture_output=True, timeout=10,
+            ).stdout.decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+        # Quick fingerprint: .NET metadata magic
+        if not any(s in hdr for s in ("v4.0.30319", "#Strings", "mscorlib", "BSJB")):
+            return None
+
+        steps.append(f"Detected .NET assembly: {os.path.basename(binary)}")
+
+        # Parse PE to find the managed resource blob
+        flag = self._extract_dotnet_flag(binary, steps)
+        if flag:
+            return self._result(challenge, "solved", steps, flag=flag)
+
+        # Fallback: decompile with ilspycmd and scan decompiled source for flags
+        ilspy = self._find_ilspycmd()
+        if not ilspy:
+            steps.append("ilspycmd not found; install with: dotnet tool install -g ilspycmd")
+            return None
+
+        dotnet_root = os.environ.get("DOTNET_ROOT", "/opt/homebrew/opt/dotnet/libexec")
+        env = {**os.environ, "DOTNET_ROOT": dotnet_root}
+        try:
+            r = subprocess.run(
+                [ilspy, binary],
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+            src = r.stdout
+        except Exception as exc:
+            steps.append(f"ilspycmd failed: {exc}")
+            return None
+
+        flag = find_first_flag(src)
+        if flag:
+            steps.append(f"Flag found in decompiled source: {flag}")
+            return self._result(challenge, "solved", steps, flag=flag)
+
+        steps.append("No flag found in decompiled .NET source")
+        return None
+
+    def _extract_dotnet_flag(self, binary: str, steps: List[str]) -> Optional[str]:
+        """
+        Directly parse the PE/CLI structure to extract and decrypt the managed
+        resource, then read all BinaryReader strings looking for a flag.
+        """
+        try:
+            data = open(binary, "rb").read()
+        except Exception:
+            return None
+
+        # Locate section table
+        pe_off = struct.unpack_from("<I", data, 0x3C)[0]
+        opt_off = pe_off + 24
+        magic = struct.unpack_from("<H", data, opt_off)[0]
+        opt_size = struct.unpack_from("<H", data, pe_off + 20)[0]
+        section_count = struct.unpack_from("<H", data, pe_off + 6)[0]
+        sect_off = opt_off + opt_size
+
+        sections = []
+        for i in range(section_count):
+            base = sect_off + i * 40
+            vaddr   = struct.unpack_from("<I", data, base + 12)[0]
+            rawsize = struct.unpack_from("<I", data, base + 16)[0]
+            rawoff  = struct.unpack_from("<I", data, base + 20)[0]
+            sections.append((vaddr, rawoff, rawsize))
+
+        def rva2off(rva: int) -> Optional[int]:
+            for vaddr, rawoff, rawsize in sections:
+                if vaddr <= rva < vaddr + rawsize * 4:
+                    return rawoff + (rva - vaddr)
+            return None
+
+        # CLI header: data directory 14 (PE32: opt+208, PE32+: opt+224)
+        clr_rva_off = opt_off + (208 if magic == 0x10B else 224)
+        clr_rva = struct.unpack_from("<I", data, clr_rva_off)[0]
+        cli_off = rva2off(clr_rva)
+        if not cli_off:
+            return None
+
+        res_rva  = struct.unpack_from("<I", data, cli_off + 24)[0]
+        res_size = struct.unpack_from("<I", data, cli_off + 28)[0]
+        res_off  = rva2off(res_rva)
+        if not res_off or res_size < 64:
+            return None
+
+        # Resource blob: 4-byte length prefix then [key][IV][ciphertext]
+        blob_len = struct.unpack_from("<I", data, res_off)[0]
+        blob = data[res_off + 4 : res_off + 4 + blob_len]
+        if len(blob) < 64:
+            return None
+
+        # Try AES-256-CBC (32-byte key + 16-byte IV)
+        try:
+            from Crypto.Cipher import AES
+            key, iv, ct = blob[:32], blob[32:48], blob[48:]
+            pt = AES.new(key, AES.MODE_CBC, iv).decrypt(ct)
+        except ImportError:
+            steps.append("pycryptodome not installed; cannot decrypt .NET resource")
+            return None
+        except Exception:
+            return None
+
+        steps.append("Decrypted .NET embedded resource (AES-256-CBC)")
+
+        # Read all BinaryReader strings (7-bit varint length + UTF-16LE)
+        buf = io.BytesIO(pt)
+        strings: List[str] = []
+        for _ in range(64):
+            try:
+                shift = length = 0
+                while True:
+                    b = buf.read(1)
+                    if not b:
+                        break
+                    bv = b[0]
+                    length |= (bv & 0x7F) << shift
+                    if not (bv & 0x80):
+                        break
+                    shift += 7
+                else:
+                    continue
+                if length > 4096:
+                    break
+                raw = buf.read(length)
+                strings.append(raw.decode("utf-16-le", errors="replace"))
+            except Exception:
+                break
+
+        # Check each string individually, then all pairs, then all triples.
+        # Collect ALL candidates and return the shortest — CTF flag bodies are
+        # rarely more than 50 characters; the short one is almost always correct.
+        candidates: List[str] = []
+        n = len(strings)
+
+        for s in strings:
+            flag = find_first_flag(s)
+            if flag:
+                candidates.append(flag)
+
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    flag = find_first_flag(strings[i] + strings[j])
+                    if flag:
+                        candidates.append(flag)
+
+        for i in range(n):
+            for j in range(n):
+                for k in range(n):
+                    if len({i, j, k}) == 3:
+                        flag = find_first_flag(strings[i] + strings[j] + strings[k])
+                        if flag:
+                            candidates.append(flag)
+
+        if candidates:
+            best = min(candidates, key=len)
+            steps.append(f".NET resource flag (shortest of {len(candidates)} candidates): {best}")
+            return best
+
+        return None
 
     # ------------------------------------------------------------------
     # Pre-processing: UPX unpacking

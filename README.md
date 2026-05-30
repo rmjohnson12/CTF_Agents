@@ -11,13 +11,15 @@ the solving loop.
 
 ## What It Can Work On
 
-- Reverse engineering tasks involving Python files, ELF binaries, and
-  constraint-style password checks. The reverse agent automatically unpacks
-  UPX-compressed binaries, reverses glibc `rand()`-based XOR+ROL encryption
+- Reverse engineering tasks involving Python files, ELF binaries, and Windows
+  PE/EXE files. The reverse agent automatically unpacks UPX-compressed
+  binaries (ELF and PE), reverses glibc `rand()`-based XOR+ROL encryption
   (recovering the seed from the encrypted file), extracts crackme passwords
-  from `.rodata` fragments, decodes numeric-encoded flags (char_code × N
-  stored as integer sequences), and handles anti-decompilation patterns such
-  as `ud2`/SIGILL signal-handler tricks.
+  from `.rodata`/`.rdata` fragments, decodes numeric-encoded flags (char_code
+  × N stored as integer sequences), handles anti-decompilation patterns such
+  as `ud2`/SIGILL signal-handler tricks, and decrypts obfuscated .NET
+  assemblies by extracting and AES-decrypting the embedded managed resource
+  then parsing the `BinaryReader` string table.
 - Cryptography and password-cracking tasks using hashes, encodings, wordlists,
   John the Ripper, and Hashcat.
 - Web challenges with browser snapshots, HTTP fetching, directory discovery,

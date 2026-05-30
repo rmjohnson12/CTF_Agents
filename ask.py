@@ -256,6 +256,9 @@ def _heuristic_challenge_from_instruction(
         )
     ):
         category = "hardware"
+    elif any(f.lower().endswith('.exe') for f in challenge_files):
+        # PE/Windows binaries are always reversing — never pwn or log
+        category = "reverse"
     elif any(term in lowered_input for term in log_terms):
         category = "log"
     elif (

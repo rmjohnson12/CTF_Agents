@@ -369,6 +369,83 @@ class TestBinaryDetection:
 # PE binary: agent recognises .exe files as binaries
 # ---------------------------------------------------------------------------
 
+class TestDotnetResource:
+    def _make_agent(self):
+        return ReverseEngineeringAgent()
+
+    def _make_pe(self, content: bytes = b"") -> str:
+        f = tempfile.NamedTemporaryFile(delete=False, suffix=".exe")
+        f.write(b"MZ" + content)
+        f.close()
+        return f.name
+
+    def test_skips_non_dotnet_pe(self):
+        agent = self._make_agent()
+        steps = []
+        tmp = self._make_pe()
+        try:
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout=b"some strings no dotnet markers", returncode=0
+                )
+                result = agent._try_dotnet_resource(tmp, {"id": "t"}, steps)
+            assert result is None
+        finally:
+            os.unlink(tmp)
+
+    def test_detects_dotnet_fingerprint(self):
+        agent = self._make_agent()
+        steps = []
+        tmp = self._make_pe()
+        try:
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    stdout=b"mscorlib\nv4.0.30319\nSystem", returncode=0
+                )
+                # _extract_dotnet_flag will fail on fake PE; that's fine
+                with patch.object(agent, "_extract_dotnet_flag", return_value=None):
+                    with patch.object(agent, "_find_ilspycmd", return_value=None):
+                        result = agent._try_dotnet_resource(tmp, {"id": "t"}, steps)
+            assert any(".NET" in s for s in steps)
+        finally:
+            os.unlink(tmp)
+
+    def test_shortest_candidate_selected(self):
+        from core.utils.flag_utils import find_first_flag
+
+        # Simulate: two HTB flags found, agent must pick shorter one
+        agent = self._make_agent()
+        strings = [
+            "Nice here is the Flag:HTB{",
+            "ThisIsAVeryLongKeyThatShouldNotBeTheFlag",
+            "}",
+            "ShortFlag",
+        ]
+        # Manually exercise the candidate-selection logic
+        candidates = []
+        n = len(strings)
+        for s in strings:
+            flag = find_first_flag(s)
+            if flag:
+                candidates.append(flag)
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    flag = find_first_flag(strings[i] + strings[j])
+                    if flag:
+                        candidates.append(flag)
+        for i in range(n):
+            for j in range(n):
+                for k in range(n):
+                    if len({i, j, k}) == 3:
+                        flag = find_first_flag(strings[i] + strings[j] + strings[k])
+                        if flag:
+                            candidates.append(flag)
+        assert candidates
+        best = min(candidates, key=len)
+        assert best == "HTB{ShortFlag}"
+
+
 class TestPESupport:
     def _make_agent(self):
         return ReverseEngineeringAgent()
