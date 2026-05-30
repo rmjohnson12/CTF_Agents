@@ -1,130 +1,342 @@
-<p align="center">
-  <img src="assets/athene-lockup.svg" width="560" alt="Athene — wisdom that digs">
-</p>
+# CTF_Agents
 
-<p align="center"><em>An iterative, multi-agent system that reasons &rarr; acts &rarr; observes &rarr; adapts &rarr; solves CTF challenges.</em></p>
+CTF_Agents is a Python multi-agent system for authorized Capture The Flag
+workflows. It routes challenge prompts to specialist agents, runs security tools
+through a common wrapper layer, captures observations, and iterates until it can
+report a result or explain what blocked progress.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.10%2B-231A12?labelColor=D9A441" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/license-MIT-231A12?labelColor=D9A441" alt="MIT License">
-  <img src="https://img.shields.io/badge/flags-NCL%20%C2%B7%20HTB-231A12?labelColor=F2B705" alt="NCL and HTB">
-  <img src="https://img.shields.io/badge/colony-8%20sentries-231A12?labelColor=D9A441" alt="8 sentries">
-</p>
+The fastest way to use it is the natural-language CLI in `ask.py`. You describe
+the task, the router maps it to the best specialist, and the coordinator manages
+the solving loop.
 
-> **Athene** — *Athene cunicularia*, the burrowing owl. Genus named for Athena, goddess of wisdom and strategic warfare, whose emblem has been the owl for millennia. The burrowing owl is the one that lives underground, repurposes burrows dug by others, hunts from a colony, and digs in deep. Fitting, for a tool that forks an architecture, runs a colony of agents, and tunnels through whatever you point it at.
+## What It Can Work On
 
----
+- Reverse engineering tasks involving Python files, ELF binaries, and Windows
+  PE/EXE files. The reverse agent automatically unpacks UPX-compressed
+  binaries (ELF and PE), reverses glibc `rand()`-based XOR+ROL encryption
+  (recovering the seed from the encrypted file), extracts crackme passwords
+  from `.rodata`/`.rdata` fragments, decodes numeric-encoded flags (char_code
+  × N stored as integer sequences), handles anti-decompilation patterns such
+  as `ud2`/SIGILL signal-handler tricks, decrypts obfuscated .NET assemblies
+  by extracting and AES-decrypting the embedded managed resource then parsing
+  the `BinaryReader` string table, and reverses AES-NI self-decrypting
+  shellcode PE challenges (AESKEYGENASSIST + AESDECLAST 1-round cipher with
+  block-index key, extracting per-character flag comparisons from decrypted
+  shellcode stubs via capstone disassembly).
+- Cryptography and password-cracking tasks using hashes, encodings, wordlists,
+  John the Ripper, and Hashcat.
+- Web challenges with browser snapshots, HTTP fetching, directory discovery,
+  SQL injection tooling, and local source audits for dependency-level issues
+  such as vulnerable React/Next.js versions. The web agent includes targeted
+  playbooks for form exploration, archive-upload issues, JSON/XML API fuzzing,
+  mass-assignment checks, source-guided JSON coercion, HTB-style code-runner
+  endpoints, and XXE-style CTF patterns.
+- Binary exploitation (pwn) via ret2win discovery (symbol lookup with `nm`/
+  `objdump`), cyclic overflow-offset detection, x86-64 stack-alignment gadget
+  insertion, and remote payload delivery with pwntools.
+- Local Docker web challenges. Docker execution is opt-in and binds spawned
+  targets to `127.0.0.1` before handing them to the web/recon agents.
+- Hardware logic challenges involving schematic images, gate/transistor
+  descriptions, and CSV input tables that need Boolean derivation and output
+  bitstream decoding.
+- Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings,
+  recovered artifacts, and live SSH triage for userland-rootkit/library-loader
+  anomalies in authorized lab targets.
+- Networking tasks using `nmap`, `tshark`, and `scapy` for traffic analysis and
+  port scanning.
+- OSINT and log-analysis tasks for metadata, domains, authentication events, and
+  anomaly patterns.
+- Miscellaneous coding/math tasks that benefit from generated Python scripts.
 
-## What is Athene?
+## Repository Layout
 
-Athene is an advanced, iterative multi-agent system that autonomously solves Capture The Flag (CTF) challenges. Unlike a linear scanner, it runs a feedback loop: it reasons about artifacts, executes real tools, observes the results, and adapts its strategy in real time until a flag surfaces.
+```text
+agents/       Agent implementations and specialist solvers
+core/         Coordinator, routing, challenge models, task queue, results
+tools/        Tool wrappers for web, crypto, forensics, network, pwn, and common utilities
+config/       System, agent, tool, and environment configuration
+challenges/   Example and active challenge JSON files
+results/      Generated reports, artifacts, and captured flags
+logs/         Runtime logs
+tests/        Unit and end-to-end tests
+docs/         Architecture and getting-started documentation
+```
 
-You talk to it in plain English. A router — the **Lookout** — figures out what you want, finds the files you mentioned, and wakes the right specialist.
+For a fuller architecture map, see `PROJECT_STRUCTURE.md` and
+`docs/architecture/system_overview.md`.
+
+## Requirements
+
+- Python 3.10 or newer.
+- Python packages from `requirements.txt`.
+- Optional LLM key for LLM-assisted reasoning:
+  - `NVAPI_KEY` or `NVAPI_KEYS` for NVIDIA NIM.
+  - `ANTHROPIC_API_KEY` for Claude.
+  - `OPENAI_API_KEY` for OpenAI.
+  - Or a local Ollama server for API-free local model routing.
+
+## Installation
 
 ```bash
-# Reverse engineering: analyze logic, then verify by running it
-python3 ask.py "Find a password for ~/Downloads/PYTHON1.py"
+git clone https://github.com/rmjohnson12/CTF_Agents.git
+cd CTF_Agents
 
-# Password cracking
-python3 ask.py "Decrypt hash 68a96446a5afb4ab69a2d15091771e39 using my_passwords.txt"
-```
-
-```
-[ROUTER] target=reverse_agent action=run_agent
-  -> Extracted constraints: Sum=1000, Length=10, Index 1='S'
-  -> Derived candidate: mSeeeeeeee
-  -> Executing PYTHON1.py mSeeeeeeee...
-VERIFICATION SUCCESS: program returned 'correct'
-```
-
----
-
-## The colony
-
-Each agent is a **sentry** guarding one kind of burrow. See [`docs/COLONY.md`](docs/COLONY.md) for the full lore and naming convention.
-
-| Sentry | Role | What it digs with |
-|---|---|---|
-| **The Lookout** | Routing | Intent parsing, file/path detection, auto-categorization |
-| **The Digger** | Reverse engineering | Static analysis, constraint solver, live-execution verification |
-| **The Prowler** | Web | Playwright recon, dirsearch, sqlmap, login-bypass + `parseInt()` octal-bug detection |
-| **The Cracker** | Crypto | Hashcat, John, dictionary + raw-md5, wordlist auto-detection |
-| **The Sifter** | Forensics | Binwalk, ExifTool, Strings, QPDF |
-| **The Tinkerer** | Coding | Generates + runs Python, self-corrects crashing scripts |
-| **The Scout** | OSINT | Metadata extraction, domain harvesting |
-| **The Watcher** | Log analysis | Brute-force + statistical anomaly detection |
-| **The Listener** | Network forensics | Scapy deep-packet inspection, custom TCP/UDP stream reconstruction |
-
----
-
-## Key features
-
-**Natural-language entry (`ask.py`).** Type what you want. Athene detects filenames and paths (including `~/`), maps the task to Web / Crypto / Forensics / Reverse / OSINT / Logs / Network, and falls back to reliable heuristics even without an LLM API key.
-
-**Flag-format aware.** Native support for NCL Cyber Skyline (`SKY-XXXX-####`) and Hack The Box (`HTB{...}`) patterns, with session-authenticated browser snapshots. Centralized detection catches flags across every tool's output, logs, and artifacts.
-
-**Standardized tool + result layer.** Every tool implements a unified `BaseTool` interface with strict timeouts and safety boundaries. A result manager persists findings to `results/{challenge_id}/` with dedicated folders for reports, artifacts, and flags (and auto-cleans to the 5 most recent runs).
-
-**Automated web exploitation.** Heuristic SQLi and cookie manipulation (`admin=true`), a logic-flaw engine that detects `parseInt()` octal bugs in leaked JS, and high-speed discovery of common CTF leaks (`.env`, `.git/config`, backups).
-
----
-
-## Quickstart
-
-### Prerequisites
-
-- Python 3.10+
-- Security tools on `PATH`: `hashcat`, `john`, `binwalk`, `exiftool`, `strings`, `qpdf`, `nmap`
-- *(Optional)* an LLM API key in `.env` for advanced reasoning
-
-### Install
-
-```bash
-git clone https://github.com/rmjohnson12/Athene.git
-cd Athene
 python3 -m venv .venv
 source .venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
-### Launch banner (optional)
+### Pre-flight Check
 
-Drop [`athene_banner.py`](athene_banner.py) into the project root and call it at startup:
+Before running a challenge, use the diagnostic tool to verify your environment, API keys, and security tools:
 
-```python
-from athene_banner import banner
-banner(version="2.0", sentries=8)
+```bash
+python3 check_setup.py
 ```
 
-```
-  ╭───────╮
-  │ ◉   ◉ │     A T H E N E
-  │  ╲╱   │     ──────────────────────────────────
-  ╰──┬─┬──╯     wisdom that digs
-     ╱ ╲        the burrowing-owl CTF colony
-    ╱   ╲       v2.0  ·  colony online ▸ 8 sentries ready
+If you plan to use browser-based web tooling, install Playwright's browser runtime:
+
+```bash
+python -m playwright install chromium
 ```
 
-It respects `NO_COLOR` and only colorizes a real TTY.
+Set your API keys in a `.env` file in the project root:
 
----
+```bash
+NVAPI_KEY=your_nvidia_key_here
+```
+
+For multiple NVIDIA NIM keys, use a comma-separated fallback list. If one key
+hits a temporary `429` or `503` style failure, the reasoner will try the next
+configured key:
+
+```bash
+NVAPI_KEYS=first_nvidia_key,second_nvidia_key,third_nvidia_key
+```
+
+To prefer a specific LLM provider, set `LLM_PROVIDER`:
+
+```bash
+LLM_PROVIDER=nvidia      # nvidia, anthropic, openai, or ollama
+ANTHROPIC_API_KEY=your_claude_key_here
+OPENAI_API_KEY=your_openai_key_here
+```
+
+For local Ollama, start Ollama on your machine and point the agents at its
+OpenAI-compatible API:
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=llama3.1
+```
+
+No API key is required for the default local Ollama setup.
+
+### 🧠 Advanced Autonomous Features
+- **Autonomous Specialist Pivoting**: The system now recognizes when a specialist (like `CryptoAgent`) is hitting a wall and will automatically pivot to the `CodingAgent` if a script is provided for analysis.
+- **Self-Correcting Coding Agent**: The agent doesn't just write scripts; it debugs them. If an exploit fails, it reads the error logs, reasons about the failure, and iterates on the code autonomously.
+- **API Resilience**: Built-in exponential backoff handles transient LLM failures, and NVIDIA NIM can rotate across multiple configured keys.
+- **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
+- **Source-Only Web Audits**: Local web source folders are inspected for framework and dependency clues, including vulnerable React/Next.js combinations.
+- **Source-Guided Web Exploits**: Local source can drive live payloads for
+  JSON length/type coercion and palindrome-style validation bugs while ignoring
+  fake local flags when a spawned target is available.
+- **Web Exploitation Playbooks**: Browser-discovered forms can trigger archive
+  upload, JSON/XML API, mass-assignment, XXE, JWT, and interesting-link
+  follow-up checks.
+- **HTB Code-Runner Playbooks**: Web challenges exposing `/run`-style Python
+  execution endpoints can submit compact solvers for coding/math tasks such as
+  prime-product key recovery.
+- **Hardware Logic Agent**: Hardware/chip/circuit prompts can route to a
+  specialist that combines challenge text, local files, images, and CSV tables
+  to derive logic and decode output streams.
+- **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
+- **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
+  forensics agent can inspect loader/preload state and shared-library hook
+  indicators. Preload bypass searches require an explicit env opt-in.
+
+## 🛠 Prerequisites
+
+- Python 3.10+
+- `.env` file with at least one supported LLM key, such as `NVAPI_KEY`,
+  `NVAPI_KEYS`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`, or
+  `LLM_PROVIDER=ollama` for a local Ollama model.
+- Essential security tools: `nmap`, `tshark`, `binwalk`, `john`, `hashcat`.
+
+## 🚀 Quick Start
+
+1. **Check your setup**:
+   ```bash
+   python3 check_setup.py
+   ```
+
+2. **Start the Interactive Solver**:
+   ```bash
+   python3 ask.py
+   ```
+
+3. **Solve a Challenge**:
+   You can provide raw instructions or point to files:
+   ```text
+   > "Who needs AES when you have XOR? The files are in ~/Downloads/challenge.py and ~/Downloads/output.txt"
+   ```
+
+   Source-only web challenges can point directly at a local app folder:
+   ```text
+   > "Analyze ~/Downloads/web_reactoops/challenge for vulnerable React/Next.js package versions. There is no spawned server."
+   ```
+
+   Docker-based web challenges are disabled by default. To allow a local
+   container launch, opt in for that command:
+   ```bash
+   CTF_AGENTS_ALLOW_DOCKER=1 python3 ask.py "Solve this local Docker web challenge in ~/Downloads/web_reactoops"
+   ```
+
+   The Docker agent builds the local `Dockerfile`, maps the exposed service to
+   `127.0.0.1` on an ephemeral port, publishes that URL, and cleans up the
+   container when the coordinator run finishes.
+
+   React2Shell/RSC payload execution is localhost-only by default. For an
+   authorized spawned CTF target, explicitly opt in:
+   ```bash
+   CTF_AGENTS_ALLOW_REMOTE_R2S=1 python3 ask.py "Solve ReactOOPS at http://TARGET:PORT"
+   ```
+
+   HTB-style code-runner tasks can be given directly as a spawned target:
+   ```bash
+   python3 ask.py "Solve Primed for Action at TARGET:PORT. The answer is the product of the two prime numbers."
+   ```
+
+   Hardware logic challenge folders can point at local images and CSV files:
+   ```bash
+   python3 ask.py "Solve this hardware chip challenge. The files are in ~/Downloads/hw_lowlogic"
+   ```
+
+   Live SSH forensics prompts can include credentials and a target:
+   ```bash
+   python3 ask.py "Investigate this SSH forensics target for loader anomalies. Creds: root:hackthebox IP and port are TARGET:PORT"
+   ```
+
+   Read-only loader/rootkit triage runs by default. For authorized CTF/lab
+   targets where temporarily disabling `/etc/ld.so.preload` is acceptable, opt
+   in to the backup/restore preload-bypass search:
+   ```bash
+   CTF_AGENTS_ALLOW_SSH_PRELOAD_BYPASS=1 python3 ask.py "Investigate this SSH forensics target for a userland rootkit. Creds: root:hackthebox IP and port are TARGET:PORT"
+   ```
+
+## 📂 Project Structure
+- `agents/`: Specialist agents (Web, Crypto, Hardware, Pwn, Networking, Coding, etc.).
+- `core/`: The "Brain" (LLM Reasoner, Coordinator, Message Broker).
+- `tools/`: Wrapped security binaries (TShark, Nmap, John, Hashcat).
+- `ask.py`: The main interactive CLI entry point.
+
+## 🧪 Testing
+Run the smoke tests to verify the routing logic:
+```bash
+pytest tests/e2e/test_smoke_prompts.py
+```
+1. **Interactive Feedback**: If the agent hits a wall, you can provide a "hint" (e.g., "try port 8080" or "the flag is in the EXIF data") and it will resume the solve with the new context.
+2. **Persistent Knowledge**: Discovered facts (IPs, credentials, artifacts) are stored in a local Knowledge Base and injected into future reasoning steps.
+3. **Networking Specialist**: Deep packet inspection and automated network enumeration are now integrated natively.
+
+`ask.py` will:
+
+1. Convert the instruction into a challenge object.
+2. Detect referenced files, URLs, and available local tools.
+3. Route the task to a specialist agent.
+4. Print the final status, flag if found, and steps taken.
+
+## JSON Challenge Mode
+
+Use `main.py` when you already have a challenge JSON file:
+
+```bash
+python3 main.py challenges/templates/example_crypto_base64.json
+python3 main.py challenges/templates/example_crypto_base64.json --max-iterations 3
+python3 main.py challenges/templates/example_crypto_base64.json --resume
+```
+
+Challenge files are dictionaries with fields such as:
+
+```json
+{
+  "id": "example_crypto_base64",
+  "name": "Base64 Warmup",
+  "category": "crypto",
+  "description": "Decode the provided message and recover the flag.",
+  "files": []
+}
+```
+
+Existing examples live in `challenges/templates/` and simulated active
+challenges live in `challenges/active/`.
+
+`--resume` loads `logs/checkpoints/{challenge_id}.json` when present and
+continues from the prior history and steps. If no checkpoint exists, the
+coordinator starts a fresh run.
+
+## Configuration
+
+The main configuration files are:
+
+- `config/system_config.yaml` for global runtime settings.
+- `config/agents_config.yaml` for specialist behavior and priorities.
+- `config/tools_config.yaml` for tool paths, timeouts, and enablement.
+- `.env.example` for API keys, provider selection, and optional integrations.
+
+Tool availability is detected at runtime where possible, so missing external
+tools should degrade specific capabilities rather than preventing all usage.
 
 ## Testing
+
+Run the unit suite:
 
 ```bash
 pytest tests/unit/
 ```
 
----
+Run everything:
 
-## Security & ethics
+```bash
+pytest
+```
 
-Athene is for **authorized CTF competitions**, **security research**, and **education**. Do not use it against systems you do not own or have explicit, written permission to test.
+The test suite includes coordinator routing, reasoner fallback behavior, tool
+wrappers, flag detection utilities, and end-to-end fixtures.
 
----
+## Runtime Artifacts
 
-## Credits & license
+Generated outputs are local-only and ignored by git:
 
-Original architecture by **[TonyZeroArch](https://github.com/TonyZeroArch/CTF_Agents)**; Athene is a rebrand and continuation of that work. Built for the CTF and AI-security community.
+- `results/` stores run reports, artifacts, and captured flags.
+- `logs/checkpoints/` stores coordinator progress snapshots for resume support.
+- `logs/knowledge.db` stores the local knowledge base.
+- `logs/performance.db` stores local agent performance history.
 
-Released under the **MIT License** — see [`LICENSE`](LICENSE).
+To clean local generated output:
+
+```bash
+find results -mindepth 1 ! -path 'results/README.md' -exec rm -rf {} +
+find logs/checkpoints -mindepth 1 -exec rm -rf {} +
+```
+
+## Development Notes
+
+- Add new agents under `agents/specialists/` or `agents/support/`.
+- Add command wrappers under `tools/` using the shared tool/result patterns.
+- Keep durable fixtures under `challenges/`; keep generated outputs local.
+- Prefer adding focused tests in `tests/unit/` for routing, parsing, and wrapper
+  behavior before broad end-to-end coverage.
+
+## Security And Ethics
+
+This project is intended for authorized CTF competitions, lab environments,
+security research, and education. Do not run it against systems you do not own
+or do not have explicit permission to test.
+
+## Acknowledgments
+
+Original architecture by TonyZeroArch and myself. Continued development is focused on
+practical, iterative CTF automation and agent-assisted security research.
