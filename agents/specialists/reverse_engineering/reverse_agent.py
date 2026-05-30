@@ -151,9 +151,12 @@ class ReverseEngineeringAgent(BaseAgent):
                 "steps": ["No files provided for analysis"],
             }
 
-        binaries = [f for f in files if is_elf_binary(f)]
-        enc_files = [f for f in files if f.endswith(".enc") or f.endswith(".encrypted")]
-        source_files = [f for f in files if f.endswith((".py", ".c", ".cpp", ".js"))]
+        # Unpack any UPX-packed binaries before analysis
+        effective_files = [self._unpack_upx(f, steps) for f in files]
+
+        binaries = [f for f in effective_files if is_elf_binary(f)]
+        enc_files = [f for f in effective_files if f.endswith(".enc") or f.endswith(".encrypted")]
+        source_files = [f for f in effective_files if f.endswith((".py", ".c", ".cpp", ".js"))]
 
         # --- Strategy 1: encryptor binary + .enc output ---
         if binaries and enc_files:
@@ -167,14 +170,20 @@ class ReverseEngineeringAgent(BaseAgent):
             if result:
                 return result
 
-        # --- Strategy 3: source code constraint solving ---
+        # --- Strategy 3: numeric-encoded flag (char_code * N stored as integers) ---
+        for binary in binaries:
+            result = self._try_numeric_encoding(binary, challenge, steps)
+            if result:
+                return result
+
+        # --- Strategy 4: source code constraint solving ---
         for file_path in source_files:
             result = self._try_source_analysis(file_path, challenge, steps)
             if result:
                 return result
 
-        # --- Strategy 3: strings + LLM on any remaining file ---
-        for file_path in files:
+        # --- Strategy 5: strings + LLM on any remaining file ---
+        for file_path in effective_files:
             steps.append(f"Running strings on {file_path}")
             try:
                 r = subprocess.run(
@@ -310,6 +319,105 @@ class ReverseEngineeringAgent(BaseAgent):
         except Exception as exc:
             logger.debug("XOR-only decryption failed: %s", exc)
             return None
+
+    # ------------------------------------------------------------------
+    # Pre-processing: UPX unpacking
+    # ------------------------------------------------------------------
+
+    def _unpack_upx(self, file_path: str, steps: List[str]) -> str:
+        """If file_path is a UPX-packed ELF, unpack to /tmp and return new path."""
+        if not is_elf_binary(file_path):
+            return file_path
+        try:
+            raw = subprocess.run(
+                ["strings", "-n", "4", file_path],
+                capture_output=True, timeout=10,
+            ).stdout.decode("utf-8", errors="replace")
+        except Exception:
+            return file_path
+
+        if "UPX" not in raw:
+            return file_path
+
+        import tempfile
+        out = os.path.join(tempfile.gettempdir(), f"upx_unpacked_{os.path.basename(file_path)}")
+        try:
+            r = subprocess.run(
+                ["upx", "-d", file_path, "-o", out],
+                capture_output=True, timeout=30,
+            )
+            if r.returncode == 0 and os.path.exists(out):
+                steps.append(f"UPX-packed binary detected; unpacked to {out}")
+                return out
+            steps.append(f"upx -d failed: {r.stderr.decode(errors='replace')[:200]}")
+        except FileNotFoundError:
+            steps.append("upx not installed; analysing packed binary directly")
+        except Exception as exc:
+            steps.append(f"UPX unpack error: {exc}")
+        return file_path
+
+    # ------------------------------------------------------------------
+    # Strategy 3: numeric-encoded flag  (char_code × N stored as ints)
+    # ------------------------------------------------------------------
+
+    def _try_numeric_encoding(
+        self,
+        binary: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Detect flags encoded as space-separated integers where each value equals
+        ord(char) * N for some constant multiplier N (e.g. N=16 for a left-shift-
+        by-4 encoding).  Searches all long integer sequences in the binary's
+        strings output, finds a GCD-based multiplier, and checks whether the
+        decoded bytes form a valid flag.
+        """
+        try:
+            raw = subprocess.run(
+                ["strings", "-n", "20", binary],
+                capture_output=True, timeout=15,
+            ).stdout.decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+        import math
+
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+            try:
+                vals = [int(p) for p in parts]
+            except ValueError:
+                continue
+            if any(v <= 0 or v > 0x7F * 256 for v in vals):
+                continue
+
+            gcd = vals[0]
+            for v in vals[1:]:
+                gcd = math.gcd(gcd, v)
+            if gcd < 1:
+                continue
+
+            for multiplier in (gcd, gcd * 2, gcd // 2 if gcd % 2 == 0 else None):
+                if not multiplier or multiplier < 1:
+                    continue
+                try:
+                    chars = [v // multiplier for v in vals]
+                except ZeroDivisionError:
+                    continue
+                if not all(0x20 <= c <= 0x7E for c in chars):
+                    continue
+                candidate = "".join(chr(c) for c in chars)
+                flag = find_first_flag(candidate)
+                if flag:
+                    steps.append(
+                        f"Numeric encoding detected (multiplier={multiplier}): {candidate}"
+                    )
+                    return self._result(challenge, "solved", steps, flag=flag)
+
+        return None
 
     # ------------------------------------------------------------------
     # Strategy 2: crackme — password fragments in .rodata
