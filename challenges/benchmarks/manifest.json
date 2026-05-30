@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "benchmarks": [
+    {
+      "id": "bench_crypto_base64_flag",
+      "mode": "solve",
+      "challenge": {
+        "id": "bench_crypto_base64_flag",
+        "name": "Base64 Flag",
+        "category": "crypto",
+        "description": "Decode this payload: Q1RGe2JlbmNoX2I2NH0=",
+        "hints": [],
+        "tags": ["crypto", "encoding"],
+        "files": [],
+        "metadata": {}
+      },
+      "expect": {
+        "category": "crypto",
+        "target": "crypto_agent",
+        "status": "solved",
+        "flag": "CTF{bench_b64}"
+      }
+    },
+    {
+      "id": "bench_reverse_python_constraint",
+      "mode": "solve",
+      "challenge": {
+        "id": "bench_reverse_python_constraint",
+        "name": "Python Constraint Crackme",
+        "category": "reverse",
+        "description": "Authenticate the program to get the flag.",
+        "hints": ["Analyze the source constraints."],
+        "tags": ["reverse", "python"],
+        "files": ["tests/e2e/fixtures/reverse_me.py"],
+        "metadata": {}
+      },
+      "expect": {
+        "category": "reverse",
+        "target": "reverse_agent",
+        "status": "solved",
+        "flag": "hbTbbbbb"
+      }
+    },
+    {
+      "id": "bench_log_bruteforce_ip",
+      "mode": "solve",
+      "challenge": {
+        "id": "bench_log_bruteforce_ip",
+        "name": "SSH Brute Force Source",
+        "category": "log",
+        "description": "Analyze the auth log and identify which IP executed a brute force SSH attack.",
+        "hints": [],
+        "tags": ["log", "ssh"],
+        "files": ["tests/e2e/fixtures/auth_events.txt"],
+        "metadata": {}
+      },
+      "expect": {
+        "category": "log",
+        "target": "log_agent",
+        "status": "solved",
+        "flag": "192.168.1.50"
+      }
+    },
+    {
+      "id": "bench_reverse_numeric_encoded_flag",
+      "mode": "solve",
+      "requires": ["strings"],
+      "generated_files": [
+        {
+          "name": "numeric_blob",
+          "kind": "elf_numeric_flag",
+          "flag": "HTB{numeric_bench_flag}",
+          "multiplier": 16
+        }
+      ],
+      "challenge": {
+        "id": "bench_reverse_numeric_encoded_flag",
+        "name": "Numeric Encoded Reverse",
+        "category": "reverse",
+        "description": "Reverse this program artifact and recover the numeric encoded flag.",
+        "hints": [],
+        "tags": ["reverse", "encoding"],
+        "files": ["{generated:numeric_blob}"],
+        "metadata": {}
+      },
+      "expect": {
+        "category": "reverse",
+        "target": "reverse_agent",
+        "status": "solved",
+        "flag": "HTB{numeric_bench_flag}"
+      }
+    },
+    {
+      "id": "bench_pwn_overflow_routes_to_pwn",
+      "mode": "route",
+      "generated_files": [
+        {
+          "name": "pwn_stub",
+          "kind": "elf_stub"
+        }
+      ],
+      "challenge": {
+        "id": "bench_pwn_overflow_routes_to_pwn",
+        "name": "Overflow Service",
+        "category": "pwn",
+        "description": "Exploit the buffer overflow and redirect execution to the win function.",
+        "hints": [],
+        "tags": ["pwn", "overflow"],
+        "files": ["{generated:pwn_stub}"],
+        "connection_info": "127.0.0.1:31337",
+        "metadata": {}
+      },
+      "expect": {
+        "category": "pwn",
+        "target": "pwn_agent",
+        "action": "run_agent"
+      }
+    }
+  ]
+}

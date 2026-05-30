@@ -13,6 +13,9 @@ def check():
     openai_key = os.getenv("OPENAI_API_KEY")
     nvapi_key = os.getenv("NVAPI_KEY") or os.getenv("NGC_API_KEY")
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    ollama_requested = provider in {"ollama", "local"}
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
+    ollama_model = os.getenv("OLLAMA_MODEL") or "llama3.1"
     
     has_llm = False
     if nvapi_key:
@@ -33,11 +36,17 @@ def check():
     else:
         print("[-] OpenAI API Key: MISSING")
 
+    if ollama_requested:
+        print(f"[+] Ollama local model: CONFIGURED ({ollama_model} at {ollama_base_url})")
+        has_llm = True
+
     if has_llm:
         print("[+] Mode: LLM-assisted (LLM-backed routing and planning enabled)")
         if provider:
             print(f"[+] Preferred LLM provider: {provider}")
-            if provider in {"anthropic", "claude"} and not anthropic_key and nvapi_key:
+            if provider in {"ollama", "local"}:
+                print("[+] Selected LLM provider: ollama")
+            elif provider in {"anthropic", "claude"} and not anthropic_key and nvapi_key:
                 print("[+] Selected LLM provider: nvidia (Anthropic key missing; falling back)")
             elif provider in {"nvidia", "nim"} and not nvapi_key and anthropic_key:
                 print("[+] Selected LLM provider: anthropic (NVIDIA key missing; falling back)")

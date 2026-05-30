@@ -73,6 +73,7 @@ For a fuller architecture map, see `PROJECT_STRUCTURE.md` and
   - `NVAPI_KEY` or `NVAPI_KEYS` for NVIDIA NIM.
   - `ANTHROPIC_API_KEY` for Claude.
   - `OPENAI_API_KEY` for OpenAI.
+  - Or a local Ollama server for API-free local model routing.
 
 ## Installation
 
@@ -117,10 +118,21 @@ NVAPI_KEYS=first_nvidia_key,second_nvidia_key,third_nvidia_key
 To prefer a specific LLM provider, set `LLM_PROVIDER`:
 
 ```bash
-LLM_PROVIDER=nvidia      # nvidia, anthropic, or openai
+LLM_PROVIDER=nvidia      # nvidia, anthropic, openai, or ollama
 ANTHROPIC_API_KEY=your_claude_key_here
 OPENAI_API_KEY=your_openai_key_here
 ```
+
+For local Ollama, start Ollama on your machine and point the agents at its
+OpenAI-compatible API:
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=llama3.1
+```
+
+No API key is required for the default local Ollama setup.
 
 ### 🧠 Advanced Autonomous Features
 - **Autonomous Specialist Pivoting**: The system now recognizes when a specialist (like `CryptoAgent`) is hitting a wall and will automatically pivot to the `CodingAgent` if a script is provided for analysis.
@@ -149,7 +161,8 @@ OPENAI_API_KEY=your_openai_key_here
 
 - Python 3.10+
 - `.env` file with at least one supported LLM key, such as `NVAPI_KEY`,
-  `NVAPI_KEYS`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`.
+  `NVAPI_KEYS`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`, or
+  `LLM_PROVIDER=ollama` for a local Ollama model.
 - Essential security tools: `nmap`, `tshark`, `binwalk`, `john`, `hashcat`.
 
 ## 🚀 Quick Start

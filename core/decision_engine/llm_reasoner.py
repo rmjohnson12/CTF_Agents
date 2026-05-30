@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 _NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
+_OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
 _NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
 _ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+_OLLAMA_DEFAULT_MODEL = "llama3.1"
 
 _RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError)
 _MAX_LLM_RETRIES = 3
@@ -40,7 +42,7 @@ class LLMReasoner:
 
     Priority order for auto-configuration:
       1. Explicit client passed in
-      2. LLM_PROVIDER env var preference: nvidia|anthropic|openai
+      2. LLM_PROVIDER env var preference: ollama|nvidia|anthropic|openai
       3. NVAPI_KEY/NGC_API_KEY env var → NVIDIA NIM (OpenAI-compatible)
       4. ANTHROPIC_API_KEY env var → Claude
       5. OPENAI_API_KEY env var → OpenAI
@@ -75,6 +77,12 @@ class LLMReasoner:
             self.provider = "none"
 
             for candidate in provider_order:
+                if candidate == "ollama":
+                    self.provider = "ollama"
+                    self._configure_ollama_client()
+                    self.model = model or os.getenv("OLLAMA_MODEL") or _OLLAMA_DEFAULT_MODEL
+                    break
+
                 if candidate == "nvidia" and self._nvidia_keys:
                     self.provider = "nvidia"
                     self._configure_nvidia_client(0)
@@ -134,6 +142,13 @@ class LLMReasoner:
             timeout=self.timeout_seconds,
         )
 
+    def _configure_ollama_client(self) -> None:
+        self.client = OpenAI(
+            api_key=os.getenv("OLLAMA_API_KEY") or "ollama",
+            base_url=os.getenv("OLLAMA_BASE_URL") or _OLLAMA_DEFAULT_BASE_URL,
+            timeout=self.timeout_seconds,
+        )
+
     def _rotate_nvidia_key(self) -> bool:
         if self.provider != "nvidia" or len(self._nvidia_keys) <= 1:
             return False
@@ -156,6 +171,7 @@ class LLMReasoner:
         aliases = {
             "nim": "nvidia",
             "claude": "anthropic",
+            "local": "ollama",
             "off": "none",
             "disabled": "none",
             "heuristic": "none",
@@ -164,6 +180,9 @@ class LLMReasoner:
 
         if provider == "none":
             return []
+
+        if provider == "ollama":
+            return ["ollama"] + default_order
 
         if provider in default_order:
             return [provider] + [p for p in default_order if p != provider]

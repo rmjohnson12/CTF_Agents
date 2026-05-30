@@ -21,6 +21,8 @@ from core.decision_engine.llm_reasoner import (
     _NVIDIA_NIM_BASE_URL,
     _NVIDIA_DEFAULT_MODEL,
     _ANTHROPIC_DEFAULT_MODEL,
+    _OLLAMA_DEFAULT_BASE_URL,
+    _OLLAMA_DEFAULT_MODEL,
 )
 
 
@@ -44,6 +46,9 @@ def clear_llm_env(monkeypatch):
         "NVAPI_KEY",
         "NGC_API_KEY",
         "NVIDIA_MODEL",
+        "OLLAMA_API_KEY",
+        "OLLAMA_BASE_URL",
+        "OLLAMA_MODEL",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_MODEL",
         "OPENAI_API_KEY",
@@ -212,6 +217,64 @@ def test_openai_key_fallback(monkeypatch):
     assert call_kwargs["api_key"] == "sk-fake-openai"
     assert "base_url" not in call_kwargs, "OpenAI path must not set NVIDIA base_url"
     assert reasoner.model == "gpt-4o"
+
+
+def test_ollama_provider_uses_openai_compatible_client(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["api_key"] == "ollama"
+    assert call_kwargs["base_url"] == "http://localhost:11434/v1"
+    assert call_kwargs["timeout"] == 15.0
+    assert reasoner.provider == "ollama"
+    assert reasoner.model == "qwen2.5-coder:7b"
+
+
+def test_ollama_provider_uses_defaults(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["api_key"] == "ollama"
+    assert call_kwargs["base_url"] == _OLLAMA_DEFAULT_BASE_URL
+    assert reasoner.provider == "ollama"
+    assert reasoner.model == _OLLAMA_DEFAULT_MODEL
+
+
+def test_local_provider_alias_selects_ollama(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "local")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["base_url"] == _OLLAMA_DEFAULT_BASE_URL
+    assert reasoner.provider == "ollama"
+
+
+def test_ollama_provider_overrides_cloud_keys(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("NVAPI_KEY", "nvapi-fake-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-openai")
+
+    with patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        MockOpenAI.return_value = MagicMock()
+        reasoner = LLMReasoner()
+
+    call_kwargs = MockOpenAI.call_args.kwargs
+    assert call_kwargs["base_url"] == _OLLAMA_DEFAULT_BASE_URL
+    assert call_kwargs["api_key"] == "ollama"
+    assert reasoner.provider == "ollama"
 
 
 def test_anthropic_key_fallback(monkeypatch):
