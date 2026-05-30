@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
-from tools.common.elf_utils import is_elf_binary
+from tools.common.elf_utils import is_elf_binary, is_native_binary, is_pe_binary
 from tools.common.python_tool import PythonTool
 
 logger = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ class ReverseEngineeringAgent(BaseAgent):
         files = challenge.get("files", [])
         tags = " ".join(challenge.get("tags", [])).lower()
 
-        has_binary = any(is_elf_binary(f) for f in files)
+        has_binary = any(is_native_binary(f) for f in files)
         has_enc = any(f.endswith(".enc") or f.endswith(".encrypted") for f in files)
         has_source = any(f.endswith((".py", ".c", ".cpp", ".js")) for f in files)
 
@@ -154,7 +154,7 @@ class ReverseEngineeringAgent(BaseAgent):
         # Unpack any UPX-packed binaries before analysis
         effective_files = [self._unpack_upx(f, steps) for f in files]
 
-        binaries = [f for f in effective_files if is_elf_binary(f)]
+        binaries = [f for f in effective_files if is_native_binary(f)]
         enc_files = [f for f in effective_files if f.endswith(".enc") or f.endswith(".encrypted")]
         source_files = [f for f in effective_files if f.endswith((".py", ".c", ".cpp", ".js"))]
 
@@ -325,8 +325,8 @@ class ReverseEngineeringAgent(BaseAgent):
     # ------------------------------------------------------------------
 
     def _unpack_upx(self, file_path: str, steps: List[str]) -> str:
-        """If file_path is a UPX-packed ELF, unpack to /tmp and return new path."""
-        if not is_elf_binary(file_path):
+        """If file_path is a UPX-packed ELF or PE, unpack to /tmp and return new path."""
+        if not is_native_binary(file_path):
             return file_path
         try:
             raw = subprocess.run(
@@ -452,7 +452,8 @@ class ReverseEngineeringAgent(BaseAgent):
         except Exception:
             return None
 
-        has_cmp = any(s in sym_out for s in ("strncmp", "strcmp", "memcmp"))
+        # PE binaries use _strcmp/_strncmp (decorated names) or same names via CRT
+        has_cmp = any(s in sym_out for s in ("strncmp", "strcmp", "memcmp", "_strcmp", "_strncmp"))
         has_flag_fmt = any(
             pat in sym_out for pat in ("HTB{%s}", "> HTB{%", "CTF{%s}", "flag{%s}")
         )
@@ -461,14 +462,15 @@ class ReverseEngineeringAgent(BaseAgent):
 
         steps.append(f"Crackme pattern detected in {os.path.basename(binary)} (strncmp + HTB format string)")
 
-        # Dump .rodata
+        # ELF uses .rodata; PE uses .rdata
+        section = ".rdata" if is_pe_binary(binary) else ".rodata"
         try:
             dump = subprocess.run(
-                ["objdump", "-s", "--section=.rodata", binary],
+                ["objdump", "-s", f"--section={section}", binary],
                 capture_output=True, text=True, timeout=15,
             ).stdout
         except Exception as exc:
-            steps.append(f"objdump .rodata failed: {exc}")
+            steps.append(f"objdump {section} failed: {exc}")
             return None
 
         fragments = self._parse_rodata_strings(dump)
