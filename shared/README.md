@@ -13,15 +13,6 @@ Exploit payloads and attack vectors:
 - Injection payloads
 - Privilege escalation exploits
 
-### wordlists/
-Dictionaries for various attacks:
-- Common passwords
-- Directory/file names
-- Usernames
-- Subdomains
-- Parameter names
-- Custom CTF wordlists
-
 ### exploits/
 Reusable exploit code:
 - Proof-of-concept exploits
@@ -49,10 +40,15 @@ AI/ML models for the system:
 ## Usage Guidelines
 
 1. **Payloads**: Organized by exploit type and platform
-2. **Wordlists**: Categorized by attack type and context
-3. **Exploits**: Documented with usage instructions and requirements
-4. **Scripts**: Include inline documentation and examples
-5. **Models**: Versioned with performance metrics and training data info
+2. **Exploits**: Documented with usage instructions and requirements
+3. **Scripts**: Include inline documentation and examples
+4. **Models**: Versioned with performance metrics and training data info
+
+## Wordlists
+
+This repository does not bundle large attack dictionaries. Configure local or
+system-installed wordlists in `config/tools_config.yaml`, or place challenge
+specific wordlists outside the repository and reference them from the prompt.
 
 ## Security Note
 

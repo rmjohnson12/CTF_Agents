@@ -49,10 +49,11 @@ sudo apt-get install -y \
     nmap sqlmap nikto john hashcat \
     binwalk foremost exiftool \
     radare2 gdb strings
-
-# Or use the provided setup script
-./scripts/install_tools.sh
 ```
+
+There is no bundled tool installer script. Use your platform package manager
+and then run `python3 check_setup.py` to see which optional tools are available
+or missing.
 
 ### 5. Configure the System
 

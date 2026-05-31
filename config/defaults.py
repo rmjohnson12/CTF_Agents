@@ -5,8 +5,9 @@ from typing import List, Tuple
 
 # Wordlists
 DEFAULT_ROCKYOU_PATHS: List[str] = [
-    str(Path(__file__).resolve().parent.parent / "shared" / "wordlists" / "passwords" / "rockyou.txt"),
     "/usr/share/wordlists/rockyou.txt",
+    "/usr/share/wordlists/rockyou.txt.gz",
+    "/usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt",
     str(Path.home() / "Downloads" / "rockyou.txt"),
     str(Path.home() / "Downloads" / "rockyou" / "rockyou.txt"),
 ]

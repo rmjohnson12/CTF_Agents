@@ -6,7 +6,7 @@ web:
     enabled: true
     path: "/usr/bin/dirb"
     timeout: 300
-    wordlist: "shared/wordlists/web/common.txt"
+    wordlist: "/usr/share/wordlists/dirb/common.txt"
     
   sqlmap:
     enabled: true
@@ -32,7 +32,7 @@ crypto:
     enabled: true
     path: "/usr/sbin/john"
     timeout: 600
-    wordlist: "shared/wordlists/passwords/rockyou.txt"
+    wordlist: "/usr/share/wordlists/rockyou.txt"
     
   hashcat:
     enabled: true

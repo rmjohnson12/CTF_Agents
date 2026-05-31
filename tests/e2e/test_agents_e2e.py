@@ -53,8 +53,9 @@ needs_rockyou  = pytest.mark.skipif(
     not any(
         Path(p).exists() for p in [
             str(Path.home() / "Downloads" / "rockyou.txt"),
+            str(Path.home() / "Downloads" / "rockyou" / "rockyou.txt"),
             "/usr/share/wordlists/rockyou.txt",
-            "shared/wordlists/passwords/rockyou.txt",
+            "/usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt",
         ]
     ),
     reason="rockyou.txt not found",

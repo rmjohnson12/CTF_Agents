@@ -45,7 +45,6 @@ CTF_Agents/
 │
 ├── 📁 shared/                             # Shared resources
 │   ├── 📁 payloads/                      # Exploit payloads
-│   ├── 📁 wordlists/                     # Attack dictionaries
 │   ├── 📁 exploits/                      # Reusable exploits
 │   ├── 📁 scripts/                       # Utility scripts
 │   └── 📁 models/                        # AI/ML models
