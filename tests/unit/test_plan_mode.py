@@ -136,6 +136,22 @@ class TestPrintPlan:
 class TestAskPlanMode:
     """ask.py main() must exit before solve_challenge when --plan is given."""
 
+    def test_help_flag_exits_before_solve_challenge(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["ask.py", "--help"])
+
+        with patch(
+            "agents.coordinator.coordinator_agent.CoordinatorAgent.solve_challenge"
+        ) as mock_solve:
+            import ask
+            with pytest.raises(SystemExit) as exc:
+                ask.main()
+
+        assert exc.value.code == 0
+        mock_solve.assert_not_called()
+        captured = capsys.readouterr()
+        assert "usage:" in captured.out
+
     def test_plan_flag_prevents_solve_challenge(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(

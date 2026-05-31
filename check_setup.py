@@ -4,6 +4,37 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
+def _load_nvidia_keys():
+    raw_keys = []
+    for env_name in ("NVAPI_KEYS", "NVAPI_KEY", "NGC_API_KEY"):
+        raw_keys.extend((os.getenv(env_name) or "").split(","))
+
+    keys = []
+    for key in raw_keys:
+        key = key.strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+def _playwright_failure_message(exc):
+    message = str(exc)
+    lowered = message.lower()
+    missing_browser_markers = (
+        "executable doesn't exist",
+        "please run the following command to download new browsers",
+        "playwright install",
+    )
+    if any(marker in lowered for marker in missing_browser_markers):
+        return (
+            f"[!] Playwright Chromium: NOT FOUND ({message})",
+            "    Run: python3 -m playwright install chromium",
+        )
+
+    return (
+        f"[!] Playwright Chromium: LAUNCH FAILED ({message})",
+        "    Browser is installed, but could not start. Check sandbox, temp directory, or OS permissions.",
+    )
+
 def check():
     print("=== CTF_Agents: Pre-Flight Check ===")
     load_dotenv()
@@ -11,7 +42,8 @@ def check():
     # 1. Check API Keys & Mode
     provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
     openai_key = os.getenv("OPENAI_API_KEY")
-    nvapi_key = os.getenv("NVAPI_KEY") or os.getenv("NGC_API_KEY")
+    nvidia_keys = _load_nvidia_keys()
+    nvapi_key = nvidia_keys[0] if nvidia_keys else None
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     ollama_requested = provider in {"ollama", "local"}
     ollama_base_url = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
@@ -19,7 +51,8 @@ def check():
     
     has_llm = False
     if nvapi_key:
-        print("[+] NVIDIA NIM API Key: CONFIGURED")
+        suffix = f" ({len(nvidia_keys)} keys)" if len(nvidia_keys) > 1 else ""
+        print(f"[+] NVIDIA NIM API Key: CONFIGURED{suffix}")
         has_llm = True
     else:
         print("[-] NVIDIA NIM API Key: MISSING")
@@ -69,8 +102,9 @@ def check():
                 browser.close()
                 print("[+] Playwright Chromium: INSTALLED")
             except Exception as e:
-                print(f"[!] Playwright Chromium: NOT FOUND ({e})")
-                print("    Run: python3 -m playwright install chromium")
+                status_line, remediation = _playwright_failure_message(e)
+                print(status_line)
+                print(remediation)
     except ImportError:
         print("[-] Playwright Library: NOT INSTALLED (Run: pip install playwright)")
 

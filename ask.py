@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import re
@@ -24,6 +25,23 @@ from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
 from tools.common.elf_utils import is_elf_binary
+
+def _parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="ask.py",
+        description="Run the natural-language CTF agent CLI.",
+    )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="Print the routing plan without invoking agents or tools.",
+    )
+    parser.add_argument(
+        "instruction",
+        nargs=argparse.REMAINDER,
+        help="Challenge instruction text, pasted ask.py command, or challenge path.",
+    )
+    return parser.parse_args(argv)
 
 def _unwrap_ask_command(user_input: str) -> str:
     """Accept either a raw instruction or a pasted `python ask.py "..."` command."""
@@ -362,13 +380,11 @@ def _print_plan(
     print("No agents or tools were invoked. Remove --plan to execute.")
 
 
-def main():
-    plan_mode = "--plan" in sys.argv
-    if plan_mode:
-        sys.argv = [a for a in sys.argv if a != "--plan"]
-
-    interactive = len(sys.argv) < 2
-    user_input = " ".join(sys.argv[1:]) if not interactive else ""
+def main(argv: Optional[List[str]] = None):
+    args = _parse_cli_args(sys.argv[1:] if argv is None else argv)
+    plan_mode = args.plan
+    user_input = " ".join(args.instruction).strip()
+    interactive = not user_input and not plan_mode
     
     from core.utils.system_checks import get_available_tools, get_system_context
     available_tools = get_available_tools()
