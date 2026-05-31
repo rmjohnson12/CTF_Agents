@@ -11,8 +11,8 @@ the solving loop.
 
 ## What It Can Work On
 
-- Reverse engineering tasks involving Python files, ELF binaries, and Windows
-  PE/EXE files. The reverse agent automatically unpacks UPX-compressed
+- Reverse engineering tasks involving Python files, ELF binaries, Windows
+  PE/EXE files, and Godot game packages. The reverse agent automatically unpacks UPX-compressed
   binaries (ELF and PE), reverses glibc `rand()`-based XOR+ROL encryption
   (recovering the seed from the encrypted file), extracts crackme passwords
   from `.rodata`/`.rdata` fragments, decodes numeric-encoded flags (char_code
@@ -22,7 +22,10 @@ the solving loop.
   the `BinaryReader` string table, and reverses AES-NI self-decrypting
   shellcode PE challenges (AESKEYGENASSIST + AESDECLAST 1-round cipher with
   block-index key, extracting per-character flag comparisons from decrypted
-  shellcode stubs via capstone disassembly).
+  shellcode stubs via capstone disassembly). Godot loader playbooks can recover
+  embedded PCK AES keys, decompile scripts with GDRE Tools when available,
+  emulate obfuscated GDScript array/string construction, replay expected C2
+  headers, and combine split flags from local scripts plus remote responses.
 - Cryptography and password-cracking tasks using hashes, encodings, wordlists,
   John the Ripper, and Hashcat.
 - Web challenges with browser snapshots, HTTP fetching, directory discovery,
@@ -37,8 +40,8 @@ the solving loop.
 - Local Docker web challenges. Docker execution is opt-in and binds spawned
   targets to `127.0.0.1` before handing them to the web/recon agents.
 - Hardware logic challenges involving schematic images, gate/transistor
-  descriptions, and CSV input tables that need Boolean derivation and output
-  bitstream decoding.
+  descriptions, CSV input tables, and Saleae logic-analyzer captures that need
+  Boolean derivation, serial decoding, or output bitstream recovery.
 - Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings,
   recovered artifacts, and live SSH triage for userland-rootkit/library-loader
   anomalies in authorized lab targets.
@@ -151,7 +154,12 @@ No API key is required for the default local Ollama setup.
   prime-product key recovery.
 - **Hardware Logic Agent**: Hardware/chip/circuit prompts can route to a
   specialist that combines challenge text, local files, images, and CSV tables
-  to derive logic and decode output streams.
+  to derive logic and decode output streams. Saleae `.sal` archives are
+  inspected for analyzer metadata and decoded as UART 8N1 where applicable.
+- **Godot Loader Reversing**: Game-loader challenges can extract Godot PCK AES
+  keys from Windows launchers, recover/decompile scripts with GDRE Tools, model
+  GDScript obfuscation, and replay loader network requests to retrieve split
+  flag material from headers and payload metadata.
 - **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
 - **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
   forensics agent can inspect loader/preload state and shared-library hook
@@ -212,6 +220,17 @@ No API key is required for the default local Ollama setup.
    Hardware logic challenge folders can point at local images and CSV files:
    ```bash
    python3 ask.py "Solve this hardware chip challenge. The files are in ~/Downloads/hw_lowlogic"
+   ```
+
+   Saleae captures can be passed directly for serial-debugging hardware tasks:
+   ```bash
+   python3 ask.py "Decode this asynchronous serial debugging capture. Files are in ~/Downloads/debugging_interface_signal.sal"
+   ```
+
+   Godot game-loader reversing challenges can include a target service and a
+   local extracted challenge folder:
+   ```bash
+   python3 ask.py "Investigate this compromised game and uncover the two-part flag. Target host TARGET:PORT. Files are in ~/Downloads/rev_gameloader"
    ```
 
    Live SSH forensics prompts can include credentials and a target:
@@ -304,7 +323,8 @@ pytest
 ```
 
 The test suite includes coordinator routing, reasoner fallback behavior, tool
-wrappers, flag detection utilities, and end-to-end fixtures.
+wrappers, flag detection utilities, hardware/Saleae decoding paths, Godot
+loader reversing helpers, and end-to-end fixtures.
 
 ## Runtime Artifacts
 

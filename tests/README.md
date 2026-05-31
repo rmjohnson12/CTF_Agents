@@ -61,14 +61,14 @@ pytest
 # Run unit tests only
 pytest tests/unit/
 
-# Run integration tests
-pytest tests/integration/
+# Run end-to-end smoke prompts
+pytest tests/e2e/test_smoke_prompts.py
 
 # Run with coverage
 pytest --cov=agents --cov=core --cov=tools
 
-# Run specific test file
-pytest tests/unit/test_coordinator.py
+# Run a specific existing test file
+pytest tests/unit/test_reasoner_routing.py
 
 # Run with verbose output
 pytest -v
@@ -76,12 +76,9 @@ pytest -v
 
 ## Test Requirements
 
-Create a `requirements-test.txt` file with:
-- pytest
-- pytest-cov
-- pytest-mock
-- pytest-asyncio (if using async agents)
-- hypothesis (for property-based testing)
+Test dependencies are installed from the repository's main `requirements.txt`.
+At minimum, the checked-in test suite expects `pytest` and any runtime packages
+used by the agents under test.
 
 ## Continuous Integration
 

@@ -2,13 +2,14 @@
 
 ## Introduction
 
-Welcome to the CTF Multi-Agent System! This guide will help you get started with installing, configuring, and using the system to solve CTF challenges.
+Welcome to the CTF Multi-Agent System. This guide covers the current install,
+configuration, and challenge-running flow.
 
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:
 
-- **Python 3.8 or higher**: The system is written in Python
+- **Python 3.10 or higher**: The system is written in Python
 - **pip**: Python package manager
 - **Docker** (optional): For running containerized tools
 - **Git**: For cloning the repository
@@ -18,7 +19,7 @@ Before you begin, ensure you have the following installed:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/TonyZeroArch/CTF_Agents.git
+git clone https://github.com/rmjohnson12/CTF_Agents.git
 cd CTF_Agents
 ```
 
@@ -55,93 +56,101 @@ sudo apt-get install -y \
 
 ### 5. Configure the System
 
-Copy the example configuration files and customize them:
+Copy the root environment template and customize it:
 
 ```bash
-cp config/.env.example config/.env
-# Edit config/.env with your settings
+cp .env.example .env
+# Edit .env with your LLM provider settings
+```
 
-# Review and modify configuration files as needed
-# - config/system_config.yaml
-# - config/agents_config.yaml
-# - config/tools_config.yaml
+At least one supported LLM configuration is recommended:
+
+```bash
+NVAPI_KEY=your_nvidia_key_here
+# or
+NVAPI_KEYS=first_key,second_key
+# or
+ANTHROPIC_API_KEY=your_claude_key_here
+# or
+OPENAI_API_KEY=your_openai_key_here
+```
+
+For local Ollama:
+
+```bash
+LLM_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434/v1
+OLLAMA_MODEL=llama3.1
+```
+
+Run the setup check after editing `.env`:
+
+```bash
+python3 check_setup.py
+```
+
+You can also review configuration files as needed:
+
+```text
+config/system_config.yaml
+config/agents_config.yaml
+config/tools_config.yaml
 ```
 
 ## Basic Usage
 
-### Starting the System
+### Interactive Natural-Language CLI
 
 ```bash
-python main.py
+python3 ask.py
 ```
 
-This will:
-- Initialize all agents
-- Start the coordinator
-- Begin listening for challenges
+Then enter a challenge prompt when asked. You can include local files, folders,
+URLs, IPs, ports, credentials for authorized lab targets, and challenge text.
 
-### Submitting a Challenge
-
-You can submit a challenge in several ways:
-
-#### 1. Using the CLI
+You can also pass a single prompt directly:
 
 ```bash
-python submit_challenge.py \
-    --name "My Challenge" \
-    --category web \
-    --difficulty medium \
-    --description "Find the hidden flag" \
-    --url http://challenge.local:8080 \
-    --points 200
+python3 ask.py "Solve this web challenge at http://127.0.0.1:8080. The files are in ~/Downloads/challenge"
 ```
 
-#### 2. Using a JSON File
+### JSON Challenge Mode
 
 Create a challenge JSON file (see `challenges/templates/` for examples):
 
 ```bash
-python submit_challenge.py --file my_challenge.json
+python3 main.py challenges/templates/example_crypto_base64.json
 ```
 
-#### 3. Programmatically
-
-```python
-from core.challenge import Challenge, ChallengeCategory, ChallengeDifficulty
-from agents.coordinator.coordinator_agent import CoordinatorAgent
-
-# Create a challenge
-challenge = Challenge(
-    id="web_001",
-    name="SQL Injection Challenge",
-    category=ChallengeCategory.WEB,
-    difficulty=ChallengeDifficulty.MEDIUM,
-    description="Find the flag in the database",
-    points=200,
-    url="http://challenge.local:8080"
-)
-
-# Create coordinator and solve
-coordinator = CoordinatorAgent()
-result = coordinator.solve_challenge(challenge.to_dict())
-print(result)
-```
-
-### Viewing Results
+Preview the routing plan without invoking agents or tools:
 
 ```bash
-# View all challenges
-python view_results.py --list
-
-# View specific challenge
-python view_results.py --challenge-id web_001
-
-# View flags captured
-python view_results.py --flags
-
-# Generate report
-python view_results.py --report --output report.md
+python3 main.py challenges/templates/example_crypto_base64.json --plan
 ```
+
+Resume from an existing checkpoint:
+
+```bash
+python3 main.py challenges/templates/example_crypto_base64.json --resume
+```
+
+A minimal challenge JSON looks like this:
+
+```json
+{
+  "id": "example_crypto_base64",
+  "name": "Base64 Warmup",
+  "category": "crypto",
+  "description": "Decode the provided message and recover the flag.",
+  "files": []
+}
+```
+
+### Results
+
+The CLI prints the run status, recovered flag when found, and recent steps.
+Generated reports and artifacts are written under `results/`. Checkpoints,
+knowledge, and runtime databases are written under `logs/`.
 
 ## Directory Structure
 
@@ -191,25 +200,26 @@ Edit `config/tools_config.yaml` to:
 
 Here's a typical workflow for solving a challenge:
 
-1. **Submit Challenge**
+1. **Check Setup**
    ```bash
-   python submit_challenge.py --file challenge.json
+   python3 check_setup.py
    ```
 
-2. **Monitor Progress**
+2. **Run a Natural-Language Challenge**
    ```bash
-   tail -f logs/system/system.log
+   python3 ask.py "Solve this reversing challenge. Files are in ~/Downloads/rev_challenge"
    ```
 
-3. **View Results**
+3. **Or Run a JSON Challenge**
    ```bash
-   python view_results.py --challenge-id <id>
+   python3 main.py challenges/templates/example_crypto_base64.json --plan
+   python3 main.py challenges/templates/example_crypto_base64.json
    ```
 
 4. **Review Solution**
-   - Check `results/reports/` for detailed report
-   - Check `results/flags/` for captured flag
-   - Check `results/artifacts/` for generated files
+   - Read the CLI output for status, flag, and recent steps.
+   - Check `results/` for generated reports and artifacts.
+   - Check `logs/checkpoints/` if you need to resume a coordinator run.
 
 ## Common Issues
 
@@ -229,10 +239,9 @@ which nmap
 
 Some tools require elevated privileges:
 ```bash
-# Run with sudo (not recommended for production)
-sudo python main.py
-
-# Or configure tools to run with appropriate permissions
+# Prefer configuring only the external tool that needs privileges.
+# Avoid running the whole coordinator with sudo unless you fully trust the target
+# files and understand the risk.
 ```
 
 ### Import Errors

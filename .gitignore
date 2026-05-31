@@ -208,6 +208,17 @@ logs/checkpoints/
 logs/knowledge.db
 logs/performance.db
 
+# Local CTF scratch and challenge extraction artifacts
+.scratch/
+scratch/
+artifacts/
+extracted_*/
+*.zst
+*_strings.txt
+certs.txt
+my_dict.bin
+temp.bin
+
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
 #  exclude from AI features like autocomplete and code analysis. Recommended for sensitive data
