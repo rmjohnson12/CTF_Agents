@@ -7,11 +7,55 @@ from typing import List, Dict, Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agents.coordinator.coordinator_agent import CoordinatorAgent
+from agents.base_agent import BaseAgent, AgentType
 from agents.specialists.cryptography.crypto_agent import CryptographyAgent
 from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
 from agents.specialists.misc.coding_agent import CodingAgent
 from agents.specialists.forensics.forensics_agent import ForensicsAgent
 from core.decision_engine.llm_reasoner import ChallengeAnalysis
+
+class SimulatedWebAgent(BaseAgent):
+    """Deterministic web agent for offline simulation fixtures."""
+
+    def __init__(self):
+        super().__init__("web_agent", AgentType.SPECIALIST)
+        self.capabilities = ["web", "directory_discovery", "simulation"]
+
+    def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "agent_id": self.agent_id,
+            "can_handle": challenge.get("category") == "web",
+            "confidence": 0.9,
+            "approach": "Use deterministic simulated web responses.",
+        }
+
+    def solve_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
+        cid = challenge.get("id", "")
+        if cid == "sim_sky_001":
+            return {
+                "challenge_id": cid,
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": "SKY-QIZK-8026",
+                "steps": [
+                    "Simulated directory discovery against ncl.target.local.",
+                    "  Found /hidden_flag.txt",
+                    "  Flag found in simulated directory response: SKY-QIZK-8026",
+                ],
+                "artifacts": {"directory_discovery": ["/hidden_flag.txt"]},
+            }
+
+        return {
+            "challenge_id": cid,
+            "agent_id": self.agent_id,
+            "status": "attempted",
+            "flag": None,
+            "steps": ["Simulated web reconnaissance completed."],
+            "artifacts": {},
+        }
+
+    def get_capabilities(self) -> List[str]:
+        return self.capabilities
 
 class SimulatedReasonerV2:
     """
@@ -19,6 +63,10 @@ class SimulatedReasonerV2:
     """
     def __init__(self):
         self.step_counts = {}
+
+    @property
+    def is_available(self) -> bool:
+        return True
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> ChallengeAnalysis:
         cid = challenge["id"]
@@ -88,7 +136,13 @@ class SimulatedReasonerV2:
     def generate_script(self, challenge: Dict[str, Any], task_description: str) -> str:
         return "print('CTF{simulated_coding_flag}')"
 
-    def fix_script(self, challenge: Dict[str, Any], script: str, error: str) -> str:
+    def fix_script(
+        self,
+        challenge: Dict[str, Any],
+        script: str,
+        error: str,
+        stdout: str = "",
+    ) -> str:
         return script # Just return same for mock
 
 def run_simulation(challenge_path: str):
@@ -99,19 +153,8 @@ def run_simulation(challenge_path: str):
     coordinator = CoordinatorAgent(max_iterations=5)
     coordinator.reasoner = SimulatedReasonerV2() 
     
-    # Mocking dirsearch for sim_sky_001
-    from unittest.mock import MagicMock
-    from tools.web.dirsearch import DirsearchResult, DirsearchEntry
-    from tools.common.result import ToolResult
-    
-    mock_ds = MagicMock()
-    mock_ds.run.return_value = DirsearchResult(
-        target_url=challenge.get("url", ""),
-        entries=[DirsearchEntry(200, "1KB", "/hidden_flag.txt")],
-        raw=ToolResult(["dirsearch"], "Found: SKY-QIZK-8026", "", 0, False, 0.1)
-    )
-    
-    coordinator.register_agent(WebExploitationAgent(dirsearch_tool=mock_ds))
+    web_agent = SimulatedWebAgent() if challenge.get("id") == "sim_sky_001" else WebExploitationAgent()
+    coordinator.register_agent(web_agent)
     coordinator.register_agent(CodingAgent(reasoner=coordinator.reasoner))
     coordinator.register_agent(CryptographyAgent())
     coordinator.register_agent(ForensicsAgent())
