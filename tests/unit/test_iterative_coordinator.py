@@ -105,6 +105,16 @@ class MaxIterationRecoveryReasoner(MockReasoner):
             "inputs": {"task": "Last-chance recovery attempt."},
         }
 
+
+class CapturingMockAgent(MockAgent):
+    def __init__(self, agent_id, status_on_solve="attempted", flag=None):
+        super().__init__(agent_id, status_on_solve=status_on_solve, flag=flag)
+        self.last_challenge = None
+
+    def solve_challenge(self, challenge):
+        self.last_challenge = challenge
+        return super().solve_challenge(challenge)
+
 def test_coordinator_iterative_loop_stops_on_solve():
     decisions = [
         {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try first agent"},
@@ -229,6 +239,29 @@ def test_coordinator_asks_llm_for_final_recovery_after_iteration_limit():
     assert agent3.solve_called == 1
     assert reasoner.recovery_calls == 1
     assert any("LLM failure review suggested final recovery" in step for step in result["steps"])
+
+
+def test_coordinator_final_recovery_hydrates_prior_knowledge():
+    reasoner = MaxIterationRecoveryReasoner()
+    coordinator = CoordinatorAgent(max_iterations=2)
+    coordinator.reasoner = reasoner
+
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="attempted"))
+    coordinator.register_agent(MockAgent("agent_2", status_on_solve="attempted"))
+    agent3 = CapturingMockAgent("agent_3", status_on_solve="solved", flag="CTF{knowledge}")
+    coordinator.register_agent(agent3)
+    coordinator.knowledge_store.add_fact(
+        challenge_id="knowledge_recovery",
+        agent_id="docker_agent",
+        key="docker_target_url",
+        value="http://127.0.0.1:8080",
+    )
+
+    result = coordinator.solve_challenge({"id": "knowledge_recovery", "description": "test final recovery"})
+
+    assert result["status"] == "solved"
+    assert agent3.last_challenge["url"] == "http://127.0.0.1:8080"
+    assert agent3.last_challenge["prior_knowledge"][0]["value"] == "http://127.0.0.1:8080"
 
 
 def test_coordinator_corrects_agent_target_marked_as_tool():

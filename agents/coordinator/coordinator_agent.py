@@ -387,7 +387,11 @@ class CoordinatorAgent(BaseAgent):
                         f"LLM failure review suggested final recovery: {action} -> {target}. {reasoning}"
                     )
                     if action == "run_agent":
+                        prior_facts = self.knowledge_store.get_facts(challenge_id=challenge_id)
                         recovery_challenge = challenge.copy()
+                        if prior_facts:
+                            recovery_challenge["prior_knowledge"] = prior_facts
+                            self._hydrate_challenge_from_facts(recovery_challenge, prior_facts)
                         if recovery.get("inputs", {}).get("task"):
                             recovery_challenge["current_task_description"] = recovery["inputs"]["task"]
                         result = self._run_selected_agent(recovery_challenge, target, [])
