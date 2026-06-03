@@ -1,216 +1,238 @@
-# Project Structure Summary
+# Project Structure
 
-This document provides an overview of the complete hierarchical multi-agent CTF system structure.
+This document maps the current tracked repository layout for the CTF_Agents
+multi-agent CTF workflow. It is a source-code map, not a list of local runtime
+artifacts or optional tools installed on a developer machine.
 
-## Directory Tree
+## Top-Level Layout
 
-```
+```text
 CTF_Agents/
-│
-├── 📁 agents/                              # All agent implementations
-│   ├── 📄 base_agent.py                   # Abstract base class for all agents
-│   ├── 📁 coordinator/                    # Central coordinator agent
-│   │   └── 📄 coordinator_agent.py       # Main orchestrator implementation
-│   ├── 📁 specialists/                    # Category-specific specialist agents
-│   │   ├── 📁 web_exploitation/          # Web security challenges
-│   │   ├── 📁 cryptography/              # Crypto challenges
-│   │   ├── 📁 reverse_engineering/       # Binary analysis
-│   │   ├── 📁 forensics/                 # Digital forensics
-│   │   ├── 📁 binary_exploitation/       # Binary exploitation
-│   │   ├── 📁 osint/                     # OSINT challenges
-│   │   ├── 📁 pwn/                       # PWN challenges
-│   │   ├── 📁 misc/                      # Miscellaneous challenges
-│   │   └── 📁 networking/                # Network challenges
-│   └── 📁 support/                        # Support agents
-│       ├── 📁 reconnaissance/            # Information gathering
-│       ├── 📁 exploit_development/       # Exploit creation
-│       └── 📁 vulnerability_scanner/     # Automated scanning
-│
-├── 📁 core/                               # Core system components
-│   ├── 📄 challenge.py                   # Challenge data structures
-│   ├── 📁 communication/                 # Inter-agent communication
-│   │   └── 📄 message.py                 # Message definitions
-│   ├── 📁 task_manager/                  # Task assignment & tracking
-│   ├── 📁 knowledge_base/                # Shared knowledge storage
-│   └── 📁 decision_engine/               # Strategic decision-making
-│
-├── 📁 tools/                              # CTF tools and utilities
-│   ├── 📁 web/                           # Web exploitation tools
-│   ├── 📁 crypto/                        # Cryptography tools
-│   ├── 📁 reversing/                     # Reverse engineering tools
-│   ├── 📁 forensics/                     # Forensics tools
-│   ├── 📁 binary/                        # Binary exploitation tools
-│   ├── 📁 network/                       # Network analysis tools
-│   └── 📁 common/                        # General-purpose utilities
-│
-├── 📁 shared/                             # Shared resources
-│   ├── 📁 payloads/                      # Exploit payloads
-│   ├── 📁 exploits/                      # Reusable exploits
-│   ├── 📁 scripts/                       # Utility scripts
-│   └── 📁 models/                        # AI/ML models
-│
-├── 📁 challenges/                         # Challenge management
-│   ├── 📁 active/                        # Currently active challenges
-│   ├── 📁 completed/                     # Solved challenges
-│   └── 📁 templates/                     # Challenge templates
-│       ├── 📄 example_web_challenge.json
-│       └── 📄 example_crypto_challenge.json
-│
-├── 📁 config/                             # Configuration files
-│   ├── 📄 system_config.yaml             # Main system settings
-│   ├── 📄 agents_config.yaml             # Agent configurations
-│   ├── 📄 tools_config.yaml              # Tool settings
-│   └── 📄 .env.example                   # Environment variables template
-│
-├── 📁 logs/                               # System logs
-│   ├── 📁 agents/                        # Agent-specific logs
-│   ├── 📁 challenges/                    # Challenge logs
-│   └── 📁 system/                        # System-wide logs
-│
-├── 📁 results/                            # Challenge results
-│   ├── 📁 reports/                       # Solution reports
-│   ├── 📁 flags/                         # Captured flags
-│   └── 📁 artifacts/                     # Challenge artifacts
-│
-├── 📁 tests/                              # Test suite
-│   ├── 📁 unit/                          # Unit tests
-│   ├── 📁 integration/                   # Integration tests
-│   └── 📁 mocks/                         # Mock objects
-│
-├── 📁 docs/                               # Documentation
-│   ├── 📁 architecture/                  # Architecture docs
-│   │   └── 📄 system_overview.md
-│   ├── 📁 agents/                        # Agent documentation
-│   ├── 📁 guides/                        # User & developer guides
-│   │   └── 📄 getting_started.md
-│   └── 📁 api/                           # API documentation
-│
-├── 📄 README.md                           # Main project README
-├── 📄 requirements.txt                    # Python dependencies
-├── 📄 LICENSE                             # Project license
-└── 📄 .gitignore                         # Git ignore rules
+├── agents/                 Agent implementations and specialist solvers
+├── core/                   Coordination, routing, state, and shared models
+├── tools/                  Python wrappers around external CTF/security tools
+├── challenges/             Example, active, benchmark, and evaluation inputs
+├── config/                 YAML defaults and environment templates
+├── docs/                   Architecture, getting-started, and demo docs
+├── logs/                   Runtime log/checkpoint location; only README tracked
+├── results/                Runtime result location; only README tracked
+├── shared/                 Small shared helper resources
+├── tests/                  Unit, integration, e2e, and benchmark tests
+├── ask.py                  Natural-language CLI entrypoint
+├── main.py                 JSON challenge runner entrypoint
+├── check_setup.py          Local environment and tool diagnostic
+├── simulate.py             Original iterative workflow simulator
+├── simulate_v2.py          Expanded simulator scenarios
+├── requirements.txt        Python dependency list
+└── README.md               Main user-facing project guide
 ```
 
-## Key Features
+## Agents
 
-### 1. Modular Architecture
-- **9 Specialist Agents**: Each focused on a specific CTF category
-- **3 Support Agents**: Providing auxiliary services
-- **1 Coordinator Agent**: Central orchestration and decision-making
+```text
+agents/
+├── base_agent.py
+├── coordinator/
+│   └── coordinator_agent.py
+├── specialists/
+│   ├── binary_exploitation/
+│   ├── cryptography/
+│   ├── forensics/
+│   ├── hardware_logic/
+│   ├── log_analysis/
+│   ├── misc/
+│   ├── networking/
+│   ├── osint/
+│   ├── pwn/
+│   ├── reverse_engineering/
+│   └── web_exploitation/
+└── support/
+    ├── docker_agent.py
+    └── recon_agent.py
+```
 
-### 2. Comprehensive Configuration
-- System-wide settings
-- Per-agent configuration
-- Tool integration settings
-- Environment-based configuration
+The coordinator owns the iterative solve loop, specialist selection, history,
+checkpointing, and LLM-assisted recovery when normal routing stalls. Specialist
+agents handle domain work such as web exploitation, cryptography, reversing,
+forensics, hardware logic, log analysis, pwn, networking, OSINT, and generated
+coding/math tasks. Support agents cover local Docker challenge launch and
+reconnaissance.
 
-### 3. Complete Workflow Support
-- Challenge intake and parsing
-- Automated task assignment
-- Progress tracking
-- Result documentation
-- Knowledge accumulation
+## Core System
 
-### 4. Well-Documented
-- README files in all major directories
-- Architecture documentation
-- Getting started guide
-- Example configurations and templates
+```text
+core/
+├── challenge.py
+├── communication/
+│   ├── message.py
+│   └── message_broker.py
+├── decision_engine/
+│   ├── classifier.py
+│   ├── llm_reasoner.py
+│   ├── performance_tracker.py
+│   └── strategy_selector.py
+├── knowledge_base/
+│   └── knowledge_store.py
+├── task_manager/
+│   ├── task.py
+│   └── task_queue.py
+└── utils/
+    ├── flag_utils.py
+    ├── result_manager.py
+    ├── session_manager.py
+    └── system_checks.py
+```
 
-### 5. Development-Ready
-- Python package structure with `__init__.py` files
-- Base classes and interfaces
-- Example agent implementations
-- Test framework structure
+The decision engine combines deterministic routing with optional LLM-backed
+analysis and recovery. Runtime knowledge and performance databases are local
+state and should stay out of version control.
 
-## Agent Categories
+## Tool Wrappers
 
-### Specialist Agents (Domain Experts)
-1. **Web Exploitation**: SQL injection, XSS, CSRF, SSRF, etc.
-2. **Cryptography**: Ciphers, hashing, encoding, RSA, AES
-3. **Reverse Engineering**: Binary analysis, disassembly, debugging
-4. **Forensics**: Memory dumps, disk images, steganography
-5. **Binary Exploitation**: Buffer overflows, ROP chains, shellcode
-6. **OSINT**: Information gathering, social media analysis
-7. **PWN**: Advanced exploitation techniques
-8. **Miscellaneous**: General problem-solving, scripting
-9. **Networking**: Packet analysis, protocol reverse engineering
+```text
+tools/
+├── base_tool.py
+├── common/
+│   ├── elf_utils.py
+│   ├── python_tool.py
+│   ├── result.py
+│   ├── runner.py
+│   └── strings.py
+├── crypto/
+│   ├── hashcat.py
+│   └── john.py
+├── forensics/
+│   ├── binwalk.py
+│   ├── exiftool.py
+│   └── qpdf.py
+├── network/
+│   ├── nmap.py
+│   ├── scapy_tool.py
+│   └── tshark.py
+├── pwn/
+│   ├── angr_tool.py
+│   ├── headless_ghidra_tool.py
+│   └── pwntools_wrapper.py
+└── web/
+    ├── browser_snapshot_tool.py
+    ├── dirsearch.py
+    ├── docker_challenge.py
+    ├── http_fetch.py
+    ├── react2shell.py
+    └── sqlmap.py
+```
 
-### Support Agents (Auxiliary Services)
-1. **Reconnaissance**: Initial enumeration and scanning
-2. **Exploit Development**: Creating custom exploits
-3. **Vulnerability Scanner**: Automated vulnerability detection
+The repository does not contain `tools/reversing/` or `tools/binary/`; reversing
+and pwn helpers currently live under `tools/pwn/`, `tools/common/`, and the
+specialist agents.
 
-### Coordinator Agent (Orchestration)
-- Challenge analysis and categorization
-- Agent selection and task assignment
-- Progress monitoring and coordination
-- Result aggregation and validation
-- Strategic decision-making
+## Challenges
 
-## Core Components
+```text
+challenges/
+├── active/                 Local simulator fixtures and active examples
+├── benchmarks/             Benchmark manifest and notes
+├── evaluation/             Evaluation challenge JSON and small artifacts
+├── templates/              Reusable example challenge JSON files
+└── challenge_parser.py
+```
 
-1. **Communication Layer**: Message passing, event handling
-2. **Task Manager**: Task queuing, assignment, tracking
-3. **Knowledge Base**: Shared intelligence storage
-4. **Decision Engine**: Strategy selection and planning
+There is no tracked `challenges/completed/` directory. Completed challenge
+outputs are written under runtime result/checkpoint locations.
 
-## File Count Summary
+## Configuration
 
-- **Total Directories**: 58
-- **Python Files**: 12 (agents, core components, examples)
-- **Configuration Files**: 4 (YAML, environment)
-- **Documentation Files**: 21 (README, guides, architecture)
-- **Template Files**: 2 (challenge examples)
+```text
+config/
+├── .env.example
+├── agents_config.yaml
+├── defaults.py
+├── system_config.yaml
+└── tools_config.yaml
+```
 
-## Next Steps for Development
+The active local `.env` is loaded from the project root by the reasoner. The
+root `.env.example` is the primary template for local provider keys. NVIDIA
+fallback keys are configured with `NVAPI_KEYS`, while `NVAPI_KEY` and
+`NGC_API_KEY` remain supported.
 
-1. **Implement Core Components**
-   - Message broker/queue system
-   - Task manager with prioritization
-   - Knowledge base with database backend
-   - Decision engine with AI integration
+Tool paths in `config/tools_config.yaml` describe preferred local/system assets.
+Large dictionaries such as `rockyou.txt` are not bundled in this repository.
 
-2. **Complete Agent Implementations**
-   - Implement remaining specialist agents
-   - Add tool wrappers and integrations
-   - Develop learning mechanisms
+## Shared Resources
 
-3. **Tool Integration**
-   - Wrap existing CTF tools
-   - Create unified interfaces
-   - Implement sandboxing
+```text
+shared/
+└── scripts/
+    └── DumpAnalysis.java
+```
 
-4. **Testing**
-   - Write unit tests for all components
-   - Create integration test scenarios
-   - Build mock challenges for testing
+The repository currently tracks a small shared Ghidra helper script. It does not
+bundle shared payload, exploit, model, or wordlist trees.
 
-5. **Documentation**
-   - Complete API documentation
-   - Write development guides
-   - Add examples and tutorials
+## Documentation
 
-## Technology Stack
+```text
+docs/
+├── README.md
+├── architecture/
+│   └── system_overview.md
+├── guides/
+│   └── getting_started.md
+└── interview_demo.md
+```
 
-- **Language**: Python 3.8+
-- **Agent Framework**: Custom hierarchical architecture
-- **Communication**: Message queues (Redis/RabbitMQ optional)
-- **Database**: SQLite/PostgreSQL/MongoDB (configurable)
-- **AI/ML**: OpenAI/Anthropic for decision-making
-- **Tools**: Standard CTF tools (sqlmap, nmap, john, etc.)
-- **Containerization**: Docker (optional)
+There are no tracked `docs/agents/` or `docs/api/` directories at this time.
 
-## Design Principles
+## Tests
 
-✅ **Modularity**: Easy to add/remove/modify agents  
-✅ **Scalability**: Horizontal and vertical scaling support  
-✅ **Extensibility**: Plugin architecture for tools  
-✅ **Autonomy**: Agents make independent decisions  
-✅ **Collaboration**: Agents share knowledge and coordinate  
-✅ **Learning**: System improves from experience  
-✅ **Security**: Sandboxed execution, network isolation  
+```text
+tests/
+├── benchmarks/
+├── e2e/
+├── integration/
+├── unit/
+├── conftest.py
+└── README.md
+```
 
----
+The test suite is pytest-based. `tests/conftest.py` disables live LLM keys by
+default so normal test runs stay deterministic even on a developer machine with
+provider credentials configured.
 
-This structure provides a solid foundation for building a production-ready hierarchical multi-agent CTF system!
+Useful validation commands:
+
+```bash
+python3 -m pytest -q
+python3 -m pytest -q -p no:cacheprovider tests/unit/
+python3 check_setup.py
+python3 ask.py --help
+```
+
+## Runtime State
+
+The following locations are expected to accumulate local generated state:
+
+```text
+logs/checkpoints/
+logs/*.db
+results/
+.scratch/
+__pycache__/
+.pytest_cache/
+```
+
+These artifacts are not part of the source structure and should generally stay
+ignored unless a test fixture is intentionally added.
+
+## Current Scale
+
+At the time this document was refreshed, the tracked tree contained:
+
+- 184 tracked files
+- 129 Python files
+- 24 Markdown documentation files
+- 4 YAML configuration or workflow files
+
+Use `git ls-tree -r --name-only HEAD` when refreshing this document so it stays
+aligned with the committed repository rather than local scratch files.
