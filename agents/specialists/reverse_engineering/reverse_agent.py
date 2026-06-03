@@ -7,6 +7,7 @@ and binary reversing challenges (ELF + encrypted-output patterns).
 
 import base64
 import ctypes
+import hashlib
 import http.client
 import io
 import logging
@@ -291,10 +292,12 @@ class ReverseEngineeringAgent(BaseAgent):
         recovered_scripts = list(gd_files)
 
         if exe_files and pck_files:
-            key = self._extract_godot_pck_key_from_pe(exe_files[0], steps)
+            key = self._extract_godot_pck_key_from_pe(exe_files[0], steps, pck_files[0])
             if key:
                 steps.append(f"Extracted Godot PCK AES key: {key}")
-                recovered_scripts.extend(self._recover_godot_scripts_with_gdre(pck_files[0], key, steps))
+                recovered_scripts.extend(self._recover_godot_scripts_native(pck_files[0], key, steps))
+                if not recovered_scripts:
+                    recovered_scripts.extend(self._recover_godot_scripts_with_gdre(pck_files[0], key, steps))
             else:
                 steps.append("Could not extract a Godot PCK key from the executable.")
 
@@ -525,7 +528,143 @@ class ReverseEngineeringAgent(BaseAgent):
         return None
 
     @staticmethod
-    def _extract_godot_pck_key_from_pe(exe_file: str, steps: List[str]) -> Optional[str]:
+    def _recover_godot_scripts_native(pck_file: str, key_hex: str, steps: List[str]) -> List[str]:
+        try:
+            from Crypto.Cipher import AES
+        except Exception:
+            steps.append("pycryptodome not installed; cannot natively extract encrypted PCK scripts.")
+            return []
+
+        try:
+            key = bytes.fromhex(key_hex)
+        except ValueError:
+            steps.append("Godot PCK key is not valid hex; skipping native extraction.")
+            return []
+
+        try:
+            with open(pck_file, "rb") as handle:
+                handle.seek(20)
+                _pack_flags = struct.unpack("<I", handle.read(4))[0]
+                file_base = struct.unpack("<Q", handle.read(8))[0]
+
+                handle.seek(96)
+                file_count = struct.unpack("<I", handle.read(4))[0]
+                md5_expected = handle.read(16)
+                dir_len = struct.unpack("<Q", handle.read(8))[0]
+                iv = handle.read(16)
+                encrypted_dir = handle.read(ReverseEngineeringAgent._align16(dir_len))
+        except Exception as exc:
+            steps.append(f"Could not read Godot PCK directory metadata: {exc}")
+            return []
+
+        try:
+            cipher = AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128)
+            directory = cipher.decrypt(encrypted_dir)[:dir_len]
+        except Exception as exc:
+            steps.append(f"Could not decrypt Godot PCK directory: {exc}")
+            return []
+
+        if hashlib.md5(directory).digest() != md5_expected:
+            steps.append("Native Godot PCK directory decrypt failed MD5 validation.")
+            return []
+
+        entries = ReverseEngineeringAgent._parse_godot_pck_directory(directory, file_count)
+        if not entries:
+            steps.append("Native Godot PCK directory parsed zero files.")
+            return []
+
+        output_dir = Path(tempfile.mkdtemp(prefix="ctf_agents_godot_native_"))
+        recovered: List[str] = []
+        try:
+            with open(pck_file, "rb") as handle:
+                for path, file_offset, file_size, flags in entries:
+                    clean_path = path.replace("res://", "", 1).replace("user://", "", 1).strip("\0")
+                    if not clean_path or ".." in Path(clean_path).parts:
+                        continue
+
+                    handle.seek(file_base + file_offset)
+                    if flags & 1:
+                        header = handle.read(40)
+                        if len(header) < 40:
+                            continue
+                        file_len = struct.unpack("<Q", header[16:24])[0]
+                        ciphertext = handle.read(ReverseEngineeringAgent._align16(file_len))
+                        file_bytes = ReverseEngineeringAgent._decrypt_godot_pck_file(
+                            key, header + ciphertext, steps
+                        )
+                    else:
+                        file_bytes = handle.read(file_size)
+
+                    if not file_bytes:
+                        continue
+
+                    local_path = output_dir / clean_path
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    local_path.write_bytes(file_bytes)
+                    if local_path.suffix == ".gd":
+                        recovered.append(str(local_path))
+        except Exception as exc:
+            steps.append(f"Native Godot PCK extraction failed: {exc}")
+            return recovered
+
+        steps.append(f"Recovered {len(recovered)} GDScript file(s) with native PCK extraction.")
+        return recovered
+
+    @staticmethod
+    def _decrypt_godot_pck_file(key: bytes, blob: bytes, steps: List[str]) -> Optional[bytes]:
+        try:
+            from Crypto.Cipher import AES
+        except Exception:
+            return None
+
+        if len(blob) < 40:
+            return None
+        md5_expected = blob[:16]
+        file_len = struct.unpack("<Q", blob[16:24])[0]
+        iv = blob[24:40]
+        ciphertext = blob[40:]
+        try:
+            cipher = AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128)
+            plaintext = cipher.decrypt(ciphertext)[:file_len]
+        except Exception:
+            return None
+        if hashlib.md5(plaintext).digest() != md5_expected:
+            steps.append("Warning: encrypted Godot PCK file failed MD5 validation after decrypt.")
+        return plaintext
+
+    @staticmethod
+    def _parse_godot_pck_directory(directory: bytes, file_count: int) -> List[tuple[str, int, int, int]]:
+        entries: List[tuple[str, int, int, int]] = []
+        offset = 0
+        for _ in range(file_count):
+            if offset + 4 > len(directory):
+                break
+            path_len = struct.unpack("<I", directory[offset : offset + 4])[0]
+            offset += 4
+            if path_len <= 0 or offset + path_len > len(directory):
+                break
+            path = directory[offset : offset + path_len].decode("utf-8", errors="replace").strip("\0")
+            offset += path_len
+            if offset + 36 > len(directory):
+                break
+            file_offset, file_size = struct.unpack("<QQ", directory[offset : offset + 16])
+            offset += 16
+            offset += 16  # per-file MD5
+            flags = struct.unpack("<I", directory[offset : offset + 4])[0]
+            offset += 4
+            entries.append((path, file_offset, file_size, flags))
+        return entries
+
+    @staticmethod
+    def _align16(value: int) -> int:
+        return value if value % 16 == 0 else value + (16 - value % 16)
+
+    @staticmethod
+    def _extract_godot_pck_key_from_pe(
+        exe_file: str,
+        steps: List[str],
+        pck_file: Optional[str] = None,
+    ) -> Optional[str]:
         try:
             data = open(exe_file, "rb").read()
         except OSError:
@@ -561,6 +700,60 @@ class ReverseEngineeringAgent(BaseAgent):
                         if blob:
                             return blob.hex().upper()
                 idx = data.find(anchor, idx + 1, rdata["raw"] + rdata["raw_size"])
+
+        if pck_file:
+            key = ReverseEngineeringAgent._scan_pe_sections_for_godot_pck_key(data, sections, pck_file, steps)
+            if key:
+                return key
+
+        return None
+
+    @staticmethod
+    def _scan_pe_sections_for_godot_pck_key(
+        pe_data: bytes,
+        sections: List[Dict[str, int | str]],
+        pck_file: str,
+        steps: List[str],
+    ) -> Optional[str]:
+        try:
+            from Crypto.Cipher import AES
+        except Exception:
+            steps.append("pycryptodome not installed; cannot scan PE sections for Godot PCK keys.")
+            return None
+
+        try:
+            with open(pck_file, "rb") as handle:
+                handle.seek(96)
+                _file_count = struct.unpack("<I", handle.read(4))[0]
+                md5_expected = handle.read(16)
+                dir_len = struct.unpack("<Q", handle.read(8))[0]
+                iv = handle.read(16)
+                encrypted_dir = handle.read(ReverseEngineeringAgent._align16(dir_len))
+        except Exception as exc:
+            steps.append(f"Could not read PCK metadata for section key scan: {exc}")
+            return None
+
+        for section in sections:
+            if str(section["name"]) not in (".data", ".rdata"):
+                continue
+            raw = int(section["raw"])
+            raw_size = int(section["raw_size"])
+            section_data = pe_data[raw : raw + raw_size]
+            for offset in range(0, max(0, len(section_data) - 31)):
+                key = section_data[offset : offset + 32]
+                if key.count(b"\0") > 8:
+                    continue
+                try:
+                    cipher = AES.new(key, AES.MODE_CFB, iv=iv, segment_size=128)
+                    directory = cipher.decrypt(encrypted_dir)[:dir_len]
+                except Exception:
+                    continue
+                if hashlib.md5(directory).digest() != md5_expected:
+                    continue
+                steps.append(
+                    "Validated Godot PCK key by scanning PE data sections and matching directory MD5."
+                )
+                return key.hex().upper()
 
         return None
 

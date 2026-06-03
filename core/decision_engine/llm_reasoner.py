@@ -257,6 +257,55 @@ class LLMReasoner:
         except Exception:
             return self._heuristic_next_action(challenge, analysis, history)
 
+    def suggest_recovery_action(
+        self,
+        challenge: Dict[str, Any],
+        analysis: ChallengeAnalysis,
+        history: List[Dict[str, Any]],
+        steps: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Ask the LLM for one concrete next step after the normal workflow stalls.
+
+        This intentionally has no heuristic fallback: if no model is configured,
+        the coordinator should preserve the existing deterministic behavior.
+        """
+        if self.client is None:
+            return {
+                "next_action": "stop",
+                "target": "none",
+                "reasoning": "LLM recovery review unavailable.",
+                "inputs": {},
+            }
+
+        prompt = self._build_recovery_prompt(challenge, analysis, history, steps)
+        raw = self._call_llm(prompt)
+
+        try:
+            raw = raw.strip().replace("```json", "").replace("```", "").strip()
+            data = json.loads(raw)
+        except Exception:
+            return {
+                "next_action": "stop",
+                "target": "none",
+                "reasoning": "LLM recovery review returned invalid JSON.",
+                "inputs": {},
+            }
+
+        action = data.get("next_action", "stop")
+        target = data.get("target", "none")
+        if action not in {"run_agent", "run_tool", "stop"}:
+            action = "stop"
+        if action == "stop":
+            target = "none"
+
+        return {
+            "next_action": action,
+            "target": target,
+            "reasoning": data.get("reasoning", "No recovery reasoning provided."),
+            "inputs": data.get("inputs") if isinstance(data.get("inputs"), dict) else {},
+        }
+
     def _call_llm(self, prompt: str) -> str:
         if not self.client:
             return ""
@@ -447,6 +496,50 @@ class LLMReasoner:
 
     History:
     {json.dumps(history, indent=2)}
+    """.strip()
+
+    def _build_recovery_prompt(
+        self,
+        challenge: Dict[str, Any],
+        analysis: ChallengeAnalysis,
+        history: List[Dict[str, Any]],
+        steps: List[str],
+    ) -> str:
+        compact_history = history[-6:]
+        recent_steps = steps[-40:]
+
+        return f"""
+    You are reviewing a stalled CTF agent workflow. The normal planner failed
+    to recover a flag. Suggest exactly one concrete next action that is likely
+    to produce new evidence.
+
+    Return ONLY valid JSON with this shape:
+    {{
+    "next_action": "run_agent|run_tool|stop",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "reasoning": "short explanation of why this action is different from prior failed attempts",
+    "inputs": {{"task": "optional focused instruction for the selected agent"}}
+    }}
+
+    Rules:
+    - Prefer an action that is different from prior failed attempts.
+    - If retrying the same agent, include a focused inputs.task explaining the
+      new hypothesis or specific tool/path to try.
+    - Use "run_agent" for targets ending in "_agent".
+    - Use "run_tool" only for browser_snapshot or tony_htb_sql.
+    - Use "stop" only if there is no concrete next experiment.
+
+    Challenge:
+    {json.dumps(challenge, indent=2)}
+
+    Initial analysis:
+    {json.dumps(asdict(analysis), indent=2)}
+
+    Recent trace:
+    {json.dumps(recent_steps, indent=2)}
+
+    Recent results:
+    {json.dumps(compact_history, indent=2)}
     """.strip()
 
     def _heuristic_analysis(self, challenge: Dict[str, Any]) -> ChallengeAnalysis:

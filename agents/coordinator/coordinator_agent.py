@@ -154,6 +154,7 @@ class CoordinatorAgent(BaseAgent):
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
         futures = {}
         deferred_duplicate_targets = set()
+        recovery_review_attempted = False
 
         def record_completed_future(f, step_prefix: str) -> Optional[Dict[str, Any]]:
             task_info = futures.pop(f)
@@ -215,6 +216,7 @@ class CoordinatorAgent(BaseAgent):
                 action = decision.get("next_action", "stop")
                 target = decision.get("target", "none")
                 reasoning = decision.get("reasoning", "No reasoning provided.")
+                recovery_decision = False
                 action, target = self._normalize_decision(action, target, challenge, all_steps)
                 decision_key = (action, target)
 
@@ -223,6 +225,36 @@ class CoordinatorAgent(BaseAgent):
                     action = "run_agent"
                 elif action == "run_agent" and target in ["browser_snapshot", "tony_htb_sql"]:
                     action = "run_tool"
+
+                if action == "stop":
+                    if not futures:
+                        recovery = self._request_recovery_action_once(
+                            challenge_with_knowledge,
+                            initial_analysis_obj,
+                            history,
+                            all_steps,
+                            recovery_review_attempted,
+                        )
+                        recovery_review_attempted = True
+                        if recovery:
+                            decision = recovery
+                            action = decision.get("next_action", "stop")
+                            target = decision.get("target", "none")
+                            reasoning = decision.get("reasoning", "No recovery reasoning provided.")
+                            action, target = self._normalize_decision(action, target, challenge, all_steps)
+                            decision_key = (action, target)
+                            recovery_decision = True
+                            all_steps.append(
+                                f"LLM failure review suggested recovery: {action} -> {target}. {reasoning}"
+                            )
+                        else:
+                            all_steps.append("Reasoner requested to stop.")
+                            self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                            break
+                    else:
+                        all_steps.append("Reasoner requested to stop, but tasks are still running...")
+                        self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                        continue
 
                 if action == "stop":
                     if not futures:
@@ -236,7 +268,11 @@ class CoordinatorAgent(BaseAgent):
 
                 # Decision Quality: Check if we've already done this exact thing in this run
                 # without getting any new hints or knowledge.
-                has_new_info = "User Hint:" in challenge.get("description", "") or (prior_facts and len(prior_facts) > 0)
+                has_new_info = (
+                    recovery_decision
+                    or "User Hint:" in challenge.get("description", "")
+                    or (prior_facts and len(prior_facts) > 0)
+                )
                 
                 is_duplicate = any(
                     h.get("routing", {}).get("selected_target") == target and
@@ -332,6 +368,45 @@ class CoordinatorAgent(BaseAgent):
                 done, _ = concurrent.futures.wait(futures.keys(), timeout=30)
                 for f in done:
                     record_completed_future(f, "Exec")
+
+            if final_result.get("status") != "solved":
+                recovery = self._request_recovery_action_once(
+                    challenge,
+                    initial_analysis_obj,
+                    history,
+                    all_steps,
+                    recovery_review_attempted,
+                )
+                recovery_review_attempted = True
+                if recovery:
+                    action = recovery.get("next_action", "stop")
+                    target = recovery.get("target", "none")
+                    reasoning = recovery.get("reasoning", "No recovery reasoning provided.")
+                    action, target = self._normalize_decision(action, target, challenge, all_steps)
+                    all_steps.append(
+                        f"LLM failure review suggested final recovery: {action} -> {target}. {reasoning}"
+                    )
+                    if action == "run_agent":
+                        recovery_challenge = challenge.copy()
+                        if recovery.get("inputs", {}).get("task"):
+                            recovery_challenge["current_task_description"] = recovery["inputs"]["task"]
+                        result = self._run_selected_agent(recovery_challenge, target, [])
+                    elif action == "run_tool":
+                        result = self._run_selected_tool(challenge, target, [])
+                    else:
+                        result = None
+
+                    if result:
+                        history.append(result)
+                        if result.get("steps"):
+                            all_steps.extend([f"  [Recovery] {s}" for s in result["steps"]])
+                        self._publish_result(result)
+                        if result.get("artifacts"):
+                            self._publish_knowledge(challenge_id, result["artifacts"])
+                        if result.get("status") == "solved" or result.get("flag"):
+                            final_result["status"] = "solved"
+                            final_result["flag"] = result.get("flag")
+                            all_steps.append("Challenge solved by LLM failure review recovery!")
 
             self.active_challenges.pop(challenge_id, None)
             final_result["steps"] = all_steps
@@ -460,6 +535,45 @@ class CoordinatorAgent(BaseAgent):
             return "run_agent", "web_agent"
 
         return action, target
+
+    def _request_recovery_action_once(
+        self,
+        challenge: Dict[str, Any],
+        analysis: ChallengeAnalysis,
+        history: List[Dict[str, Any]],
+        steps: List[str],
+        already_attempted: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """Ask an available LLM for one recovery action after a failed trace."""
+        if already_attempted:
+            return None
+
+        has_failed_trace = bool(history) or any(
+            " failed:" in step
+            or "failed" in step.lower()
+            or "[Exec]" in step
+            or "[Async Result]" in step
+            for step in steps
+        )
+        if not has_failed_trace:
+            return None
+
+        suggest = getattr(self.reasoner, "suggest_recovery_action", None)
+        if not callable(suggest) or not getattr(self.reasoner, "is_available", False):
+            return None
+
+        try:
+            decision = suggest(challenge, analysis, history, steps)
+        except Exception as exc:
+            steps.append(f"LLM failure review errored: {exc}")
+            return None
+        if not isinstance(decision, dict):
+            return None
+        if decision.get("next_action", "stop") == "stop":
+            return None
+        if decision.get("target", "none") == "none":
+            return None
+        return decision
 
     @staticmethod
     def _has_rsa_time_capsule_source(challenge: Dict[str, Any]) -> bool:

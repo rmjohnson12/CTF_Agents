@@ -1,4 +1,5 @@
 """Unit tests for ReverseEngineeringAgent strategies."""
+import hashlib
 import os
 import struct
 import subprocess
@@ -893,3 +894,54 @@ class TestGodotGameLoader:
         assert decoded["payload_path"] == "p47l0ad_binary"
         assert decoded["flag_tail"] == "GD_M@lw4r3_PCB29543}"
         assert decoded["cookie"] == "57151533199105"
+
+    def test_native_pck_extraction_recovers_encrypted_gdscript(self, tmp_path):
+        AES = pytest.importorskip("Crypto.Cipher.AES")
+        key = bytes.fromhex("01" * 32)
+        pck = tmp_path / "game.pck"
+        script = b"var loap = [0x52, 0x30, 0x51, 0x3D]\n"
+        file_iv = bytes.fromhex("02" * 16)
+        dir_iv = bytes.fromhex("03" * 16)
+
+        file_cipher = AES.new(key, AES.MODE_CFB, iv=file_iv, segment_size=128)
+        encrypted_script = file_cipher.encrypt(
+            script + (b"\0" * (ReverseEngineeringAgent._align16(len(script)) - len(script)))
+        )
+        file_blob = (
+            hashlib.md5(script).digest()
+            + struct.pack("<Q", len(script))
+            + file_iv
+            + encrypted_script
+        )
+
+        path = b"res://player/player.gd\0"
+        directory = (
+            struct.pack("<I", len(path))
+            + path
+            + struct.pack("<QQ", 0, len(file_blob))
+            + hashlib.md5(file_blob).digest()
+            + struct.pack("<I", 1)
+        )
+        dir_cipher = AES.new(key, AES.MODE_CFB, iv=dir_iv, segment_size=128)
+        encrypted_dir = dir_cipher.encrypt(
+            directory + (b"\0" * (ReverseEngineeringAgent._align16(len(directory)) - len(directory)))
+        )
+
+        file_base = 0x200
+        header = bytearray(file_base)
+        header[0:4] = b"GDPC"
+        struct.pack_into("<I", header, 20, 1)
+        struct.pack_into("<Q", header, 24, file_base)
+        struct.pack_into("<I", header, 96, 1)
+        header[100:116] = hashlib.md5(directory).digest()
+        struct.pack_into("<Q", header, 116, len(directory))
+        header[124:140] = dir_iv
+        header[140 : 140 + len(encrypted_dir)] = encrypted_dir
+        pck.write_bytes(bytes(header) + file_blob)
+
+        steps = []
+        recovered = ReverseEngineeringAgent._recover_godot_scripts_native(str(pck), key.hex(), steps)
+
+        assert len(recovered) == 1
+        assert open(recovered[0], "rb").read() == script
+        assert any("native PCK extraction" in step for step in steps)

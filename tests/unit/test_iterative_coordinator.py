@@ -67,6 +67,44 @@ class HistoryAwareReasoner(MockReasoner):
             return {"next_action": "run_agent", "target": "agent_2", "reasoning": "Resume with second agent"}
         return {"next_action": "run_agent", "target": "agent_1", "reasoning": "Start with first agent"}
 
+class RecoveryReasoner(MockReasoner):
+    is_available = True
+
+    def __init__(self):
+        super().__init__([
+            {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try likely agent"},
+            {"next_action": "stop", "target": "none", "reasoning": "Normal planner is stuck"},
+        ])
+        self.recovery_calls = 0
+
+    def suggest_recovery_action(self, challenge, analysis, history, steps):
+        self.recovery_calls += 1
+        return {
+            "next_action": "run_agent",
+            "target": "agent_2",
+            "reasoning": "Prior agent failed; pivot to the second specialist with a focused task.",
+            "inputs": {"task": "Try a different decoding strategy based on the failed trace."},
+        }
+
+class MaxIterationRecoveryReasoner(MockReasoner):
+    is_available = True
+
+    def __init__(self):
+        super().__init__([
+            {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try first agent"},
+            {"next_action": "run_agent", "target": "agent_2", "reasoning": "Try second agent"},
+        ])
+        self.recovery_calls = 0
+
+    def suggest_recovery_action(self, challenge, analysis, history, steps):
+        self.recovery_calls += 1
+        return {
+            "next_action": "run_agent",
+            "target": "agent_3",
+            "reasoning": "Iteration budget was exhausted; try the remaining specialist.",
+            "inputs": {"task": "Last-chance recovery attempt."},
+        }
+
 def test_coordinator_iterative_loop_stops_on_solve():
     decisions = [
         {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try first agent"},
@@ -152,6 +190,45 @@ def test_coordinator_iterative_loop_stops_on_reasoner_stop():
     assert result["iterations"] == 2
     assert result["status"] == "attempted"
     assert agent1.solve_called == 1
+
+
+def test_coordinator_asks_llm_for_recovery_after_failed_stop():
+    reasoner = RecoveryReasoner()
+    coordinator = CoordinatorAgent(max_iterations=4)
+    coordinator.reasoner = reasoner
+
+    agent1 = MockAgent("agent_1", status_on_solve="attempted")
+    agent2 = MockAgent("agent_2", status_on_solve="solved", flag="CTF{recovered}")
+    coordinator.register_agent(agent1)
+    coordinator.register_agent(agent2)
+
+    result = coordinator.solve_challenge({"id": "test_recovery", "description": "test recovery"})
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{recovered}"
+    assert agent1.solve_called == 1
+    assert agent2.solve_called == 1
+    assert reasoner.recovery_calls == 1
+    assert any("LLM failure review suggested recovery" in step for step in result["steps"])
+
+
+def test_coordinator_asks_llm_for_final_recovery_after_iteration_limit():
+    reasoner = MaxIterationRecoveryReasoner()
+    coordinator = CoordinatorAgent(max_iterations=2)
+    coordinator.reasoner = reasoner
+
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="attempted"))
+    coordinator.register_agent(MockAgent("agent_2", status_on_solve="attempted"))
+    agent3 = MockAgent("agent_3", status_on_solve="solved", flag="CTF{last_chance}")
+    coordinator.register_agent(agent3)
+
+    result = coordinator.solve_challenge({"id": "test_final_recovery", "description": "test final recovery"})
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{last_chance}"
+    assert agent3.solve_called == 1
+    assert reasoner.recovery_calls == 1
+    assert any("LLM failure review suggested final recovery" in step for step in result["steps"])
 
 
 def test_coordinator_corrects_agent_target_marked_as_tool():

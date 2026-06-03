@@ -91,6 +91,63 @@ def test_next_action_prompt_contains_challenge_and_history():
     assert "{json.dumps" not in prompt, "f-string escape bug in next-action prompt"
 
 
+def test_recovery_prompt_contains_failed_trace():
+    reasoner = LLMReasoner(client=None)
+    analysis = ChallengeAnalysis(
+        category_guess="web",
+        confidence=0.8,
+        reasoning="looks web",
+        recommended_target="web_agent",
+        recommended_action="run_agent",
+        detected_indicators=["url"],
+    )
+    history = [{"agent_id": "web_agent", "status": "attempted", "flag": None}]
+    steps = ["Iteration 1 decision: run_agent -> web_agent", "  [Exec] no flag found"]
+
+    prompt = reasoner._build_recovery_prompt(SAMPLE_CHALLENGE, analysis, history, steps)
+
+    assert "stalled CTF agent workflow" in prompt
+    assert "web_agent" in prompt
+    assert "no flag found" in prompt
+
+
+def test_suggest_recovery_action_parses_valid_json(monkeypatch):
+    mock_client = MagicMock()
+    reasoner = LLMReasoner(client=mock_client)
+    monkeypatch.setattr(
+        reasoner,
+        "_call_llm",
+        lambda prompt: json.dumps({
+            "next_action": "run_agent",
+            "target": "coding_agent",
+            "reasoning": "Generate a focused parser from the failed trace.",
+            "inputs": {"task": "Parse the artifact bytes for a hidden flag."},
+        }),
+    )
+    analysis = ChallengeAnalysis("misc", 0.6, "unknown", "none", "stop", [])
+
+    decision = reasoner.suggest_recovery_action(
+        SAMPLE_CHALLENGE,
+        analysis,
+        [{"agent_id": "web_agent", "status": "attempted"}],
+        ["failed"],
+    )
+
+    assert decision["next_action"] == "run_agent"
+    assert decision["target"] == "coding_agent"
+    assert decision["inputs"]["task"].startswith("Parse")
+
+
+def test_suggest_recovery_action_stops_without_client():
+    reasoner = LLMReasoner(client=None)
+    analysis = ChallengeAnalysis("misc", 0.6, "unknown", "none", "stop", [])
+
+    decision = reasoner.suggest_recovery_action(SAMPLE_CHALLENGE, analysis, [], [])
+
+    assert decision["next_action"] == "stop"
+    assert decision["target"] == "none"
+
+
 # ── model defaults ────────────────────────────────────────────────────
 
 def test_default_model_is_gpt4o_when_no_keys(monkeypatch):
