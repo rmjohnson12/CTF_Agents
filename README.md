@@ -109,7 +109,8 @@ If you plan to use browser-based web tooling, install Playwright's browser runti
 python -m playwright install chromium
 ```
 
-Set your API keys in a `.env` file in the project root:
+Set your API keys in a `.env` file in the project root. For this checkout,
+that file is `/Users/ronniejohnson/CTF_Agentsz2/.env`:
 
 ```bash
 NVAPI_KEY=your_nvidia_key_here
@@ -138,6 +139,9 @@ LLM_PROVIDER=google
 GOOGLE_API_KEY=your_google_key_here
 GOOGLE_MODEL=gemini-2.5-flash
 ```
+
+After saving the key, run `python3 check_setup.py` to confirm the provider is
+detected before starting a solve.
 
 For Google Cloud Application Default Credentials, authenticate with `gcloud`
 and configure the Cloud project:
@@ -187,7 +191,8 @@ No API key is required for the default local Ollama setup.
 - **Blockchain Specialist**: Solidity folders can route to a Web3-backed
   blockchain agent that fetches HTB-style `/connection_info`, connects to the
   challenge RPC endpoint, executes deterministic contract exploits where
-  applicable, and retrieves the remote flag.
+  applicable, and retrieves the remote flag. The normal `ask.py` path has been
+  validated end to end against a spawned Survival-style smart-contract target.
 - **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
 - **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
   forensics agent can inspect loader/preload state and shared-library hook
