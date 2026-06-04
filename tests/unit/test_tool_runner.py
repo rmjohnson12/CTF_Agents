@@ -18,3 +18,30 @@ def test_runner_runs_python_print():
     res = runner.run([sys.executable, "-c", "print('hello')"], timeout_s=5)
     assert "hello" in res.stdout
     assert res.timed_out is False
+
+
+def test_runner_does_not_inherit_secret_environment_by_default(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-secret")
+    runner = ToolRunner(RunnerConfig(allowlist=("python", "python3", "python3.13")))
+
+    res = runner.run(
+        [sys.executable, "-c", "import os; print(os.getenv('OPENAI_API_KEY'))"],
+        timeout_s=5,
+    )
+
+    assert "None" in res.stdout
+
+
+def test_runner_full_environment_inheritance_is_opt_in(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-secret")
+    runner = ToolRunner(RunnerConfig(
+        allowlist=("python", "python3", "python3.13"),
+        inherit_env=True,
+    ))
+
+    res = runner.run(
+        [sys.executable, "-c", "import os; print(os.getenv('OPENAI_API_KEY'))"],
+        timeout_s=5,
+    )
+
+    assert "sk-real-secret" in res.stdout

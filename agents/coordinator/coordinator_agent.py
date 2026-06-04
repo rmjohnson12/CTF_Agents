@@ -26,6 +26,7 @@ from core.utils.result_manager import ResultManager
 from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
 from core.knowledge_base.knowledge_store import KnowledgeStore
+from core.utils.security import safe_checkpoint_path, safe_slug
 import concurrent.futures
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,8 @@ class CoordinatorAgent(BaseAgent):
         Supports parallel execution of independent tasks.
         Persists checkpoint after each iteration to logs/checkpoints/.
         """
-        challenge_id = challenge.get("id", "unknown_challenge")
+        challenge_id = safe_slug(challenge.get("id", "unknown_challenge"))
+        challenge["id"] = challenge_id
         self.active_challenges[challenge_id] = challenge
         checkpoint_dir = Path("logs/checkpoints")
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -709,7 +711,7 @@ class CoordinatorAgent(BaseAgent):
     ) -> None:
         """Write a checkpoint JSON file so recovery is possible after a crash."""
         try:
-            checkpoint_path = checkpoint_dir / f"{challenge_id}.json"
+            checkpoint_path = safe_checkpoint_path(checkpoint_dir, challenge_id)
             checkpoint = {
                 "challenge_id": challenge_id,
                 "timestamp": datetime.now().isoformat(),
@@ -732,7 +734,7 @@ class CoordinatorAgent(BaseAgent):
         challenge_id: str,
     ) -> Optional[Dict[str, Any]]:
         """Load a prior checkpoint if one exists for this challenge."""
-        checkpoint_path = checkpoint_dir / f"{challenge_id}.json"
+        checkpoint_path = safe_checkpoint_path(checkpoint_dir, challenge_id)
         if not checkpoint_path.exists():
             logger.info("No checkpoint found for %s; starting fresh.", challenge_id)
             return None

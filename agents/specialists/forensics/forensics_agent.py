@@ -355,7 +355,14 @@ class ForensicsAgent(BaseAgent):
         combined_output = []
 
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.load_system_host_keys()
+        if os.getenv("CTF_AGENTS_ALLOW_UNKNOWN_SSH_HOST") == "1":
+            steps.append(
+                "Live SSH unknown-host-key trust is enabled by CTF_AGENTS_ALLOW_UNKNOWN_SSH_HOST=1."
+            )
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        else:
+            client.set_missing_host_key_policy(paramiko.RejectPolicy())
         try:
             client.connect(
                 host,

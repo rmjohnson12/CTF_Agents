@@ -23,6 +23,9 @@ class _FakeSSHClient:
     def set_missing_host_key_policy(self, policy):
         self.policy = policy
 
+    def load_system_host_keys(self):
+        self.loaded_system_host_keys = True
+
     def connect(self, host, **kwargs):
         self.connected = (host, kwargs)
 
@@ -48,7 +51,8 @@ def _install_fake_paramiko(monkeypatch):
     _FakeSSHClient.instances = []
     fake = types.SimpleNamespace(
         SSHClient=_FakeSSHClient,
-        AutoAddPolicy=lambda: object(),
+        AutoAddPolicy=lambda: "auto",
+        RejectPolicy=lambda: "reject",
     )
     monkeypatch.setitem(sys.modules, "paramiko", fake)
 
@@ -87,6 +91,8 @@ def test_forensics_agent_solves_live_ssh_rootkit_when_flag_seen(monkeypatch):
     assert result["flag"] == "HTB{live_ssh_rootkit_found}"
     assert result["artifacts"]["ssh_target"] == "154.57.164.66:31361"
     client = _FakeSSHClient.instances[0]
+    assert client.loaded_system_host_keys is True
+    assert client.policy == "reject"
     assert client.connected[0] == "154.57.164.66"
     assert client.connected[1]["port"] == 31361
     assert client.connected[1]["username"] == "root"
@@ -98,7 +104,8 @@ def test_live_ssh_preload_bypass_is_env_gated(monkeypatch):
     _FakeSSHClient.instances = []
     fake = types.SimpleNamespace(
         SSHClient=_BypassOnlySSHClient,
-        AutoAddPolicy=lambda: object(),
+        AutoAddPolicy=lambda: "auto",
+        RejectPolicy=lambda: "reject",
     )
     monkeypatch.setitem(sys.modules, "paramiko", fake)
     monkeypatch.setenv("CTF_AGENTS_ALLOW_SSH_PRELOAD_BYPASS", "1")
@@ -117,3 +124,29 @@ def test_live_ssh_preload_bypass_is_env_gated(monkeypatch):
     assert result["status"] == "solved"
     assert result["flag"] == "HTB{preload_bypass_found}"
     assert any("preload bypass search" in command for command in _FakeSSHClient.instances[0].commands)
+
+
+def test_live_ssh_unknown_host_trust_is_explicitly_gated(monkeypatch):
+    _FakeSSHClient.instances = []
+    fake = types.SimpleNamespace(
+        SSHClient=_FakeSSHClient,
+        AutoAddPolicy=lambda: "auto",
+        RejectPolicy=lambda: "reject",
+    )
+    monkeypatch.setitem(sys.modules, "paramiko", fake)
+    monkeypatch.setenv("CTF_AGENTS_ALLOW_UNKNOWN_SSH_HOST", "1")
+    challenge = {
+        "id": "live_rootkit_unknown_host",
+        "category": "forensics",
+        "description": (
+            "SSH server has library linking errors and possible userland rootkit. "
+            "Creds: root:hackthebox IP and port are 154.57.164.66:31361"
+        ),
+        "files": [],
+    }
+
+    result = ForensicsAgent().solve_challenge(challenge)
+
+    assert result["status"] == "solved"
+    assert _FakeSSHClient.instances[0].policy == "auto"
+    assert any("unknown-host-key trust is enabled" in step for step in result["steps"])

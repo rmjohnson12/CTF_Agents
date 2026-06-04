@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 from typing import List, Dict, Any
@@ -150,23 +151,36 @@ def run_simulation(challenge_path: str):
     with open(challenge_path) as f:
         challenge = json.load(f)
 
-    coordinator = CoordinatorAgent(max_iterations=3)
-    # Inject our simulator
-    coordinator.reasoner = SimulatedReasoner() 
-    
-    web_agent = SimulatedWebAgent() if challenge.get("id") == "sim_sky_001" else WebExploitationAgent()
-    coordinator.register_agent(web_agent)
-    coordinator.register_agent(CodingAgent(reasoner=coordinator.reasoner))
-    coordinator.register_agent(CryptographyAgent())
+    previous_allowed_networks = os.environ.get("CTF_AGENTS_ALLOWED_NETWORKS")
+    if challenge.get("url"):
+        host = challenge["url"].split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+        allowed = [item for item in (previous_allowed_networks or "").split(",") if item]
+        if host and host not in allowed:
+            os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] = ",".join(allowed + [host])
 
-    result = coordinator.solve_challenge(challenge)
-    
-    print(f"\nFinal Status: {result['status']}")
-    print(f"Flag: {result['flag']}")
-    print(f"Iterations: {result['iterations']}")
-    print("\nStep Log:")
-    for step in result['steps']:
-        print(f"  - {step}")
+    try:
+        coordinator = CoordinatorAgent(max_iterations=3)
+        # Inject our simulator
+        coordinator.reasoner = SimulatedReasoner()
+
+        web_agent = SimulatedWebAgent() if challenge.get("id") == "sim_sky_001" else WebExploitationAgent()
+        coordinator.register_agent(web_agent)
+        coordinator.register_agent(CodingAgent(reasoner=coordinator.reasoner))
+        coordinator.register_agent(CryptographyAgent())
+
+        result = coordinator.solve_challenge(challenge)
+
+        print(f"\nFinal Status: {result['status']}")
+        print(f"Flag: {result['flag']}")
+        print(f"Iterations: {result['iterations']}")
+        print("\nStep Log:")
+        for step in result['steps']:
+            print(f"  - {step}")
+    finally:
+        if previous_allowed_networks is None:
+            os.environ.pop("CTF_AGENTS_ALLOWED_NETWORKS", None)
+        else:
+            os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] = previous_allowed_networks
 
 if __name__ == "__main__":
     run_simulation("challenges/active/sim_web_001.json")

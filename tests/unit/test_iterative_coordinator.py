@@ -369,6 +369,23 @@ def test_coordinator_writes_checkpoint_for_fast_solve(tmp_path, monkeypatch):
     assert any("Challenge solved" in step for step in checkpoint["steps"])
 
 
+def test_coordinator_sanitizes_checkpoint_id_path_traversal(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    reasoner = MockReasoner([
+        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try fast agent"}
+    ])
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="solved", flag="CTF{safe_checkpoint}"))
+
+    result = coordinator.solve_challenge({"id": "../../outside", "description": "test checkpoint"})
+
+    assert result["status"] == "solved"
+    assert result["challenge_id"] == "outside"
+    assert (tmp_path / "logs" / "checkpoints" / "outside.json").exists()
+    assert not (tmp_path / "outside.json").exists()
+
+
 def test_coordinator_resumes_from_checkpoint_history(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     checkpoint_dir = tmp_path / "logs" / "checkpoints"

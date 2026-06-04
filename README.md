@@ -223,6 +223,13 @@ No API key is required for the default local Ollama setup.
    > "Who needs AES when you have XOR? The files are in ~/Downloads/challenge.py and ~/Downloads/output.txt"
    ```
 
+   Outbound HTTP/browser access is restricted by `security.allowed_networks` in
+   `config/system_config.yaml`. For an authorized spawned target, allow the host
+   for that run:
+   ```bash
+   CTF_AGENTS_ALLOWED_NETWORKS=TARGET python3 ask.py "Solve this web challenge at http://TARGET:PORT"
+   ```
+
    Source-only web challenges can point directly at a local app folder:
    ```text
    > "Analyze ~/Downloads/web_reactoops/challenge for vulnerable React/Next.js package versions. There is no spawned server."
@@ -274,6 +281,12 @@ No API key is required for the default local Ollama setup.
    Live SSH forensics prompts can include credentials and a target:
    ```bash
    python3 ask.py "Investigate this SSH forensics target for loader anomalies. Creds: root:hackthebox IP and port are TARGET:PORT"
+   ```
+
+   Unknown SSH host keys are rejected by default. For an authorized disposable
+   lab target where first-seen host-key trust is acceptable, opt in explicitly:
+   ```bash
+   CTF_AGENTS_ALLOW_UNKNOWN_SSH_HOST=1 python3 ask.py "Investigate this SSH forensics target. Creds: root:hackthebox IP and port are TARGET:PORT"
    ```
 
    Read-only loader/rootkit triage runs by default. For authorized CTF/lab

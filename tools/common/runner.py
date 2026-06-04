@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from tools.common.result import ToolResult
+from core.utils.security import minimal_subprocess_env
 
 
 @dataclass
@@ -20,7 +21,7 @@ class RunnerConfig:
     allowlist: Optional[set[str]] = None
     default_timeout_s: int = 60
     max_output_chars: int = 200_000
-    inherit_env: bool = True
+    inherit_env: bool = False
 
 
 class ToolRunner:
@@ -57,12 +58,13 @@ class ToolRunner:
 
         # Build environment
         run_env = None
-        if self.config.inherit_env:
+        inherit_env = self.config.inherit_env or os.getenv("CTF_AGENTS_INHERIT_ENV") == "1"
+        if inherit_env:
             run_env = dict(os.environ)
             if env:
                 run_env.update(env)
         else:
-            run_env = env
+            run_env = minimal_subprocess_env(env)
 
         start = time.time()
         timed_out = False

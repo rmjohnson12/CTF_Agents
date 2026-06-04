@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
+
+from core.utils.security import SecurityPolicyError
 from tools.web.http_fetch import HttpFetchTool
 
 
@@ -9,6 +12,7 @@ class DummyElapsed:
 
 
 def test_http_fetch_truncates_body(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "example.local")
     tool = HttpFetchTool(max_preview_chars=10)
 
     dummy_resp = SimpleNamespace(
@@ -34,6 +38,7 @@ def test_http_fetch_truncates_body(monkeypatch):
 
 
 def test_http_fetch_forwards_payload_options_and_captures_cookies(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "example.local")
     tool = HttpFetchTool()
     captured = {}
 
@@ -75,3 +80,33 @@ def test_http_fetch_forwards_payload_options_and_captures_cookies(monkeypatch):
     assert captured["cookies"] == {"session": "old"}
     assert captured["params"] == {"debug": "1"}
     assert res.cookies == {"session": "abc123"}
+
+
+def test_http_fetch_blocks_non_allowlisted_host(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "ctf.local")
+    tool = HttpFetchTool()
+
+    with pytest.raises(SecurityPolicyError):
+        tool.fetch("http://evil.example/")
+
+
+def test_http_fetch_blocks_redirect_to_non_allowlisted_host(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "example.local")
+    tool = HttpFetchTool()
+
+    first_resp = SimpleNamespace(
+        status_code=302,
+        url="http://example.local/start",
+        headers={"Location": "http://evil.example/"},
+        text="",
+        elapsed=DummyElapsed(),
+        is_redirect=True,
+    )
+
+    def fake_request(*args, **kwargs):
+        return first_resp
+
+    monkeypatch.setattr("requests.request", fake_request)
+
+    with pytest.raises(SecurityPolicyError):
+        tool.fetch("http://example.local/start")

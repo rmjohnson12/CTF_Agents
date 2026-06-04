@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 from playwright.sync_api import sync_playwright
 
+from core.utils.security import SecurityPolicyError, assert_url_allowed
+
 _WS_RE = re.compile(r"\s+")
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
@@ -42,6 +44,17 @@ def _json_safe_mapping(value: Any) -> Dict[str, str]:
     if not isinstance(value, dict):
         return {}
     return {str(k): str(v) for k, v in value.items()}
+
+
+def _install_network_policy(context: Any) -> None:
+    def guard(route: Any, request: Any) -> None:
+        try:
+            assert_url_allowed(request.url)
+            route.continue_()
+        except SecurityPolicyError:
+            route.abort()
+
+    context.route("**/*", guard)
 
 
 @dataclass
@@ -144,6 +157,7 @@ class BrowserSnapshotTool:
         cookies: Optional[List[Dict[str, Any]]] = None,
     ) -> BrowserSnapshotResult:
         self.cleanup()
+        assert_url_allowed(url)
         started = time.time()
         ts = time.strftime("%Y%m%d_%H%M%S")
         run_dir = self.results_dir / f"browser_snapshot_{ts}"
@@ -183,6 +197,7 @@ class BrowserSnapshotTool:
                         processed_cookies.append(nc)
 
                 context = browser.new_context(viewport=DEFAULT_VIEWPORT, user_agent=DEFAULT_USER_AGENT)
+                _install_network_policy(context)
                 if processed_cookies:
                     context.add_cookies(processed_cookies)
                 
@@ -276,6 +291,7 @@ class BrowserSnapshotTool:
         cookies: Optional[List[Dict[str, Any]]] = None,
     ) -> BrowserSnapshotResult:
         self.cleanup()
+        assert_url_allowed(url)
         started = time.time()
         ts = time.strftime("%Y%m%d_%H%M%S")
         run_dir = self.results_dir / f"form_submit_{ts}"
@@ -309,6 +325,7 @@ class BrowserSnapshotTool:
                         processed_cookies.append(nc)
 
                 context = browser.new_context(viewport=DEFAULT_VIEWPORT, user_agent=DEFAULT_USER_AGENT)
+                _install_network_policy(context)
                 if processed_cookies:
                     context.add_cookies(processed_cookies)
                 
