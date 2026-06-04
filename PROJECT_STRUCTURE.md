@@ -36,6 +36,7 @@ agents/
 │   └── coordinator_agent.py
 ├── specialists/
 │   ├── binary_exploitation/
+│   ├── blockchain/
 │   ├── cryptography/
 │   ├── forensics/
 │   ├── hardware_logic/
@@ -54,9 +55,9 @@ agents/
 The coordinator owns the iterative solve loop, specialist selection, history,
 checkpointing, and LLM-assisted recovery when normal routing stalls. Specialist
 agents handle domain work such as web exploitation, cryptography, reversing,
-forensics, hardware logic, log analysis, pwn, networking, OSINT, and generated
-coding/math tasks. Support agents cover local Docker challenge launch and
-reconnaissance.
+forensics, hardware logic, log analysis, pwn, networking, OSINT, blockchain,
+and generated coding/math tasks. Support agents cover local Docker challenge
+launch and reconnaissance.
 
 ## Core System
 
@@ -229,8 +230,8 @@ ignored unless a test fixture is intentionally added.
 
 At the time this document was refreshed, the tracked tree contained:
 
-- 184 tracked files
-- 129 Python files
+- 187 tracked files
+- 131 Python files
 - 24 Markdown documentation files
 - 4 YAML configuration or workflow files
 

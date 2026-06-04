@@ -289,3 +289,43 @@ def test_merge_heuristic_context_preserves_hardware_category():
     merged = _merge_heuristic_context(challenge, heuristic)
 
     assert merged["category"] == "hardware"
+
+
+def test_heuristic_mapping_expands_solidity_folder_to_blockchain(tmp_path, monkeypatch):
+    challenge_dir = tmp_path / "Survival"
+    challenge_dir.mkdir()
+    creature = challenge_dir / "Creature.sol"
+    setup = challenge_dir / "Setup.sol"
+    creature.write_text("contract Creature { function strongAttack(uint256 damage) public {} }")
+    setup.write_text("contract Setup { function isSolved() public view returns (bool) {} }")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Blockchain challenge. Files are in Survival and the target is 127.0.0.1:31337.",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "blockchain"
+    assert challenge["url"] == "http://127.0.0.1:31337"
+    assert challenge["files"] == sorted([str(creature), str(setup)])
+
+
+def test_merge_heuristic_context_preserves_blockchain_category():
+    from ask import _merge_heuristic_context
+
+    challenge = {
+        "id": "llm_task",
+        "category": "web",
+        "description": "Exploit the endpoint.",
+    }
+    heuristic = {
+        "category": "blockchain",
+        "description": "Exploit this Solidity smart contract.",
+        "files": ["/tmp/Creature.sol", "/tmp/Setup.sol"],
+        "url": "http://127.0.0.1:31337",
+    }
+
+    merged = _merge_heuristic_context(challenge, heuristic)
+
+    assert merged["category"] == "blockchain"
+    assert merged["url"] == "http://127.0.0.1:31337"

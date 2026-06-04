@@ -17,7 +17,10 @@ import pytest
 @pytest.fixture(autouse=True)
 def no_llm_keys(monkeypatch):
     for key in ("LLM_PROVIDER", "NVAPI_KEYS", "NVAPI_KEY", "NGC_API_KEY",
-                "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+                "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
+                "GEMINI_API_KEY", "GOOGLE_GENAI_USE_VERTEXAI",
+                "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_CLOUD_PROJECT",
+                "GOOGLE_PROJECT_ID"):
         monkeypatch.delenv(key, raising=False)
 
 

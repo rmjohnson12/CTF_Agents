@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+import importlib
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +31,7 @@ _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
 _NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
 _ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 _OLLAMA_DEFAULT_MODEL = "llama3.1"
+_GOOGLE_DEFAULT_MODEL = "gemini-2.5-flash"
 
 _RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError)
 _MAX_LLM_RETRIES = 3
@@ -43,11 +45,12 @@ class LLMReasoner:
 
     Priority order for auto-configuration:
       1. Explicit client passed in
-      2. LLM_PROVIDER env var preference: ollama|nvidia|anthropic|openai
+      2. LLM_PROVIDER env var preference: ollama|nvidia|anthropic|openai|google
       3. NVAPI_KEY/NGC_API_KEY env var → NVIDIA NIM (OpenAI-compatible)
       4. ANTHROPIC_API_KEY env var → Claude
       5. OPENAI_API_KEY env var → OpenAI
-      6. Heuristic fallback
+      6. GOOGLE_API_KEY/GEMINI_API_KEY or Google Cloud ADC → Gemini
+      7. Heuristic fallback
     """
 
     def __init__(
@@ -71,6 +74,7 @@ class LLMReasoner:
             self._nvidia_keys = self._load_nvidia_keys()
             anthropic_key = os.getenv("ANTHROPIC_API_KEY")
             openai_key = os.getenv("OPENAI_API_KEY")
+            google_key = self._load_google_api_key()
             provider_order = self._provider_order(self.provider)
 
             self.client = None
@@ -102,6 +106,12 @@ class LLMReasoner:
                     self.model = model or os.getenv("OPENAI_MODEL") or "gpt-4o"
                     break
 
+                if candidate == "google" and self._google_config_available(google_key):
+                    self.provider = "google"
+                    self._configure_google_client(google_key)
+                    self.model = model or os.getenv("GOOGLE_MODEL") or _GOOGLE_DEFAULT_MODEL
+                    break
+
     @property
     def is_available(self) -> bool:
         """Checks if the LLM client is configured and available."""
@@ -119,6 +129,14 @@ class LLMReasoner:
             if key and key not in keys:
                 keys.append(key)
         return keys
+
+    @staticmethod
+    def _load_google_api_key() -> Optional[str]:
+        for env_name in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            key = (os.getenv(env_name) or "").strip()
+            if key and not key.startswith("your_"):
+                return key
+        return None
 
     @staticmethod
     def _load_timeout_seconds() -> float:
@@ -150,6 +168,34 @@ class LLMReasoner:
             timeout=self.timeout_seconds,
         )
 
+    @staticmethod
+    def _google_config_available(api_key: Optional[str]) -> bool:
+        if api_key:
+            return True
+        cloud_requested = (
+            (os.getenv("GOOGLE_GENAI_USE_VERTEXAI") or "").strip().lower() in {"1", "true", "yes"}
+            or (os.getenv("GOOGLE_GENAI_USE_ENTERPRISE") or "").strip().lower() in {"1", "true", "yes"}
+        )
+        return bool(
+            cloud_requested
+            and (os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GOOGLE_PROJECT_ID"))
+        )
+
+    def _configure_google_client(self, api_key: Optional[str]) -> None:
+        genai = importlib.import_module("google.genai")
+        project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GOOGLE_PROJECT_ID")
+        location = os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GOOGLE_LOCATION") or "global"
+        cloud_requested = (
+            (os.getenv("GOOGLE_GENAI_USE_VERTEXAI") or "").strip().lower() in {"1", "true", "yes"}
+            or (os.getenv("GOOGLE_GENAI_USE_ENTERPRISE") or "").strip().lower() in {"1", "true", "yes"}
+        )
+
+        if cloud_requested and project and not api_key:
+            self.client = genai.Client(vertexai=True, project=project, location=location)
+            return
+
+        self.client = genai.Client(api_key=api_key)
+
     def _rotate_nvidia_key(self) -> bool:
         if self.provider != "nvidia" or len(self._nvidia_keys) <= 1:
             return False
@@ -168,10 +214,13 @@ class LLMReasoner:
 
     @staticmethod
     def _provider_order(provider: str) -> List[str]:
-        default_order = ["nvidia", "anthropic", "openai"]
+        default_order = ["nvidia", "anthropic", "openai", "google"]
         aliases = {
             "nim": "nvidia",
             "claude": "anthropic",
+            "gemini": "google",
+            "vertex": "google",
+            "vertexai": "google",
             "local": "ollama",
             "off": "none",
             "disabled": "none",
@@ -320,6 +369,12 @@ class LLMReasoner:
                         messages=[{"role": "user", "content": prompt}],
                     )
                     return self._extract_anthropic_text(response)
+                if self.provider == "google":
+                    response = self.client.models.generate_content(
+                        model=self.model,
+                        contents=prompt,
+                    )
+                    return self._extract_google_text(response)
                 else:
                     response = self.client.chat.completions.create(
                         model=self.model,
@@ -381,6 +436,21 @@ class LLMReasoner:
 
         return "".join(parts)
 
+    @staticmethod
+    def _extract_google_text(response: Any) -> str:
+        text = getattr(response, "text", None)
+        if text:
+            return text
+
+        parts: List[str] = []
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", []) or []:
+                part_text = getattr(part, "text", None)
+                if part_text:
+                    parts.append(part_text)
+        return "".join(parts)
+
     def generate_script(self, challenge: Dict[str, Any], task_desc: str) -> str:
         """Use LLM to generate a Python script for a specific task."""
         prompt = f"""
@@ -437,16 +507,17 @@ class LLMReasoner:
 
     Return ONLY valid JSON with this shape:
     {{
-    "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|unknown",
+    "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|blockchain|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
 
     Use "pwn_agent" for binary exploitation challenges (buffer overflow, ROP, shellcode,
     heap exploits, format string bugs, ELF binaries with exploitation intent).
+    Use "blockchain_agent" for blockchain, Ethereum, Solidity smart contract, and RPC-based challenges.
     If the challenge references a local Docker/Dockerfile/container challenge folder,
     prefer recommended_target "docker_agent" with recommended_action "run_agent"
     before web exploitation. The docker_agent will publish a localhost URL for
@@ -477,7 +548,7 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
@@ -516,7 +587,7 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation of why this action is different from prior failed attempts",
     "inputs": {{"task": "optional focused instruction for the selected agent"}}
     }}

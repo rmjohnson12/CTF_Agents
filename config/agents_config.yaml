@@ -114,6 +114,17 @@ specialists:
       - traffic_manipulation
     max_concurrent_tasks: 2
 
+  blockchain:
+    agent_id: "blockchain_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - smart_contracts
+      - solidity
+      - web3
+      - ethereum
+    max_concurrent_tasks: 2
+
 support:
   reconnaissance:
     agent_id: "recon_agent"

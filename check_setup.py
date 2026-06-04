@@ -45,6 +45,13 @@ def check():
     nvidia_keys = _load_nvidia_keys()
     nvapi_key = nvidia_keys[0] if nvidia_keys else None
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    google_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    google_cloud_requested = provider in {"google", "gemini", "vertex", "vertexai"} or (
+        (os.getenv("GOOGLE_GENAI_USE_VERTEXAI") or "").strip().lower() in {"1", "true", "yes"}
+        or (os.getenv("GOOGLE_GENAI_USE_ENTERPRISE") or "").strip().lower() in {"1", "true", "yes"}
+    )
+    google_project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GOOGLE_PROJECT_ID")
+    google_location = os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GOOGLE_LOCATION") or "global"
     ollama_requested = provider in {"ollama", "local"}
     ollama_base_url = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434/v1"
     ollama_model = os.getenv("OLLAMA_MODEL") or "llama3.1"
@@ -69,6 +76,15 @@ def check():
     else:
         print("[-] OpenAI API Key: MISSING")
 
+    if google_key and not google_key.startswith("your_"):
+        print("[+] Google Gemini API Key: CONFIGURED")
+        has_llm = True
+    elif google_cloud_requested and google_project:
+        print(f"[+] Google Gemini Cloud ADC: CONFIGURED ({google_project}, {google_location})")
+        has_llm = True
+    else:
+        print("[-] Google Gemini API Key/ADC: MISSING")
+
     if ollama_requested:
         print(f"[+] Ollama local model: CONFIGURED ({ollama_model} at {ollama_base_url})")
         has_llm = True
@@ -79,6 +95,8 @@ def check():
             print(f"[+] Preferred LLM provider: {provider}")
             if provider in {"ollama", "local"}:
                 print("[+] Selected LLM provider: ollama")
+            elif provider in {"google", "gemini", "vertex", "vertexai"} and (google_key or google_project):
+                print("[+] Selected LLM provider: google")
             elif provider in {"anthropic", "claude"} and not anthropic_key and nvapi_key:
                 print("[+] Selected LLM provider: nvidia (Anthropic key missing; falling back)")
             elif provider in {"nvidia", "nim"} and not nvapi_key and anthropic_key:
@@ -89,6 +107,8 @@ def check():
             print("[+] Selected LLM provider: anthropic")
         elif openai_key:
             print("[+] Selected LLM provider: openai")
+        elif google_key or google_project:
+            print("[+] Selected LLM provider: google")
     else:
         print("[!] Mode: HEURISTIC (Running without LLM; using pattern matching for routing)")
 

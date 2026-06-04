@@ -58,6 +58,23 @@ class ChallengeClassifier:
                 detected_indicators=indicators,
             )
 
+        # Blockchain / smart contracts
+        has_sol = any(f.endswith(".sol") for f in files)
+        if (
+            challenge.get("category") == "blockchain"
+            or has_sol
+            or self._has_blockchain_signal(text)
+        ):
+            indicators.append("blockchain_terms")
+            return ChallengeAnalysis(
+                category_guess="blockchain",
+                confidence=0.95,
+                reasoning="Detected blockchain/smart-contract indicators or Solidity source files.",
+                recommended_target="blockchain_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
         # Network forensics (PCAP)
         if any(f.endswith((".pcap", ".pcapng")) for f in files) or self._kw(text, "pcap"):
             indicators.append("network_forensics")
@@ -353,6 +370,30 @@ class ChallengeClassifier:
     def _kw(text: str, *words: str) -> bool:
         """True if any word/phrase matches as a whole word in *text*."""
         return any(re.search(r"\b" + re.escape(w) + r"\b", text) for w in words)
+
+    @staticmethod
+    def _has_blockchain_signal(text: str) -> bool:
+        """Return true for explicit EVM/smart-contract wording.
+
+        Keep this narrower than generic terms such as "private key" or "rpc";
+        those appear in crypto and web challenges too.
+        """
+        strong_terms = (
+            "blockchain",
+            "solidity",
+            "smart contract",
+            "smart_contract",
+            "ethereum",
+            "web3",
+            "ganache",
+            "anvil",
+        )
+        if ChallengeClassifier._kw(text, *strong_terms):
+            return True
+        return bool(
+            re.search(r"\beth(?:ereum)?\s+(?:rpc|node|network|wallet|account|address|contract)\b", text)
+            or re.search(r"\b(?:rpc|node|network|wallet|account|address|contract)\s+eth(?:ereum)?\b", text)
+        )
 
     @staticmethod
     def _is_elf_file(path: str) -> bool:

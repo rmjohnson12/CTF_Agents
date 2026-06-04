@@ -24,6 +24,7 @@ from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
 from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
+from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
 from tools.common.elf_utils import is_elf_binary
 
 def _parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -115,7 +116,7 @@ def _merge_heuristic_context(
 
     # When the heuristic derived a specific category from real files on disk,
     # trust it over the LLM — the LLM can misclassify based on keywords alone.
-    _HEURISTIC_WINS = {"reverse", "pwn", "hardware", "forensics"}
+    _HEURISTIC_WINS = {"reverse", "pwn", "hardware", "forensics", "blockchain"}
     heuristic_cat = heuristic.get("category", "")
     llm_cat = challenge.get("category", "")
     if heuristic_cat in _HEURISTIC_WINS and heuristic.get("files"):
@@ -180,7 +181,7 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
         ".enc", ".bin", ".dat", ".txt", ".json", ".py", ".c", ".cpp", ".java",
         ".go", ".sh", ".pcap", ".pcapng", ".pdf", ".zip", ".log",
         ".csv", ".jpg", ".jpeg", ".png", ".v", ".sv", ".vhdl", ".vhd",
-        ".exe", ".pck", ".gd", ".gdc",
+        ".exe", ".pck", ".gd", ".gdc", ".sol",
     }
 
     for path in paths:
@@ -266,12 +267,23 @@ def _heuristic_challenge_from_instruction(
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
     web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web", "docker", "dockerfile", "container"]
     hardware_terms = ["hardware", "chip", "logic", "circuit", "gate", "verilog", "vhdl", "schematic"]
+    blockchain_terms = [
+        "blockchain",
+        "solidity",
+        "smart contract",
+        "web3",
+    ]
     has_hardware_term = any(
         re.search(r"\b" + re.escape(term) + r"\b", lowered_input)
         for term in hardware_terms
     )
 
     if (
+        any(f.lower().endswith(".sol") for f in challenge_files)
+        or any(term in lowered_input for term in blockchain_terms)
+    ):
+        category = "blockchain"
+    elif (
         has_hardware_term
         or (
             any(f.lower().endswith((".csv", ".v", ".sv", ".vhdl", ".vhd")) for f in challenge_files)
@@ -412,6 +424,7 @@ def main(argv: Optional[List[str]] = None):
     coordinator.register_agent(DockerChallengeAgent())
     coordinator.register_agent(ReconAgent())
     coordinator.register_agent(PwnAgent())
+    coordinator.register_agent(BlockchainAgent())
 
     if plan_mode:
         if not user_input:
@@ -475,7 +488,7 @@ Example shape:
 {{
   "id": "transient_task",
   "name": "Manual Task",
-  "category": "forensics|web|crypto|hardware|misc",
+  "category": "forensics|web|crypto|hardware|blockchain|misc",
   "description": "...",
   "files": ["path/to/file"],
   "url": "..."

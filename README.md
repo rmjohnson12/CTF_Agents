@@ -37,6 +37,10 @@ the solving loop.
 - Binary exploitation (pwn) via ret2win discovery (symbol lookup with `nm`/
   `objdump`), cyclic overflow-offset detection, x86-64 stack-alignment gadget
   insertion, and remote payload delivery with pwntools.
+- Blockchain smart-contract challenges using Solidity source, HTB-style
+  `connection_info` endpoints, JSON-RPC targets, Web3 transactions, and
+  deterministic exploit templates for common setup/target patterns such as
+  draining challenge contract balances before requesting the flag.
 - Local Docker web challenges. Docker execution is opt-in and binds spawned
   targets to `127.0.0.1` before handing them to the web/recon agents.
 - Hardware logic challenges involving schematic images, gate/transistor
@@ -76,6 +80,7 @@ For a fuller architecture map, see `PROJECT_STRUCTURE.md` and
   - `NVAPI_KEY` or `NVAPI_KEYS` for NVIDIA NIM.
   - `ANTHROPIC_API_KEY` for Claude.
   - `OPENAI_API_KEY` for OpenAI.
+  - `GOOGLE_API_KEY` for Gemini / Gemini Enterprise Agent Platform API-key testing.
   - Or a local Ollama server for API-free local model routing.
 
 ## Installation
@@ -121,9 +126,28 @@ NVAPI_KEYS=first_nvidia_key,second_nvidia_key,third_nvidia_key
 To prefer a specific LLM provider, set `LLM_PROVIDER`:
 
 ```bash
-LLM_PROVIDER=nvidia      # nvidia, anthropic, openai, or ollama
+LLM_PROVIDER=nvidia      # nvidia, anthropic, openai, google, or ollama
 ANTHROPIC_API_KEY=your_claude_key_here
 OPENAI_API_KEY=your_openai_key_here
+```
+
+For Google Gemini, the simplest local setup is an API key:
+
+```bash
+LLM_PROVIDER=google
+GOOGLE_API_KEY=your_google_key_here
+GOOGLE_MODEL=gemini-2.5-flash
+```
+
+For Google Cloud Application Default Credentials, authenticate with `gcloud`
+and configure the Cloud project:
+
+```bash
+gcloud auth application-default login
+LLM_PROVIDER=google
+GOOGLE_GENAI_USE_VERTEXAI=true
+GOOGLE_CLOUD_PROJECT=your-google-cloud-project
+GOOGLE_CLOUD_LOCATION=global
 ```
 
 For local Ollama, start Ollama on your machine and point the agents at its
@@ -160,6 +184,10 @@ No API key is required for the default local Ollama setup.
   keys from Windows launchers, recover/decompile scripts with GDRE Tools, model
   GDScript obfuscation, and replay loader network requests to retrieve split
   flag material from headers and payload metadata.
+- **Blockchain Specialist**: Solidity folders can route to a Web3-backed
+  blockchain agent that fetches HTB-style `/connection_info`, connects to the
+  challenge RPC endpoint, executes deterministic contract exploits where
+  applicable, and retrieves the remote flag.
 - **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
 - **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
   forensics agent can inspect loader/preload state and shared-library hook
@@ -169,7 +197,7 @@ No API key is required for the default local Ollama setup.
 
 - Python 3.10+
 - `.env` file with at least one supported LLM key, such as `NVAPI_KEY`,
-  `NVAPI_KEYS`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`, or
+  `NVAPI_KEYS`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GOOGLE_API_KEY`, or
   `LLM_PROVIDER=ollama` for a local Ollama model.
 - Essential security tools: `nmap`, `tshark`, `binwalk`, `john`, `hashcat`.
 
@@ -231,6 +259,12 @@ No API key is required for the default local Ollama setup.
    local extracted challenge folder:
    ```bash
    python3 ask.py "Investigate this compromised game and uncover the two-part flag. Target host TARGET:PORT. Files are in ~/Downloads/rev_gameloader"
+   ```
+
+   Blockchain smart-contract challenges can point at a Solidity folder and a
+   spawned target:
+   ```bash
+   python3 ask.py "Solve this blockchain challenge at TARGET:PORT. Files are in ~/Survival"
    ```
 
    Live SSH forensics prompts can include credentials and a target:
@@ -324,7 +358,8 @@ pytest
 
 The test suite includes coordinator routing, reasoner fallback behavior, tool
 wrappers, flag detection utilities, hardware/Saleae decoding paths, Godot
-loader reversing helpers, and end-to-end fixtures.
+loader reversing helpers, blockchain specialist coverage, and end-to-end
+fixtures.
 
 ## Runtime Artifacts
 

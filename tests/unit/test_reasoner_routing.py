@@ -210,6 +210,60 @@ def test_reasoner_routes_web_prime_product_runner_to_web_agent():
     assert next_action["target"] == "web_agent"
 
 
+def test_reasoner_routes_solidity_to_blockchain_agent():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "blockchain_001",
+        "name": "Contract",
+        "category": "blockchain",
+        "description": "Exploit this Solidity smart contract.",
+        "files": ["Setup.sol"],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert analysis.category_guess == "blockchain"
+    assert analysis.recommended_target == "blockchain_agent"
+    assert next_action["target"] == "blockchain_agent"
+
+
+def test_reasoner_keeps_rsa_private_key_prompt_on_crypto():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "rsa_private_key",
+        "name": "RSA",
+        "category": "crypto",
+        "description": "Recover the RSA private key from these values and decrypt the flag.",
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "crypto"
+    assert analysis.recommended_target == "crypto_agent"
+
+
+def test_reasoner_keeps_json_rpc_web_prompt_on_web():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "json_rpc_web",
+        "name": "JSON RPC",
+        "category": "web",
+        "description": "The web app exposes a JSON-RPC endpoint. Find the admin flag.",
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "web"
+    assert analysis.recommended_target == "web_agent"
+
+
 def test_reasoner_routes_hardware_logic_to_hardware_agent():
     reasoner = LLMReasoner(client=None)
 

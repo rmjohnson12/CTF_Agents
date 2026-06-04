@@ -23,6 +23,7 @@ from core.decision_engine.llm_reasoner import (
     _ANTHROPIC_DEFAULT_MODEL,
     _OLLAMA_DEFAULT_BASE_URL,
     _OLLAMA_DEFAULT_MODEL,
+    _GOOGLE_DEFAULT_MODEL,
 )
 
 
@@ -53,6 +54,15 @@ def clear_llm_env(monkeypatch):
         "ANTHROPIC_MODEL",
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_MODEL",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_PROJECT_ID",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_LOCATION",
         "LLM_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -276,6 +286,56 @@ def test_openai_key_fallback(monkeypatch):
     assert reasoner.model == "gpt-4o"
 
 
+def test_google_api_key_selects_google_genai(monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-fake-key")
+    fake_genai = MagicMock()
+    fake_genai.Client.return_value = MagicMock()
+
+    with patch("core.decision_engine.llm_reasoner.importlib.import_module", return_value=fake_genai), \
+            patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
+        reasoner = LLMReasoner()
+
+    fake_genai.Client.assert_called_once_with(api_key="google-fake-key")
+    MockOpenAI.assert_not_called()
+    assert reasoner.provider == "google"
+    assert reasoner.model == _GOOGLE_DEFAULT_MODEL
+
+
+def test_gemini_provider_alias_uses_custom_google_model(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-fake-key")
+    monkeypatch.setenv("GOOGLE_MODEL", "gemini-test-model")
+    fake_genai = MagicMock()
+    fake_genai.Client.return_value = MagicMock()
+
+    with patch("core.decision_engine.llm_reasoner.importlib.import_module", return_value=fake_genai):
+        reasoner = LLMReasoner()
+
+    fake_genai.Client.assert_called_once_with(api_key="gemini-fake-key")
+    assert reasoner.provider == "google"
+    assert reasoner.model == "gemini-test-model"
+
+
+def test_google_cloud_adc_path_uses_project_and_location(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "ctf-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    fake_genai = MagicMock()
+    fake_genai.Client.return_value = MagicMock()
+
+    with patch("core.decision_engine.llm_reasoner.importlib.import_module", return_value=fake_genai):
+        reasoner = LLMReasoner()
+
+    fake_genai.Client.assert_called_once_with(
+        vertexai=True,
+        project="ctf-project",
+        location="us-central1",
+    )
+    assert reasoner.provider == "google"
+    assert reasoner.model == _GOOGLE_DEFAULT_MODEL
+
+
 def test_ollama_provider_uses_openai_compatible_client(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
@@ -481,6 +541,23 @@ def test_call_llm_uses_anthropic_messages():
     assert call_kwargs["max_tokens"] == 2000
     assert call_kwargs["messages"] == [{"role": "user", "content": "hello"}]
     assert result == "claude response"
+
+
+def test_call_llm_uses_google_generate_content():
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(text="gemini response")
+    reasoner = LLMReasoner(
+        client=mock_client,
+        model="gemini-test-model",
+        provider="google",
+    )
+    result = reasoner._call_llm("hello")
+
+    mock_client.models.generate_content.assert_called_once_with(
+        model="gemini-test-model",
+        contents="hello",
+    )
+    assert result == "gemini response"
 
 
 def test_call_llm_retries_retryable_exception_before_success():

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from challenges.challenge_parser import ChallengeParser, ParseError, KNOWN_CATEGORIES
+from core.challenge import Challenge, ChallengeCategory
 
 
 @pytest.fixture
@@ -125,6 +126,17 @@ def test_parse_dict_accepts_hardware_category(parser):
     })
 
     assert result["category"] == "hardware"
+
+
+def test_parse_dict_accepts_blockchain_category(parser):
+    result = parser.parse_dict({
+        "id": "bc",
+        "name": "Smart Contract",
+        "description": "Exploit this Solidity smart contract.",
+        "category": "Blockchain",
+    })
+
+    assert result["category"] == "blockchain"
 
 
 def test_parse_dict_normalizes_id_to_string(parser):
@@ -274,6 +286,16 @@ def test_parse_dict_infers_forensics_from_pcap_mention(parser):
     assert result["category"] == "forensics"
 
 
+def test_parse_dict_infers_blockchain_before_pwn_from_smart_contract(parser):
+    data = {
+        "id": "inf_bc",
+        "name": "Contract",
+        "description": "Exploit this Solidity smart contract.",
+    }
+    result = parser.parse_dict(data)
+    assert result["category"] == "blockchain"
+
+
 def test_parse_dict_unknown_category_when_no_signals(parser):
     data = {
         "id": "inf_004",
@@ -324,6 +346,19 @@ def test_validate_accepts_all_known_categories(parser):
         assert not any("unknown category" in e for e in errors), (
             f"category '{cat}' was rejected unexpectedly"
         )
+
+
+def test_challenge_schema_accepts_blockchain_category():
+    challenge = Challenge.from_dict({
+        "id": "bc",
+        "name": "Blockchain",
+        "category": "blockchain",
+        "difficulty": "easy",
+        "description": "Exploit this smart contract.",
+        "points": 100,
+    })
+
+    assert challenge.category is ChallengeCategory.BLOCKCHAIN
 
 
 def test_parse_dict_missing_id_raises(parser):

@@ -19,6 +19,7 @@ from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
 from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
+from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
 
 
 def _print_plan_main(
@@ -111,6 +112,7 @@ def main(argv: List[str]) -> int:
     coordinator.register_agent(DockerChallengeAgent(agent_id="docker_agent"))
     coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
     coordinator.register_agent(PwnAgent(agent_id="pwn_agent"))
+    coordinator.register_agent(BlockchainAgent(agent_id="blockchain_agent"))
 
     if args.plan:
         raw_analysis = coordinator.reasoner.analyze_challenge(challenge)

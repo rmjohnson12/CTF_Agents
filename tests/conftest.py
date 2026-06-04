@@ -23,5 +23,14 @@ def disable_live_llm_keys(monkeypatch):
         "ANTHROPIC_MODEL",
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_MODEL",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_GENAI_USE_ENTERPRISE",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_PROJECT_ID",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_LOCATION",
     ):
         monkeypatch.delenv(key, raising=False)
