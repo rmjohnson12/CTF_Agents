@@ -109,6 +109,16 @@ def test_heuristic_mapping_normalizes_bare_ip_port_to_http_url():
     assert challenge["url"] == "http://154.57.164.65:30433"
 
 
+def test_heuristic_mapping_routes_secure_coding_ip_port_to_secure_coding():
+    challenge = _heuristic_challenge_from_instruction(
+        "Secure coding challenge, ip and port are 154.57.164.65:31327",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "secure_coding"
+    assert challenge["url"] == "http://154.57.164.65:31327"
+
+
 def test_heuristic_mapping_routes_local_docker_folder_to_web(tmp_path, monkeypatch):
     challenge_dir = tmp_path / "docker_challenge"
     challenge_dir.mkdir()

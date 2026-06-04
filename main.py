@@ -20,6 +20,8 @@ from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
 from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
+from agents.specialists.secure_coding.secure_coding_agent import SecureCodingAgent
+from core.utils.security import networks_from_challenge, temporary_allowed_networks
 
 
 def _print_plan_main(
@@ -113,6 +115,7 @@ def main(argv: List[str]) -> int:
     coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
     coordinator.register_agent(PwnAgent(agent_id="pwn_agent"))
     coordinator.register_agent(BlockchainAgent(agent_id="blockchain_agent"))
+    coordinator.register_agent(SecureCodingAgent(agent_id="secure_coding_agent"))
 
     if args.plan:
         raw_analysis = coordinator.reasoner.analyze_challenge(challenge)
@@ -121,7 +124,8 @@ def main(argv: List[str]) -> int:
         _print_plan_main(challenge, analysis_dict, next_action, coordinator.performance_tracker)
         return 0
 
-    result = coordinator.solve_challenge(challenge, resume=args.resume)
+    with temporary_allowed_networks(networks_from_challenge(challenge)):
+        result = coordinator.solve_challenge(challenge, resume=args.resume)
     print(json.dumps(result, indent=2))
     return 0
 

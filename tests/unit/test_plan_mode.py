@@ -9,6 +9,7 @@ Verifies:
 """
 
 import sys
+import os
 from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -208,6 +209,30 @@ class TestAskPlanMode:
 
         mock_solve.assert_called_once()
 
+    def test_explicit_url_is_allowed_only_during_solve(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "ctf.local")
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["ask.py", "Web challenge, ip and port are 154.57.164.65:31327"],
+        )
+        observed_allowed = {}
+
+        def fake_solve(challenge, resume=False):
+            observed_allowed["value"] = os.environ.get("CTF_AGENTS_ALLOWED_NETWORKS")
+            return {"status": "attempted", "flag": None, "steps": []}
+
+        with patch(
+            "agents.coordinator.coordinator_agent.CoordinatorAgent.solve_challenge",
+            side_effect=fake_solve,
+        ):
+            import ask
+            ask.main()
+
+        assert "154.57.164.65" in observed_allowed["value"]
+        assert os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] == "ctf.local"
+
 
 # ---------------------------------------------------------------------------
 # main.py --plan integration
@@ -252,6 +277,36 @@ class TestMainPlanMode:
             rc = self._run(["main.py", json_path], tmp_path, monkeypatch)
 
         mock_solve.assert_called_once()
+
+    def test_json_url_is_allowed_only_during_solve(self, tmp_path, monkeypatch):
+        challenge_path = tmp_path / "web.json"
+        challenge_path.write_text(
+            """
+            {
+              "id": "web_json",
+              "name": "Web JSON",
+              "category": "web",
+              "description": "Test web target",
+              "url": "http://154.57.164.65:31327"
+            }
+            """
+        )
+        monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "ctf.local")
+        observed_allowed = {}
+
+        def fake_solve(challenge, resume=False):
+            observed_allowed["value"] = os.environ.get("CTF_AGENTS_ALLOWED_NETWORKS")
+            return {"status": "attempted", "flag": None, "steps": []}
+
+        with patch(
+            "agents.coordinator.coordinator_agent.CoordinatorAgent.solve_challenge",
+            side_effect=fake_solve,
+        ):
+            rc = self._run(["main.py", str(challenge_path)], tmp_path, monkeypatch)
+
+        assert rc == 0
+        assert "154.57.164.65" in observed_allowed["value"]
+        assert os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] == "ctf.local"
 
     def test_plan_with_log_challenge(self, tmp_path, monkeypatch, capsys):
         json_path = str(EVAL_DIR / "eval_log_webaccess.json")

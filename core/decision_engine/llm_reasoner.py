@@ -507,10 +507,10 @@ class LLMReasoner:
 
     Return ONLY valid JSON with this shape:
     {{
-    "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|blockchain|unknown",
+    "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|blockchain|secure_coding|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|browser_snapshot|tony_htb_sql|none",
+    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
@@ -518,6 +518,8 @@ class LLMReasoner:
     Use "pwn_agent" for binary exploitation challenges (buffer overflow, ROP, shellcode,
     heap exploits, format string bugs, ELF binaries with exploitation intent).
     Use "blockchain_agent" for blockchain, Ethereum, Solidity smart contract, and RPC-based challenges.
+    Use "secure_coding_agent" for source-remediation challenges where the task is
+    to patch vulnerable code through an editor/API and verify the fix.
     If the challenge references a local Docker/Dockerfile/container challenge folder,
     prefer recommended_target "docker_agent" with recommended_action "run_agent"
     before web exploitation. The docker_agent will publish a localhost URL for
@@ -548,7 +550,7 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
@@ -556,6 +558,7 @@ class LLMReasoner:
     Use "run_agent" for targets ending in "_agent".
     Use "run_tool" only for browser_snapshot or tony_htb_sql.
     If prior history shows docker_agent produced docker_target_url, run web_agent next.
+    If the challenge is a secure-coding/source-remediation task, run secure_coding_agent.
     If the challenge references a local Docker/Dockerfile/container folder and no
     docker_target_url exists yet, run docker_agent first.
 
@@ -587,7 +590,7 @@ class LLMReasoner:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation of why this action is different from prior failed attempts",
     "inputs": {{"task": "optional focused instruction for the selected agent"}}
     }}

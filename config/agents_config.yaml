@@ -125,6 +125,17 @@ specialists:
       - ethereum
     max_concurrent_tasks: 2
 
+  secure_coding:
+    agent_id: "secure_coding_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - secure_coding
+      - source_patch
+      - vulnerability_remediation
+      - editor_api
+    max_concurrent_tasks: 2
+
 support:
   reconnaissance:
     agent_id: "recon_agent"

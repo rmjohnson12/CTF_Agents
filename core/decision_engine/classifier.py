@@ -75,6 +75,18 @@ class ChallengeClassifier:
                 detected_indicators=indicators,
             )
 
+        # Secure coding / source patch challenges
+        if challenge.get("category") == "secure_coding" or self._has_secure_coding_signal(text):
+            indicators.append("secure_coding_terms")
+            return ChallengeAnalysis(
+                category_guess="secure_coding",
+                confidence=0.95,
+                reasoning="Detected secure-coding source remediation challenge.",
+                recommended_target="secure_coding_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
         # Network forensics (PCAP)
         if any(f.endswith((".pcap", ".pcapng")) for f in files) or self._kw(text, "pcap"):
             indicators.append("network_forensics")
@@ -394,6 +406,19 @@ class ChallengeClassifier:
             re.search(r"\beth(?:ereum)?\s+(?:rpc|node|network|wallet|account|address|contract)\b", text)
             or re.search(r"\b(?:rpc|node|network|wallet|account|address|contract)\s+eth(?:ereum)?\b", text)
         )
+
+    @staticmethod
+    def _has_secure_coding_signal(text: str) -> bool:
+        return any(term in text for term in [
+            "secure coding",
+            "secure-coding",
+            "fix the vulnerability",
+            "patch the vulnerability",
+            "source patch",
+            "patch source",
+            "vulnerable code",
+            "remediate",
+        ])
 
     @staticmethod
     def _is_elf_file(path: str) -> bool:

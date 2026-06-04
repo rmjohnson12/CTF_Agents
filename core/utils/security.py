@@ -4,8 +4,9 @@ import ipaddress
 import os
 import re
 import socket
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, Iterator, List
 from urllib.parse import urlparse
 
 import yaml
@@ -105,6 +106,56 @@ def assert_url_allowed(url: str, *, allowed_networks: Iterable[str] | None = Non
     )
 
 
+def networks_from_challenge(challenge: dict) -> List[str]:
+    """Extract explicit URL/target hosts from a parsed challenge object."""
+    candidates: List[str] = []
+    for key in ("url", "rpc_url", "rpcUrl", "flag_url", "flagUrl"):
+        value = challenge.get(key)
+        if value:
+            candidates.append(str(value))
+
+    target = challenge.get("target")
+    if isinstance(target, dict):
+        candidates.extend(str(value) for value in target.values() if value)
+    elif target:
+        candidates.append(str(target))
+
+    connection_info = challenge.get("connection_info")
+    if isinstance(connection_info, dict):
+        candidates.extend(str(value) for value in connection_info.values() if value)
+
+    networks: List[str] = []
+    for value in candidates:
+        host = _host_from_urlish(value)
+        if host and host not in networks:
+            networks.append(host)
+    return networks
+
+
+@contextmanager
+def temporary_allowed_networks(networks: Iterable[str]) -> Iterator[None]:
+    """Temporarily extend CTF_AGENTS_ALLOWED_NETWORKS for one solve."""
+    additions = [str(item).strip() for item in networks if str(item).strip()]
+    if not additions:
+        yield
+        return
+
+    previous = os.environ.get("CTF_AGENTS_ALLOWED_NETWORKS")
+    existing = [item for item in (previous or "").split(",") if item]
+    combined = existing[:]
+    for item in additions:
+        if item not in combined:
+            combined.append(item)
+    os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] = ",".join(combined)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("CTF_AGENTS_ALLOWED_NETWORKS", None)
+        else:
+            os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] = previous
+
+
 def _host_matches_allowed(host: str, allowed: Iterable[str]) -> bool:
     for entry in allowed:
         entry = entry.lower().strip().rstrip(".")
@@ -142,3 +193,10 @@ def _looks_like_ip(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _host_from_urlish(value: str) -> str | None:
+    parsed = urlparse(value if re.match(r"^\w+://", value) else f"http://{value}")
+    if parsed.hostname:
+        return parsed.hostname.lower().rstrip(".")
+    return None

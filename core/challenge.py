@@ -20,6 +20,7 @@ class ChallengeCategory(Enum):
     MISC = "misc"
     NETWORKING = "networking"
     BLOCKCHAIN = "blockchain"
+    SECURE_CODING = "secure_coding"
 
 
 class ChallengeDifficulty(Enum):

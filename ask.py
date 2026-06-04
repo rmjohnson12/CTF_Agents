@@ -25,6 +25,8 @@ from agents.support.docker_agent import DockerChallengeAgent
 from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
 from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
+from agents.specialists.secure_coding.secure_coding_agent import SecureCodingAgent
+from core.utils.security import networks_from_challenge, temporary_allowed_networks
 from tools.common.elf_utils import is_elf_binary
 
 def _parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -267,6 +269,16 @@ def _heuristic_challenge_from_instruction(
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
     web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web", "docker", "dockerfile", "container"]
     hardware_terms = ["hardware", "chip", "logic", "circuit", "gate", "verilog", "vhdl", "schematic"]
+    secure_coding_terms = [
+        "secure coding",
+        "secure-coding",
+        "fix the vulnerability",
+        "patch the vulnerability",
+        "source patch",
+        "patch source",
+        "vulnerable code",
+        "remediate",
+    ]
     blockchain_terms = [
         "blockchain",
         "solidity",
@@ -278,7 +290,9 @@ def _heuristic_challenge_from_instruction(
         for term in hardware_terms
     )
 
-    if (
+    if any(term in lowered_input for term in secure_coding_terms):
+        category = "secure_coding"
+    elif (
         any(f.lower().endswith(".sol") for f in challenge_files)
         or any(term in lowered_input for term in blockchain_terms)
     ):
@@ -425,6 +439,7 @@ def main(argv: Optional[List[str]] = None):
     coordinator.register_agent(ReconAgent())
     coordinator.register_agent(PwnAgent())
     coordinator.register_agent(BlockchainAgent())
+    coordinator.register_agent(SecureCodingAgent())
 
     if plan_mode:
         if not user_input:
@@ -488,7 +503,7 @@ Example shape:
 {{
   "id": "transient_task",
   "name": "Manual Task",
-  "category": "forensics|web|crypto|hardware|blockchain|misc",
+  "category": "forensics|web|crypto|hardware|blockchain|secure_coding|misc",
   "description": "...",
   "files": ["path/to/file"],
   "url": "..."
@@ -523,7 +538,8 @@ Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) i
             print(f"Target files: {challenge.get('files')}")
 
         # Step 2: Solve
-        result = coordinator.solve_challenge(challenge, resume=resume)
+        with temporary_allowed_networks(networks_from_challenge(challenge)):
+            result = coordinator.solve_challenge(challenge, resume=resume)
 
         print("\n--- Step Result ---")
         print(f"Status: {result.get('status')}")

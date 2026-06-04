@@ -70,6 +70,29 @@ def test_reasoner_routes_web():
     assert analysis.recommended_action == "run_tool"
 
 
+def test_reasoner_routes_secure_coding():
+    reasoner = LLMReasoner(client=None)
+
+    challenge = {
+        "id": "secure_001",
+        "name": "Powergrid",
+        "category": "secure_coding",
+        "description": "Secure coding challenge: patch the vulnerability and verify the fix.",
+        "hints": [],
+        "tags": ["secure coding"],
+        "metadata": {},
+        "url": "http://127.0.0.1:31337",
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert analysis.category_guess == "secure_coding"
+    assert analysis.recommended_target == "secure_coding_agent"
+    assert analysis.recommended_action == "run_agent"
+    assert next_action["target"] == "secure_coding_agent"
+
+
 def test_reasoner_routes_auth_log_before_web_login():
     reasoner = LLMReasoner(client=None)
 

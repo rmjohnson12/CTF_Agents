@@ -139,6 +139,17 @@ def test_parse_dict_accepts_blockchain_category(parser):
     assert result["category"] == "blockchain"
 
 
+def test_parse_dict_accepts_secure_coding_category(parser):
+    result = parser.parse_dict({
+        "id": "sc",
+        "name": "Powergrid",
+        "description": "Patch the vulnerability.",
+        "category": "Secure Coding",
+    })
+
+    assert result["category"] == "secure_coding"
+
+
 def test_parse_dict_normalizes_id_to_string(parser):
     result = parser.parse_dict({
         "id": 42,
