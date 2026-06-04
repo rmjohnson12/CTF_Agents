@@ -26,20 +26,6 @@ This directory contains configuration files for the multi-agent CTF system.
   - Tool-specific parameters
   - Timeout values
 
-### Communication Configuration
-- `communication_config.yaml`: Message routing and protocols
-  - Message broker settings
-  - Queue configurations
-  - Event subscriptions
-  - Retry policies
-
-### Knowledge Base Configuration
-- `knowledge_base_config.yaml`: Database and storage settings
-  - Database connection strings
-  - Cache configurations
-  - Index settings
-  - Backup policies
-
 ## Environment Variables
 
 Sensitive configuration should use environment variables:
@@ -48,7 +34,9 @@ Sensitive configuration should use environment variables:
 - External service credentials
 - Secret tokens
 
-Example `.env.example` file should be provided for reference.
+Copy the repository-root `.env.example` to `.env` for local API keys and
+provider selection. `config/.env.example` is kept for legacy reference, but the
+runtime loads the root `.env`.
 
 ## Configuration Hierarchy
 

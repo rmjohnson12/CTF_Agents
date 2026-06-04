@@ -109,8 +109,7 @@ If you plan to use browser-based web tooling, install Playwright's browser runti
 python -m playwright install chromium
 ```
 
-Set your API keys in a `.env` file in the project root. For this checkout,
-that file is `/Users/ronniejohnson/CTF_Agentsz2/.env`:
+Set your API keys in a `.env` file in the project root:
 
 ```bash
 NVAPI_KEY=your_nvidia_key_here

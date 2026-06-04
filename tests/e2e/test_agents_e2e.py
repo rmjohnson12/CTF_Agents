@@ -61,8 +61,8 @@ needs_rockyou  = pytest.mark.skipif(
     reason="rockyou.txt not found",
 )
 needs_wordlist = pytest.mark.skipif(
-    not Path("my_passwords.txt").exists(),
-    reason="my_passwords.txt not found in working directory",
+    not (FIXTURES / "my_passwords.txt").exists(),
+    reason="tests/e2e/fixtures/my_passwords.txt not found",
 )
 
 
@@ -123,7 +123,7 @@ def test_crypto_base64_e2e():
 def test_crypto_hash_crack_with_wordlist_e2e():
     """
     MD5 hash of 'Sup3rS3cret!' cracked using my_passwords.txt.
-    Requires: hashcat, my_passwords.txt in working directory.
+    Requires: hashcat and the checked-in test fixture wordlist.
     """
     challenge = {
         "id": "e2e_hash_wordlist_001",
@@ -132,7 +132,7 @@ def test_crypto_hash_crack_with_wordlist_e2e():
         "description": "Crack this hash: 8bc12637e39435c402bfba520cc1b711",
         "hints": ["It's MD5"],
         "tags": ["crypto", "hash"],
-        "files": [str(Path("my_passwords.txt").resolve())],
+        "files": [str((FIXTURES / "my_passwords.txt").resolve())],
         "metadata": {},
     }
 

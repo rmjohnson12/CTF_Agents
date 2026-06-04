@@ -20,13 +20,12 @@ Integration tests for multi-component interactions:
 - Tool chain tests
 - System workflow tests
 
-### mocks/
-Mock objects and test fixtures:
-- Mock challenges
-- Mock agent responses
-- Mock tool outputs
-- Test data generators
-- Stub implementations
+### e2e/fixtures/
+Checked-in fixture files used by end-to-end tests:
+- Small reverse-engineering scripts
+- Log-analysis samples
+- Binary/string artifacts
+- Tiny local wordlists for deterministic cracking tests
 
 ## Testing Guidelines
 
@@ -55,8 +54,17 @@ def test_crypto_agent_solve_caesar_cipher_returns_correct_flag():
 ## Running Tests
 
 ```bash
+# Daily developer sanity check
+python3 check_setup.py
+
+# CLI discovery should print argparse help, not start a solve
+python3 ask.py --help
+
 # Run all tests
 pytest
+
+# Run the low-noise daily review subset
+pytest -q -p no:cacheprovider tests/unit/test_iterative_coordinator.py tests/unit/test_llm_reasoner_fixes.py tests/unit/test_reverse_agent.py
 
 # Run unit tests only
 pytest tests/unit/
