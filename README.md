@@ -34,6 +34,10 @@ the solving loop.
   playbooks for form exploration, archive-upload issues, JSON/XML API fuzzing,
   mass-assignment checks, source-guided JSON coercion, HTB-style code-runner
   endpoints, and XXE-style CTF patterns.
+- Secure-coding challenges where a spawned target exposes editable source and a
+  verification endpoint. The secure-coding agent can inspect source through
+  editor-style APIs, apply targeted remediation for recognized vulnerable
+  patterns, save the patch, and verify the fix for the flag.
 - Binary exploitation (pwn) via ret2win discovery (symbol lookup with `nm`/
   `objdump`), cyclic overflow-offset detection, x86-64 stack-alignment gadget
   insertion, and remote payload delivery with pwntools.
@@ -192,6 +196,17 @@ No API key is required for the default local Ollama setup.
   challenge RPC endpoint, executes deterministic contract exploits where
   applicable, and retrieves the remote flag. The normal `ask.py` path has been
   validated end to end against a spawned Survival-style smart-contract target.
+- **Secure Coding Specialist**: Secure-coding/source-remediation prompts route
+  to a dedicated agent that uses editor-style APIs to inspect source, generate
+  focused patches for recognized vulnerability patterns, save the updated file,
+  and call the target's verification endpoint. The current playbook covers
+  legacy flat-file user databases vulnerable to newline/pipe row injection.
+- **Run-Scoped Target Allowlisting**: Explicit challenge URLs, IP:port pairs,
+  and connection-info endpoints are temporarily allowed only for the active
+  solve, preserving outbound network restrictions for unrelated destinations.
+- **Reduced Secret Exposure**: Challenge-facing subprocesses run with a minimal
+  environment by default so API keys and other host secrets are not inherited by
+  LLM-generated scripts or untrusted challenge binaries unless a tool opts in.
 - **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
 - **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
   forensics agent can inspect loader/preload state and shared-library hook
@@ -224,8 +239,9 @@ No API key is required for the default local Ollama setup.
    ```
 
    Outbound HTTP/browser access is restricted by `security.allowed_networks` in
-   `config/system_config.yaml`. For an authorized spawned target, allow the host
-   for that run:
+   `config/system_config.yaml`. Hosts explicitly present in the challenge
+   prompt or JSON are temporarily allowed only for that solve. For additional
+   authorized networks, extend the policy for that run:
    ```bash
    CTF_AGENTS_ALLOWED_NETWORKS=TARGET python3 ask.py "Solve this web challenge at http://TARGET:PORT"
    ```
@@ -278,6 +294,12 @@ No API key is required for the default local Ollama setup.
    python3 ask.py "Solve this blockchain challenge at TARGET:PORT. Files are in ~/Survival"
    ```
 
+   Secure-coding challenges can point directly at a spawned editor/verification
+   target:
+   ```bash
+   python3 ask.py "Secure coding challenge, ip and port are TARGET:PORT"
+   ```
+
    Live SSH forensics prompts can include credentials and a target:
    ```bash
    python3 ask.py "Investigate this SSH forensics target for loader anomalies. Creds: root:hackthebox IP and port are TARGET:PORT"
@@ -297,7 +319,8 @@ No API key is required for the default local Ollama setup.
    ```
 
 ## 📂 Project Structure
-- `agents/`: Specialist agents (Web, Crypto, Hardware, Pwn, Networking, Coding, etc.).
+- `agents/`: Specialist agents (Web, Crypto, Secure Coding, Hardware, Pwn,
+  Networking, Coding, etc.).
 - `core/`: The "Brain" (LLM Reasoner, Coordinator, Message Broker).
 - `tools/`: Wrapped security binaries (TShark, Nmap, John, Hashcat).
 - `ask.py`: The main interactive CLI entry point.
@@ -375,8 +398,8 @@ pytest
 
 The test suite includes coordinator routing, reasoner fallback behavior, tool
 wrappers, flag detection utilities, hardware/Saleae decoding paths, Godot
-loader reversing helpers, blockchain specialist coverage, and end-to-end
-fixtures.
+loader reversing helpers, blockchain and secure-coding specialist coverage,
+and end-to-end fixtures.
 
 ## Runtime Artifacts
 
@@ -407,6 +430,11 @@ find logs/checkpoints -mindepth 1 -exec rm -rf {} +
 This project is intended for authorized CTF competitions, lab environments,
 security research, and education. Do not run it against systems you do not own
 or do not have explicit permission to test.
+
+Several boundaries are intentionally conservative: outbound HTTP/browser access
+is allowlisted, challenge-declared targets are allowed only during their solve,
+unknown SSH host keys are rejected unless explicitly opted in, and local
+subprocesses do not inherit the full host environment by default.
 
 ## Acknowledgments
 
