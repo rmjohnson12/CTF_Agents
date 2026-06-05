@@ -663,6 +663,8 @@ class CryptographyAgent(BaseAgent):
         samples: List[Tuple[int, int]] = []
         seen_moduli = set()
         attempts = count * 3
+        from core.utils.security import assert_host_allowed
+        assert_host_allowed(host, port=port)
 
         for _ in range(attempts):
             with socket.create_connection((host, port), timeout=5) as sock:

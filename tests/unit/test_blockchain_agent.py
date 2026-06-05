@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 from pathlib import Path
 from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
+from core.utils.security import SecurityPolicyError
 from tools.common.result import ToolResult
 
 
@@ -71,6 +72,8 @@ def test_blockchain_agent_solve_fallback(monkeypatch, tmp_path):
     assert result["flag"] == "HTB{g0t_y0u2_f1r5t_b100d}"
     assert any("Found target host: 127.0.0.1:30125" in step for step in result["steps"])
     assert any("Executing exploit script" in step for step in result["steps"])
+    assert "generated_script" not in result["artifacts"]
+    assert result["artifacts"]["generated_script_redacted"] is True
     
     # Check that python tool was indeed called
     assert mock_run.call_count == 1
@@ -118,6 +121,18 @@ def test_blockchain_agent_uses_structured_connection_info_without_host_port(monk
     generated = mock_run.call_args.args[0]
     assert 'RPC_URL = "http://chain.local/rpc"' in generated
     assert 'requests.get("http://chain.local/flag")' in generated
+    assert "generated_script" not in result["artifacts"]
+
+
+def test_blockchain_connection_info_blocks_non_allowlisted_host(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "localhost")
+    agent = BlockchainAgent()
+
+    try:
+        agent._get_connection_info("203.0.113.10", 31337)
+        assert False, "expected SecurityPolicyError"
+    except SecurityPolicyError:
+        assert True
 
 
 def test_blockchain_agent_does_not_treat_private_key_prefix_as_address():

@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from tools.base_tool import BaseTool
 from tools.common.result import ToolResult
+from core.utils.security import assert_url_allowed
 import os
 
 @dataclass(frozen=True)
@@ -35,29 +36,23 @@ class DirsearchTool(BaseTool):
         Run a directory discovery scan.
         """
         import shutil
+        assert_url_allowed(url)
         if not shutil.which("dirsearch"):
             if self.runner.__class__.__name__ != "ToolRunner":
                 args = ["-u", url, "-e", extensions, "--format=plain"]
                 res = self.execute(args, timeout_s=timeout_s)
             else:
-            # Fallback to gobuster
+                # Fallback to gobuster
                 wordlist = "/usr/share/wordlists/dirb/common.txt"
                 if not os.path.exists(wordlist):
                     wordlist = "/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt"
 
                 if shutil.which("gobuster") and os.path.exists(wordlist):
                     args = ["dir", "-u", url, "-w", wordlist, "-n", "-e", "-z"]
-                    # Use execute with gobuster as the binary if supported, or just use shell
-                    cmd = f"gobuster {' '.join(args)}"
-                    import subprocess
-                    import time
-                    start_time = time.time()
                     try:
-                        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout_s)
-                        duration = time.time() - start_time
-                        res = ToolResult(cmd.split(), proc.stdout, proc.stderr, proc.returncode, False, duration)
+                        res = self.runner.run(["gobuster"] + args, timeout_s=timeout_s)
                     except Exception as e:
-                        res = ToolResult(cmd.split(), "", str(e), 1, False, 0.0)
+                        res = ToolResult(["gobuster"] + args, "", str(e), 1, False, 0.0)
                 else:
                     return DirsearchResult(
                         target_url=url,

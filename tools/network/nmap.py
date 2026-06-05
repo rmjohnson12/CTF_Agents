@@ -3,10 +3,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import List, Optional
+from urllib.parse import urlparse
 
 from tools.base_tool import BaseTool
 from tools.common.runner import ToolRunner
 from tools.common.result import ToolResult
+from core.utils.security import assert_host_allowed
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class NmapTool(BaseTool):
         return self.scan_top(target, timeout_s=timeout_s)
 
     def scan_top(self, target: str, *, timeout_s: int = 120) -> NmapScan:
+        host = self._target_host(target)
+        assert_host_allowed(host)
         res = self.execute(
             ["-sV", "--top-ports", "100", target],
             timeout_s=timeout_s,
@@ -63,3 +67,8 @@ class NmapTool(BaseTool):
                 )
             )
         return out
+
+    @staticmethod
+    def _target_host(target: str) -> str:
+        parsed = urlparse(target if re.match(r"^\w+://", target) else f"tcp://{target}")
+        return parsed.hostname or target

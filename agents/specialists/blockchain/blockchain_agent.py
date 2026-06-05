@@ -15,6 +15,7 @@ from agents.base_agent import BaseAgent, AgentType
 from tools.common.python_tool import PythonTool
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
+from core.utils.security import assert_url_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +276,7 @@ class BlockchainAgent(BaseAgent):
             "flag": flag,
             "steps": steps,
             "artifacts": {
-                "generated_script": script_content,
+                "generated_script_redacted": True,
                 "final_attempt": attempt + 1,
             },
         }
@@ -319,8 +320,10 @@ class BlockchainAgent(BaseAgent):
 
     def _get_connection_info(self, host: str, port: int) -> Optional[Dict[str, Any]]:
         import requests
+        url = f"http://{host}:{port}/connection_info"
+        assert_url_allowed(url)
         try:
-            r = requests.get(f"http://{host}:{port}/connection_info", timeout=5)
+            r = requests.get(url, timeout=5)
             if r.status_code == 200:
                 return r.json()
         except Exception:

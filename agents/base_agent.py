@@ -13,6 +13,7 @@ import time
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from core.knowledge_base.knowledge_store import KnowledgeStore
+from tools.common.runner import ToolRunner
 
 
 class AgentType(Enum):
@@ -140,22 +141,7 @@ class BaseAgent(ABC):
 
         start_time = time.time()
         try:
-            process = subprocess.Popen(
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            stdout, stderr = process.communicate(timeout=timeout)
-            duration = time.time() - start_time
-            return ToolResult(
-                argv=argv,
-                stdout=stdout,
-                stderr=stderr,
-                exit_code=process.returncode,
-                timed_out=False,
-                duration_s=duration,
-            )
+            return ToolRunner().run(argv, timeout_s=timeout)
         except subprocess.TimeoutExpired:
             duration = time.time() - start_time
             return ToolResult(

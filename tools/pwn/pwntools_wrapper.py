@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import subprocess
 import os
 from tools.base_tool import BaseTool
+from tools.common.runner import ToolRunner
 
 class PwntoolsWrapper(BaseTool):
     """
@@ -27,8 +28,7 @@ class PwntoolsWrapper(BaseTool):
         """Run checksec on a binary to identify mitigations."""
         try:
             # We use the CLI version of checksec if available
-            result = subprocess.run(["checksec", "--format=json", "--file=" + binary_path], 
-                                   capture_output=True, text=True)
+            result = ToolRunner().run(["checksec", "--format=json", "--file=" + binary_path])
             import json
             return json.loads(result.stdout)
         except Exception as e:
@@ -60,13 +60,12 @@ io.interactive()
     def execute(self, script_path: str, timeout_s: int = 30) -> Dict[str, Any]:
         """Execute a pwntools script and return output."""
         try:
-            result = subprocess.run(["python3", script_path], 
-                                   capture_output=True, text=True, timeout=timeout_s)
+            result = ToolRunner().run(["python3", script_path], timeout_s=timeout_s)
             return {
                 "stdout": result.stdout,
                 "stderr": result.stderr,
-                "returncode": result.returncode,
-                "success": result.returncode == 0
+                "returncode": result.exit_code,
+                "success": result.exit_code == 0
             }
         except subprocess.TimeoutExpired:
             return {"error": "Execution timed out", "success": False}

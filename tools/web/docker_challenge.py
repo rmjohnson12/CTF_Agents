@@ -10,6 +10,8 @@ from typing import List, Optional
 
 import requests
 
+from core.utils.security import assert_url_allowed
+
 from tools.common.result import ToolResult
 from tools.common.runner import ToolRunner
 
@@ -131,6 +133,7 @@ class DockerChallengeTool:
 
     @staticmethod
     def _wait_for_http(url: str, *, timeout_s: int = 30) -> None:
+        assert_url_allowed(url)
         deadline = time.time() + timeout_s
         last_error: Optional[Exception] = None
         while time.time() < deadline:

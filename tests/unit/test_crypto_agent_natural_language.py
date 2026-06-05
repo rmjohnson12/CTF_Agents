@@ -1,4 +1,7 @@
+import pytest
+
 from agents.specialists.cryptography.crypto_agent import CryptographyAgent
+from core.utils.security import SecurityPolicyError
 
 
 def test_crypto_agent_extracts_base64_from_natural_language_prompt():
@@ -162,3 +165,10 @@ def test_crypto_agent_rsa_broadcast_math_helpers_recover_plaintext():
 
     assert exact
     assert agent._int_to_bytes(root) == plaintext
+
+
+def test_crypto_time_capsule_socket_blocks_non_allowlisted_host(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "localhost")
+
+    with pytest.raises(SecurityPolicyError):
+        CryptographyAgent._collect_time_capsule_samples("203.0.113.10", 31337, 1)

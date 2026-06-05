@@ -22,7 +22,8 @@ def test_sqlmap_vulnerable_parsing():
     assert res.db_type == "MySQL"
     assert len(res.payloads) > 0
 
-def test_dirsearch_parsing():
+def test_dirsearch_parsing(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "test.local")
     stdout = """
 [10:00:00] 200 -   1KB - /admin.php
 [10:00:01] 404 -   0B  - /notfound
@@ -34,6 +35,30 @@ def test_dirsearch_parsing():
     assert res.entries[0].url == "/admin.php"
     assert res.entries[0].status == 200
     assert res.entries[1].url == "/config.txt"
+
+
+def test_dirsearch_gobuster_fallback_uses_argv_not_shell(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "test.local")
+    monkeypatch.setattr(
+        "shutil.which",
+        lambda name: None if name == "dirsearch" else "/usr/bin/gobuster",
+    )
+    monkeypatch.setattr("os.path.exists", lambda path: True)
+    tool = DirsearchTool()
+    captured = {}
+
+    def fake_run(argv, timeout_s=None, cwd=None, env=None):
+        captured["argv"] = argv
+        return ToolResult(argv, "/admin (Status: 200) [Size: 1]", "", 0, False, 0.1)
+
+    monkeypatch.setattr(tool.runner, "run", fake_run)
+
+    malicious_url = "http://test.local/?x=$(touch /tmp/pwned)"
+    res = tool.run(malicious_url)
+
+    assert captured["argv"][0] == "gobuster"
+    assert captured["argv"][3] == malicious_url
+    assert len(res.entries) == 1
 
 
 class MockBrowserTool:
@@ -51,6 +76,8 @@ class MockBrowserTool:
             cookies=[],
             script_srcs=[url.rstrip("/") + "/app.js"],
             hidden_inputs=[],
+            local_storage={},
+            session_storage={},
             screenshot_path="",
             html_path="",
             json_path="",
@@ -101,6 +128,36 @@ def test_web_agent_jwt_playbook_uses_challenge_description():
     assert result["status"] == "solved"
     assert result["flag"] == "HTB{jwt_secret_leak}"
     assert any("Executing JWT Playbook" in step for step in result["steps"])
+
+
+def test_web_agent_does_not_persist_browser_session_state_by_default(monkeypatch):
+    monkeypatch.delenv("CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS", raising=False)
+
+    class SensitiveBrowserTool(MockBrowserTool):
+        def snapshot(self, url, cookies=None):
+            res = super().snapshot(url, cookies=cookies)
+            res.cookies = [{"name": "session", "value": "secret-cookie"}]
+            res.local_storage = {"jwt": "secret-jwt"}
+            res.session_storage = {"csrf": "secret-csrf"}
+            return res
+
+    agent = WebExploitationAgent(
+        browser_tool=SensitiveBrowserTool(),
+        http_tool=MockHttpTool(),
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "session_artifacts",
+        "category": "web",
+        "description": "Inspect this page.",
+        "url": "http://127.0.0.1:30433",
+    })
+
+    snapshot = result["artifacts"]["browser_snapshot"]
+    assert "cookies" not in snapshot
+    assert "local_storage" not in snapshot
+    assert "session_storage" not in snapshot
 
 
 def test_web_agent_normalizes_bare_ip_port_url():

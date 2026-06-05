@@ -346,12 +346,14 @@ def test_pwn_agent_adds_execute_permission_before_running_payload(tmp_path):
         stderr=b"",
     )
 
-    with patch("agents.specialists.pwn.pwn_agent.subprocess.run", return_value=completed):
+    with patch("agents.specialists.pwn.pwn_agent.subprocess.run", return_value=completed) as mock_run:
         steps, flag = PwnAgent()._phase_run_with_payload(str(fake_binary), b"AAAA\n")
 
     assert flag == "CTF{chmod_then_run}"
     assert os.access(fake_binary, os.X_OK)
     assert any("added user execute permission" in step for step in steps)
+    assert "env" in mock_run.call_args.kwargs
+    assert "OPENAI_API_KEY" not in mock_run.call_args.kwargs["env"]
 
 
 # ---------------------------------------------------------------------------

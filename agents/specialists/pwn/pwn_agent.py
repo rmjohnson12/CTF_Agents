@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
+from core.utils.security import minimal_subprocess_env
 from tools.common.elf_utils import is_elf_binary
 from tools.pwn.pwntools_wrapper import PwntoolsWrapper
 
@@ -293,6 +294,7 @@ class PwnAgent(BaseAgent):
                 [binary],
                 input=payload,
                 capture_output=True,
+                env=minimal_subprocess_env(),
                 timeout=10,
             )
             output = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
@@ -464,7 +466,7 @@ class PwnAgent(BaseAgent):
             pass
 
         try:
-            p = pwn.process(binary)
+            p = pwn.process(binary, env=minimal_subprocess_env())
             p.sendline(pwn.cyclic(300))
             p.wait()
             try:

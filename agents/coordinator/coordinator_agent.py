@@ -26,7 +26,7 @@ from core.utils.result_manager import ResultManager
 from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
 from core.knowledge_base.knowledge_store import KnowledgeStore
-from core.utils.security import safe_checkpoint_path, safe_slug
+from core.utils.security import redact_sensitive_data, safe_checkpoint_path, safe_slug
 import concurrent.futures
 
 logger = logging.getLogger(__name__)
@@ -786,6 +786,7 @@ class CoordinatorAgent(BaseAgent):
 
     def _publish_result(self, result: Dict[str, Any]) -> None:
         """Broadcast an agent/tool result so other agents can react."""
+        safe_result = redact_sensitive_data(result)
         self.broker.publish(Message(
             message_id=str(uuid.uuid4()),
             message_type=MessageType.RESULT_REPORT,
@@ -793,13 +794,14 @@ class CoordinatorAgent(BaseAgent):
             recipient="*",
             timestamp=datetime.now(),
             priority=MessagePriority.NORMAL,
-            payload={"result": result},
+            payload={"result": safe_result},
         ))
 
     def _publish_knowledge(self, challenge_id: str, artifacts: Dict[str, Any]) -> None:
         """Share discovered artifacts and store them in the KnowledgeStore."""
+        safe_artifacts = redact_sensitive_data(artifacts)
         # 1. Store in KnowledgeStore for persistence
-        for key, value in artifacts.items():
+        for key, value in safe_artifacts.items():
             self.knowledge_store.add_fact(
                 challenge_id=challenge_id,
                 agent_id=self.agent_id,
@@ -816,5 +818,5 @@ class CoordinatorAgent(BaseAgent):
             recipient="*",
             timestamp=datetime.now(),
             priority=MessagePriority.HIGH,
-            payload={"challenge_id": challenge_id, "artifacts": artifacts},
+            payload={"challenge_id": challenge_id, "artifacts": safe_artifacts},
         ))

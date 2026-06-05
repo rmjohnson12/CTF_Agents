@@ -4,6 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from core.utils.security import redact_sensitive_data
+
 class ResultManager:
     """
     Manages the organization and persistence of challenge results.
@@ -60,6 +62,7 @@ class ResultManager:
         """
         Persist the final result of a coordinator run.
         """
+        result = redact_sensitive_data(result)
         challenge_id = result.get("challenge_id", "unknown")
         cdir = self.get_challenge_dir(challenge_id)
         

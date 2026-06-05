@@ -204,9 +204,16 @@ No API key is required for the default local Ollama setup.
 - **Run-Scoped Target Allowlisting**: Explicit challenge URLs, IP:port pairs,
   and connection-info endpoints are temporarily allowed only for the active
   solve, preserving outbound network restrictions for unrelated destinations.
+  The same policy is enforced across HTTP/browser tools, blockchain metadata
+  fetches, raw crypto sockets, Docker readiness checks, nmap scans, and
+  directory-discovery fallbacks.
 - **Reduced Secret Exposure**: Challenge-facing subprocesses run with a minimal
   environment by default so API keys and other host secrets are not inherited by
   LLM-generated scripts or untrusted challenge binaries unless a tool opts in.
+- **Artifact Redaction By Default**: Run reports, broker result messages, and
+  the SQLite knowledge store redact sensitive keys before persistence. Browser
+  cookies, Web Storage, and key-bearing generated scripts are not stored by
+  default.
 - **Opt-In Docker Challenge Runs**: Local Docker web challenge folders can be built and launched when `CTF_AGENTS_ALLOW_DOCKER=1` is set.
 - **Live SSH Forensics**: For authorized SSH-based forensics prompts, the
   forensics agent can inspect loader/preload state and shared-library hook
@@ -244,6 +251,13 @@ No API key is required for the default local Ollama setup.
    authorized networks, extend the policy for that run:
    ```bash
    CTF_AGENTS_ALLOWED_NETWORKS=TARGET python3 ask.py "Solve this web challenge at http://TARGET:PORT"
+   ```
+
+   Sensitive browser session artifacts are not persisted by default. For an
+   authorized troubleshooting run where storing cookies or Web Storage is
+   intentional, opt in explicitly:
+   ```bash
+   CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS=1 python3 ask.py "Solve this web challenge at http://TARGET:PORT"
    ```
 
    Source-only web challenges can point directly at a local app folder:
@@ -410,6 +424,11 @@ Generated outputs are local-only and ignored by git:
 - `logs/knowledge.db` stores the local knowledge base.
 - `logs/performance.db` stores local agent performance history.
 
+Before reports, broker payloads, or knowledge facts are written, sensitive
+fields such as cookies, tokens, API keys, private keys, passwords, and session
+storage are redacted. Key-bearing generated scripts are not stored as artifacts
+by default.
+
 To clean local generated output:
 
 ```bash
@@ -433,8 +452,10 @@ or do not have explicit permission to test.
 
 Several boundaries are intentionally conservative: outbound HTTP/browser access
 is allowlisted, challenge-declared targets are allowed only during their solve,
-unknown SSH host keys are rejected unless explicitly opted in, and local
-subprocesses do not inherit the full host environment by default.
+unknown SSH host keys are rejected unless explicitly opted in, local
+subprocesses do not inherit the full host environment by default, and sensitive
+run artifacts are redacted before persistence. Capture of browser cookies or
+Web Storage requires `CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS=1`.
 
 ## Acknowledgments
 
