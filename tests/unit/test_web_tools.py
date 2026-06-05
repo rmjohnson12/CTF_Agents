@@ -414,6 +414,14 @@ def test_web_agent_renders_binary_stl_header_artifact(tmp_path, monkeypatch):
             return HttpContentResult(url, url, "GET", 200, {"Content-Type": "application/octet-stream"}, header + triangles + tri, 0.1)
 
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    original_import = __import__
+
+    def import_without_matplotlib(name, *args, **kwargs):
+        if name == "matplotlib" or name.startswith("matplotlib."):
+            raise ImportError("matplotlib intentionally unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", import_without_matplotlib)
     agent = WebExploitationAgent(
         browser_tool=MockBrowserTool(),
         http_tool=HeaderStlHttpTool(),
@@ -432,7 +440,7 @@ def test_web_agent_renders_binary_stl_header_artifact(tmp_path, monkeypatch):
 
     assert result["status"] == "attempted"
     assert stl["rendered_projection"]
-    assert stl["rendered_projection"].endswith("stl_header_stl_projection.png")
+    assert stl["rendered_projection"].endswith("stl_header_stl_projection.svg")
     assert any("Detected binary STL artifact" in step for step in result["steps"])
 
 
