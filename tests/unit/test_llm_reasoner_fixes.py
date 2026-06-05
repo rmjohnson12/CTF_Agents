@@ -148,6 +148,37 @@ def test_suggest_recovery_action_parses_valid_json(monkeypatch):
     assert decision["inputs"]["task"].startswith("Parse")
 
 
+def test_suggest_recovery_action_rejects_sql_without_sql_evidence(monkeypatch):
+    mock_client = MagicMock()
+    reasoner = LLMReasoner(client=mock_client)
+    monkeypatch.setattr(
+        reasoner,
+        "_call_llm",
+        lambda prompt: json.dumps({
+            "next_action": "run_tool",
+            "target": "tony_htb_sql",
+            "reasoning": "Try SQL because this is a web challenge.",
+            "inputs": {},
+        }),
+    )
+    analysis = ChallengeAnalysis("web", 0.8, "web URL", "web_agent", "run_agent", ["url"])
+
+    decision = reasoner.suggest_recovery_action(
+        {"id": "web_artifact", "category": "web", "description": "Asset portal leaked a backup."},
+        analysis,
+        [{"agent_id": "web_agent", "status": "attempted"}],
+        [
+            "Header artifact hints: https://target/assets/bak/file_backup.sys",
+            "Decoded certutil/PEM-style block: header='OpenSCAD Model'",
+            "Detected binary STL artifact",
+        ],
+    )
+
+    assert decision["next_action"] == "stop"
+    assert decision["target"] == "none"
+    assert "Rejected SQL recovery suggestion" in decision["reasoning"]
+
+
 def test_suggest_recovery_action_stops_without_client():
     reasoner = LLMReasoner(client=None)
     analysis = ChallengeAnalysis("misc", 0.6, "unknown", "none", "stop", [])
@@ -191,7 +222,7 @@ def test_nvapi_key_selects_nvidia_nim(monkeypatch):
     call_kwargs = MockOpenAI.call_args.kwargs
     assert call_kwargs["api_key"] == "nvapi-fake-key"
     assert call_kwargs["base_url"] == _NVIDIA_NIM_BASE_URL
-    assert call_kwargs["timeout"] == 15.0
+    assert call_kwargs["timeout"] == 60.0
     assert reasoner.model == _NVIDIA_DEFAULT_MODEL
 
 
@@ -217,8 +248,8 @@ def test_invalid_llm_timeout_seconds_uses_default(monkeypatch):
         reasoner = LLMReasoner()
 
     call_kwargs = MockOpenAI.call_args.kwargs
-    assert call_kwargs["timeout"] == 15.0
-    assert reasoner.timeout_seconds == 15.0
+    assert call_kwargs["timeout"] == 60.0
+    assert reasoner.timeout_seconds == 60.0
 
 
 def test_nvapi_keys_selects_first_nvidia_key(monkeypatch):
@@ -348,7 +379,7 @@ def test_ollama_provider_uses_openai_compatible_client(monkeypatch):
     call_kwargs = MockOpenAI.call_args.kwargs
     assert call_kwargs["api_key"] == "ollama"
     assert call_kwargs["base_url"] == "http://localhost:11434/v1"
-    assert call_kwargs["timeout"] == 15.0
+    assert call_kwargs["timeout"] == 60.0
     assert reasoner.provider == "ollama"
     assert reasoner.model == "qwen2.5-coder:7b"
 
@@ -642,3 +673,36 @@ def test_analyze_falls_back_to_heuristic_on_bad_json():
     assert analysis.category_guess in (
         "crypto", "web", "reverse", "forensics", "misc", "osint", "log", "unknown"
     )
+
+
+def test_sdk_timeout_is_retryable_not_fatal(monkeypatch):
+    """Regression: a transient SDK APITimeoutError must be retried, and must
+    NOT permanently disable the LLM client for the rest of the run.
+
+    Previously `_RETRYABLE_EXCEPTIONS` only listed the builtin TimeoutError,
+    so the SDK's APITimeoutError (subclass of APIConnectionError) fell through
+    to the catch-all handler, was logged as "non-retryable", and called
+    `_disable_llm()` — dropping the whole run into the heuristic fallback.
+    """
+    import anthropic
+    from core.decision_engine.llm_reasoner import _RETRYABLE_EXCEPTIONS, _MAX_LLM_RETRIES
+
+    # The SDK timeout type must be recognized as retryable.
+    assert anthropic.APITimeoutError in _RETRYABLE_EXCEPTIONS
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+    with patch("core.decision_engine.llm_reasoner.Anthropic") as MockAnthropic:
+        client = MagicMock()
+        client.messages.create.side_effect = anthropic.APITimeoutError(request=MagicMock())
+        MockAnthropic.return_value = client
+        reasoner = LLMReasoner()
+
+    # Avoid real backoff sleeps.
+    with patch("core.decision_engine.llm_reasoner.time.sleep"):
+        result = reasoner._call_llm("hello")
+
+    # Exhausting retries returns empty, but the client stays alive for later steps.
+    assert result == ""
+    assert client.messages.create.call_count == _MAX_LLM_RETRIES
+    assert reasoner.client is not None
+    assert reasoner.provider == "anthropic"

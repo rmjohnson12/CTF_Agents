@@ -1,6 +1,25 @@
 import re
 from typing import List, Optional
 
+# Canonical list of known flag prefixes (brace-style), most specific first.
+# Used both for documentation and for known-plaintext attacks (e.g. XOR /
+# stream-cipher keystream recovery), where the first bytes of the plaintext
+# must be guessed. Keep USCG (US Cyber Games) variants near the front so the
+# fallback solvers try them. Extend this single list instead of the per-file
+# copies scattered across the agents.
+KNOWN_FLAG_PREFIXES: List[str] = [
+    "SVIUSCG{",  # US Cyber Games
+    "SVIBGR{",   # US Cyber Games
+    "SVBRG{",    # US Cyber Games
+    "picoCTF{",
+    "HTB{",
+    "CTF{",
+    "flag{",
+    "FLAG{",
+    "SKY-",      # NCL style
+    "NCL-",
+]
+
 # Common flag patterns: CTF{...}, HTB{...}, flag{...}, SKY-XXXX-####, etc.
 # Pattern 1: Prefix{content} - Require a multi-character prefix and at least
 # 4 chars inside to avoid source-code fragments like f"...{variable}".
@@ -9,7 +28,7 @@ from typing import List, Optional
 # positives from binary noise like "xyz{rrrr|}" matching the broad pattern.
 FLAG_REGEX_BRaces = re.compile(
     r"(flag|picoCTF|nahamCon|[A-Z][A-Z0-9_-]+)"
-    r"\{[a-zA-Z0-9_\-\.!@#$%^&*()+=|?><]{4,}\}"
+    r"\{[a-zA-Z0-9_\-\.!@#$%^&*()+=|?><\/]{4,}\}"
 )
 # Pattern 2: SKY-XXXX-#### or NCL-XXXX-#### (NCL Style)
 FLAG_REGEX_NCL = re.compile(r"(SKY|NCL)-[A-Z0-9]{4,}-[A-Z0-9-]+")

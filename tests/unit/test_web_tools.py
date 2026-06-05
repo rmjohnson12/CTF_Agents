@@ -1,7 +1,10 @@
 import pytest
 import json
+import base64
+import struct
 from tools.web.browser_snapshot_tool import BrowserSnapshotResult
 from tools.web.http_fetch import HttpFetchResult
+from tools.web.http_fetch import HttpContentResult
 from tools.web.sqlmap import SqlmapTool
 from tools.web.dirsearch import DirsearchTool
 from tools.web.react2shell import React2ShellResult, React2ShellTool
@@ -89,6 +92,9 @@ class MockHttpTool:
         body = "const app = 'helpdesk';"
         status = 200 if url.endswith("/app.js") else 404
         return HttpFetchResult(url, url, "GET", status, {}, body, 0.1)
+
+    def fetch_content(self, url, **kwargs):
+        return HttpContentResult(url, url, "GET", 404, {}, b"", 0.1)
 
 
 class NoopDirsearchTool:
@@ -332,6 +338,102 @@ def test_web_agent_solves_prime_product_code_runner():
     assert result["flag"] == "HTB{prime_runner}"
     assert "coding_runner_prime_product" in result["vulnerabilities_found"]
     assert http.calls[0][0] == "http://127.0.0.1:30498/run"
+
+
+def test_web_agent_follows_header_archived_path_and_decodes_certutil_block():
+    class HeaderArtifactHttpTool:
+        def __init__(self):
+            self.fetches = []
+            self.content_fetches = []
+
+        def fetch(self, url, **kwargs):
+            self.fetches.append(url)
+            return HttpFetchResult(
+                url,
+                url,
+                "GET",
+                200,
+                {
+                    "X-Archived-Path": "/assets_production_system_v3/bak/file_backup.sys",
+                    "X-Administrator-Note": "Structural certutil backup blocks retained.",
+                },
+                "<html>asset portal</html>",
+                0.1,
+            )
+
+        def fetch_content(self, url, **kwargs):
+            self.content_fetches.append(url)
+            encoded = base64.b64encode(b"SVIBGR{header_artifact_pipeline}").decode()
+            body = f"-----BEGIN CERTIFICATE-----\n{encoded}\n-----END CERTIFICATE-----\n".encode()
+            return HttpContentResult(url, url, "GET", 200, {"Content-Type": "application/octet-stream"}, body, 0.1)
+
+    http = HeaderArtifactHttpTool()
+    agent = WebExploitationAgent(
+        browser_tool=MockBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "header_backup",
+        "category": "web",
+        "description": "Public status page leaked a backup path.",
+        "url": "https://example.test",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIBGR{header_artifact_pipeline}"
+    assert http.content_fetches == ["https://example.test/assets_production_system_v3/bak/file_backup.sys"]
+    assert any("Decoded certutil/PEM-style block" in step for step in result["steps"])
+
+
+def test_web_agent_renders_binary_stl_header_artifact(tmp_path, monkeypatch):
+    class HeaderStlHttpTool:
+        def fetch(self, url, **kwargs):
+            return HttpFetchResult(
+                url,
+                url,
+                "GET",
+                200,
+                {"X-Archived-Path": "/bak/model.sys"},
+                "",
+                0.1,
+            )
+
+        def fetch_content(self, url, **kwargs):
+            header = b"OpenSCAD Model".ljust(80, b"\x00")
+            triangles = struct.pack("<I", 1)
+            tri = struct.pack(
+                "<12fH",
+                0.0, 0.0, 1.0,
+                0.0, 0.0, 3.0,
+                1.0, 0.0, 3.0,
+                0.0, 1.0, 3.0,
+                0,
+            )
+            return HttpContentResult(url, url, "GET", 200, {"Content-Type": "application/octet-stream"}, header + triangles + tri, 0.1)
+
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    agent = WebExploitationAgent(
+        browser_tool=MockBrowserTool(),
+        http_tool=HeaderStlHttpTool(),
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "stl_header",
+        "category": "web",
+        "description": "Public page leaked an OpenSCAD backup.",
+        "url": "https://example.test",
+    })
+
+    findings = result["artifacts"]["header_artifacts"][0]["findings"]
+    stl = next(item for item in findings if item["type"] == "binary_stl")
+
+    assert result["status"] == "attempted"
+    assert stl["rendered_projection"]
+    assert stl["rendered_projection"].endswith("stl_header_stl_projection.png")
+    assert any("Detected binary STL artifact" in step for step in result["steps"])
 
 
 def test_react2shell_tool_refuses_non_local_targets_by_default(monkeypatch):

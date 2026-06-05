@@ -14,6 +14,28 @@ from openai import OpenAI
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+
+def _collect_sdk_retryable_exceptions() -> tuple[type[BaseException], ...]:
+    """SDK timeout/connection errors that should be retried, not treated as fatal.
+
+    The OpenAI/Anthropic SDKs raise their own ``APITimeoutError`` /
+    ``APIConnectionError`` (message: "Request timed out."), which do NOT
+    subclass the builtin ``TimeoutError``. Without this, a single transient
+    timeout falls through to the catch-all handler and disables the LLM for
+    the entire run.
+    """
+    excs: list[type[BaseException]] = []
+    for module_name in ("openai", "anthropic"):
+        try:
+            mod = importlib.import_module(module_name)
+        except Exception:
+            continue
+        for attr in ("APITimeoutError", "APIConnectionError"):
+            exc = getattr(mod, attr, None)
+            if isinstance(exc, type) and issubclass(exc, BaseException):
+                excs.append(exc)
+    return tuple(excs)
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -33,10 +55,10 @@ _ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 _OLLAMA_DEFAULT_MODEL = "llama3.1"
 _GOOGLE_DEFAULT_MODEL = "gemini-2.5-flash"
 
-_RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError)
+_RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError) + _collect_sdk_retryable_exceptions()
 _MAX_LLM_RETRIES = 3
 _LLM_BACKOFF_BASE = 1.0
-_DEFAULT_LLM_TIMEOUT_SECONDS = 15.0
+_DEFAULT_LLM_TIMEOUT_SECONDS = 60.0
 
 
 class LLMReasoner:
@@ -347,6 +369,14 @@ class LLMReasoner:
             action = "stop"
         if action == "stop":
             target = "none"
+        if target == "tony_htb_sql" and not self._has_sql_recovery_evidence(challenge, steps):
+            action = "stop"
+            target = "none"
+            data["reasoning"] = (
+                "Rejected SQL recovery suggestion because the trace did not contain "
+                "SQL-specific evidence such as SQL errors, database terms, query parameters, "
+                "or login/search forms."
+            )
 
         return {
             "next_action": action,
@@ -354,6 +384,42 @@ class LLMReasoner:
             "reasoning": data.get("reasoning", "No recovery reasoning provided."),
             "inputs": data.get("inputs") if isinstance(data.get("inputs"), dict) else {},
         }
+
+    @staticmethod
+    def _has_sql_recovery_evidence(challenge: Dict[str, Any], steps: List[str]) -> bool:
+        text = " ".join([
+            str(challenge.get("name", "")),
+            str(challenge.get("description", "")),
+            " ".join(challenge.get("tags", [])),
+            " ".join(str(step) for step in steps[-50:]),
+        ]).lower()
+        sql_markers = [
+            "sql",
+            "sqlite",
+            "mysql",
+            "postgres",
+            "database",
+            "dbms",
+            "union select",
+            "syntax error",
+            "login",
+            "search",
+            "query parameter",
+            "id=",
+        ]
+        artifact_markers = [
+            "x-archived-path",
+            "header artifact",
+            "certutil",
+            "backup",
+            "binary stl",
+            "openscad",
+            "svg text",
+        ]
+        return any(marker in text for marker in sql_markers) and not (
+            any(marker in text for marker in artifact_markers)
+            and not any(marker in text for marker in ["sql", "sqlite", "mysql", "postgres", "dbms", "union select"])
+        )
 
     def _call_llm(self, prompt: str) -> str:
         if not self.client:
@@ -463,8 +529,8 @@ class LLMReasoner:
         
         CRITICAL RULES for CTF Logic:
         1. DATA DECODING: If you read from a file, check if it's hex (0-9, a-f) or Base64. Decode it to raw bytes before processing. Strip labels like 'Flag: ' or 'Cipher: '.
-        2. XOR STRATEGY: If multi-byte XOR is suspected, use a 'Known Plaintext Attack'. Try deriving the key by XORing the first bytes of ciphertext with common prefixes: 'HTB{{', 'CTF{{', 'flag{{', 'SKY-'.
-        3. OUTPUT: Print the final flag clearly (e.g. 'Found flag: HTB{{...}}').
+        2. XOR STRATEGY: If multi-byte XOR is suspected, use a 'Known Plaintext Attack'. Try deriving the key by XORing the first bytes of ciphertext with common prefixes: 'SVIUSCG{{', 'SVIBGR{{', 'SVBRG{{', 'picoCTF{{', 'HTB{{', 'CTF{{', 'flag{{', 'SKY-'.
+        3. OUTPUT: Print the final flag clearly (e.g. 'Found flag: SVIBGR{{...}}'). Flags may use the US Cyber Games formats SVIUSCG{{...}}, SVIBGR{{...}}, or SVBRG{{...}}.
         4. SELF-CONTAINED: Use only standard libraries (sys, os, binascii, base64, re, etc.).
         
         Return ONLY the Python code. No preamble, no markdown.
@@ -599,6 +665,13 @@ class LLMReasoner:
     - Prefer an action that is different from prior failed attempts.
     - If retrying the same agent, include a focused inputs.task explaining the
       new hypothesis or specific tool/path to try.
+    - Ground the action in observed evidence from the trace. If the trace
+      mentions response headers, backup paths, certutil/PEM blocks, STL,
+      OpenSCAD, zip/Krita, static JavaScript, source comments, or downloaded
+      artifacts, prefer an artifact/file-analysis step over SQL scanning.
+    - Do not suggest tony_htb_sql unless the trace shows SQL-specific evidence
+      such as SQL errors, database names, query parameters, search/login forms,
+      or prior SQL injection signals.
     - Use "run_agent" for targets ending in "_agent".
     - Use "run_tool" only for browser_snapshot or tony_htb_sql.
     - Use "stop" only if there is no concrete next experiment.

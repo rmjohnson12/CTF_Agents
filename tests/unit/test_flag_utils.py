@@ -20,6 +20,10 @@ def test_extract_flags_complex():
     text = "A complex one: HTB{f!@#$%^&*()+=|?><}"
     assert extract_flags(text) == ["HTB{f!@#$%^&*()+=|?><}"]
 
+def test_extract_uscybergames_flag_with_slash():
+    text = "Hidden SVG text: SVIBGR{Kik!_s@y$_T3ch_w/_<3!}"
+    assert extract_flags(text) == ["SVIBGR{Kik!_s@y$_T3ch_w/_<3!}"]
+
 def test_find_first_flag():
     text = "Multiple here: CTF{first_flag} HTB{second_flag}"
     assert find_first_flag(text) == "CTF{first_flag}"

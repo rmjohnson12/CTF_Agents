@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import re
+import zipfile
+import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional, Tuple
 
 from config.defaults import DEFAULT_ROCKYOU_PATHS
@@ -111,10 +113,19 @@ class ForensicsAgent(BaseAgent):
             "exiftool": [],
             "strings": [],
             "pdf": [],
+            "archives": [],
             "pcap": []
         }
 
         for file_path in files:
+            archive_flag, archive_artifact = self._analyze_krita_archive(file_path, steps)
+            if archive_artifact:
+                all_artifacts["archives"].append(archive_artifact)
+            if archive_flag and not flag:
+                flag = archive_flag
+                steps.append(f"  Flag found in Krita/SVG archive layers: {flag}")
+                continue
+
             # 0a. PDF Detection & Inspection
             if file_path.lower().endswith(".pdf"):
                 steps.append(f"Detected PDF file: {file_path}")
@@ -284,6 +295,170 @@ class ForensicsAgent(BaseAgent):
             "steps": steps,
             "artifacts": all_artifacts
         }
+
+    def _analyze_krita_archive(
+        self,
+        file_path: str,
+        steps: List[str],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        if not zipfile.is_zipfile(file_path):
+            return None, None
+
+        try:
+            with zipfile.ZipFile(file_path) as archive:
+                names = archive.namelist()
+                name_set = set(names)
+                mimetype = ""
+                if "mimetype" in name_set:
+                    mimetype = archive.read("mimetype").decode("utf-8", errors="replace").strip()
+
+                svg_members = [
+                    name for name in names
+                    if name.endswith(".shapelayer/content.svg")
+                ]
+                if mimetype != "application/x-krita" and "maindoc.xml" not in name_set and not svg_members:
+                    return None, None
+
+                steps.append(f"Detected Krita/zip archive: {file_path}")
+                layers = self._parse_krita_layers(archive)
+                text_entries: List[Dict[str, Any]] = []
+                for member in svg_members:
+                    try:
+                        svg_text = archive.read(member).decode("utf-8", errors="replace")
+                    except KeyError:
+                        continue
+                    text_entries.extend(self._extract_svg_text_entries(member, svg_text, layers))
+
+                if not text_entries:
+                    return None, {
+                        "file": file_path,
+                        "type": "krita_archive",
+                        "mimetype": mimetype,
+                        "svg_layers": len(svg_members),
+                        "text": "",
+                    }
+
+                hidden_entries = [entry for entry in text_entries if entry.get("visible") == "0"]
+                preferred_entries = hidden_entries or text_entries
+                ordered = self._order_svg_text_entries(preferred_entries)
+                recovered_text = "".join(entry["text"] for entry in ordered)
+                all_ordered = self._order_svg_text_entries(text_entries)
+                all_text = "".join(entry["text"] for entry in all_ordered)
+
+                steps.append(
+                    f"  Extracted {len(text_entries)} SVG text fragment(s) "
+                    f"from {len(svg_members)} Krita shape layer(s)."
+                )
+                if hidden_entries:
+                    steps.append(f"  Reconstructed hidden SVG text: {recovered_text}")
+                else:
+                    steps.append(f"  Reconstructed SVG text: {recovered_text}")
+
+                flag = find_first_flag(recovered_text) or find_first_flag(all_text)
+                return flag, {
+                    "file": file_path,
+                    "type": "krita_archive",
+                    "mimetype": mimetype,
+                    "svg_layers": len(svg_members),
+                    "text_fragments": len(text_entries),
+                    "recovered_text": recovered_text,
+                    "layers": layers[:20],
+                }
+        except (OSError, zipfile.BadZipFile, ET.ParseError, UnicodeDecodeError) as exc:
+            logger.debug("Krita archive analysis error on %s: %s", file_path, exc)
+            steps.append(f"  Krita/zip archive analysis error: {exc}")
+            return None, None
+
+    def _parse_krita_layers(self, archive: zipfile.ZipFile) -> List[Dict[str, str]]:
+        try:
+            maindoc = archive.read("maindoc.xml").decode("utf-8", errors="replace")
+        except KeyError:
+            return []
+
+        root = ET.fromstring(maindoc)
+        layers: List[Dict[str, str]] = []
+        for layer in root.iter():
+            if not layer.tag.endswith("layer"):
+                continue
+            attrs = layer.attrib
+            layers.append({
+                "filename": attrs.get("filename", ""),
+                "name": attrs.get("name", ""),
+                "visible": attrs.get("visible", ""),
+                "nodetype": attrs.get("nodetype", ""),
+            })
+        return layers
+
+    def _extract_svg_text_entries(
+        self,
+        member: str,
+        svg_text: str,
+        layers: List[Dict[str, str]],
+    ) -> List[Dict[str, Any]]:
+        root = ET.fromstring(svg_text)
+        layer_name = member.rsplit("/", 2)[-2].replace(".shapelayer", "")
+        layer_info = next((layer for layer in layers if layer.get("filename") == layer_name), {})
+        entries: List[Dict[str, Any]] = []
+
+        for node in root.iter():
+            if not node.tag.endswith("text"):
+                continue
+            text = "".join(node.itertext())
+            if not text:
+                continue
+            x, y = self._svg_transform_position(node.attrib.get("transform", ""))
+            entries.append({
+                "member": member,
+                "layer": layer_name,
+                "layer_name": layer_info.get("name", ""),
+                "visible": layer_info.get("visible", ""),
+                "x": x,
+                "y": y,
+                "text": text,
+            })
+        return entries
+
+    @staticmethod
+    def _order_svg_text_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not entries:
+            return []
+
+        ordered_by_y = sorted(entries, key=lambda entry: entry.get("y", 0.0))
+        lines: List[List[Dict[str, Any]]] = []
+        for entry in ordered_by_y:
+            y = entry.get("y", 0.0)
+            if not lines:
+                lines.append([entry])
+                continue
+
+            line_ys = [item.get("y", 0.0) for item in lines[-1]]
+            line_center = sum(line_ys) / len(line_ys)
+            if abs(y - line_center) <= 8.0:
+                lines[-1].append(entry)
+            else:
+                lines.append([entry])
+
+        return [
+            entry
+            for line in lines
+            for entry in sorted(line, key=lambda item: item.get("x", 0.0))
+        ]
+
+    @staticmethod
+    def _svg_transform_position(transform: str) -> Tuple[float, float]:
+        translate = re.search(r"translate\(\s*([-+0-9.eE]+)[,\s]+([-+0-9.eE]+)", transform)
+        if translate:
+            return float(translate.group(1)), float(translate.group(2))
+
+        matrix = re.search(
+            r"matrix\(\s*[-+0-9.eE]+[,\s]+[-+0-9.eE]+[,\s]+[-+0-9.eE]+[,\s]+"
+            r"[-+0-9.eE]+[,\s]+([-+0-9.eE]+)[,\s]+([-+0-9.eE]+)",
+            transform,
+        )
+        if matrix:
+            return float(matrix.group(1)), float(matrix.group(2))
+
+        return 0.0, 0.0
 
     def _try_live_ssh_forensics(
         self,

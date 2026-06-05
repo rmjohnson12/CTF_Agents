@@ -33,7 +33,9 @@ the solving loop.
   such as vulnerable React/Next.js versions. The web agent includes targeted
   playbooks for form exploration, archive-upload issues, JSON/XML API fuzzing,
   mass-assignment checks, source-guided JSON coercion, HTB-style code-runner
-  endpoints, and XXE-style CTF patterns.
+  endpoints, header-disclosed backup/artifact paths, certutil/PEM-style
+  encoded artifacts, Krita/SVG text layers, binary STL/OpenSCAD projections,
+  and XXE-style CTF patterns.
 - Secure-coding challenges where a spawned target exposes editable source and a
   verification endpoint. The secure-coding agent can inspect source through
   editor-style APIs, apply targeted remediation for recognized vulnerable
@@ -172,6 +174,11 @@ No API key is required for the default local Ollama setup.
 - **Autonomous Specialist Pivoting**: The system now recognizes when a specialist (like `CryptoAgent`) is hitting a wall and will automatically pivot to the `CodingAgent` if a script is provided for analysis.
 - **Self-Correcting Coding Agent**: The agent doesn't just write scripts; it debugs them. If an exploit fails, it reads the error logs, reasons about the failure, and iterates on the code autonomously.
 - **API Resilience**: Built-in exponential backoff handles transient LLM failures, and NVIDIA NIM can rotate across multiple configured keys.
+- **Evidence-Bound LLM Recovery**: Final LLM recovery suggestions are
+  constrained by the observed trace. SQL tooling is rejected unless the run has
+  SQL-specific evidence such as database errors, query parameters, or
+  login/search forms, so artifact-led web challenges do not pivot to generic
+  SQL guesses.
 - **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
 - **Source-Only Web Audits**: Local web source folders are inspected for framework and dependency clues, including vulnerable React/Next.js combinations.
 - **Source-Guided Web Exploits**: Local source can drive live payloads for
@@ -180,6 +187,11 @@ No API key is required for the default local Ollama setup.
 - **Web Exploitation Playbooks**: Browser-discovered forms can trigger archive
   upload, JSON/XML API, mass-assignment, XXE, JWT, and interesting-link
   follow-up checks.
+- **Evidence-Led Web Artifact Triage**: Web responses are inspected for
+  header-disclosed artifacts such as `X-Archived-Path` and backup notes. The
+  web agent can fetch those paths, decode certutil/PEM-style base64 blocks,
+  reconstruct hidden SVG text from Krita-style archives, and render binary
+  STL/OpenSCAD projections for manual flag reading.
 - **HTB Code-Runner Playbooks**: Web challenges exposing `/run`-style Python
   execution endpoints can submit compact solvers for coding/math tasks such as
   prime-product key recovery.
