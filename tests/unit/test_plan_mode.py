@@ -209,7 +209,7 @@ class TestAskPlanMode:
 
         mock_solve.assert_called_once()
 
-    def test_explicit_url_is_allowed_only_during_solve(self, tmp_path, monkeypatch):
+    def test_explicit_url_does_not_self_authorize_network_access(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "ctf.local")
         monkeypatch.setattr(
@@ -230,7 +230,8 @@ class TestAskPlanMode:
             import ask
             ask.main()
 
-        assert "154.57.164.65" in observed_allowed["value"]
+        assert observed_allowed["value"] == "ctf.local"
+        assert "154.57.164.65" not in observed_allowed["value"]
         assert os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] == "ctf.local"
 
 
@@ -278,7 +279,7 @@ class TestMainPlanMode:
 
         mock_solve.assert_called_once()
 
-    def test_json_url_is_allowed_only_during_solve(self, tmp_path, monkeypatch):
+    def test_json_url_does_not_self_authorize_network_access(self, tmp_path, monkeypatch):
         challenge_path = tmp_path / "web.json"
         challenge_path.write_text(
             """
@@ -305,7 +306,8 @@ class TestMainPlanMode:
             rc = self._run(["main.py", str(challenge_path)], tmp_path, monkeypatch)
 
         assert rc == 0
-        assert "154.57.164.65" in observed_allowed["value"]
+        assert observed_allowed["value"] == "ctf.local"
+        assert "154.57.164.65" not in observed_allowed["value"]
         assert os.environ["CTF_AGENTS_ALLOWED_NETWORKS"] == "ctf.local"
 
     def test_plan_with_log_challenge(self, tmp_path, monkeypatch, capsys):

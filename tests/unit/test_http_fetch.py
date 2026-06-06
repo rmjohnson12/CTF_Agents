@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.utils.security import SecurityPolicyError
+from core.utils.security import SecurityPolicyError, networks_from_challenge
 from tools.web.http_fetch import HttpFetchTool
 
 
@@ -110,3 +110,13 @@ def test_http_fetch_blocks_redirect_to_non_allowlisted_host(monkeypatch):
 
     with pytest.raises(SecurityPolicyError):
         tool.fetch("http://example.local/start")
+
+
+def test_networks_from_challenge_ignores_remote_hosts():
+    challenge = {
+        "url": "https://attacker.example",
+        "target": {"url": "http://154.57.164.65:31327"},
+        "connection_info": {"rpc_url": "http://127.0.0.1:8545"},
+    }
+
+    assert networks_from_challenge(challenge) == ["127.0.0.1"]

@@ -21,7 +21,6 @@ from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
 from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
 from agents.specialists.secure_coding.secure_coding_agent import SecureCodingAgent
-from core.utils.security import networks_from_challenge, temporary_allowed_networks
 
 
 def _print_plan_main(
@@ -124,8 +123,7 @@ def main(argv: List[str]) -> int:
         _print_plan_main(challenge, analysis_dict, next_action, coordinator.performance_tracker)
         return 0
 
-    with temporary_allowed_networks(networks_from_challenge(challenge)):
-        result = coordinator.solve_challenge(challenge, resume=args.resume)
+    result = coordinator.solve_challenge(challenge, resume=args.resume)
     print(json.dumps(result, indent=2))
     return 0
 

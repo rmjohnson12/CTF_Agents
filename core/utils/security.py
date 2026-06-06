@@ -187,7 +187,12 @@ def assert_host_allowed(
 
 
 def networks_from_challenge(challenge: dict) -> List[str]:
-    """Extract explicit URL/target hosts from a parsed challenge object."""
+    """Extract only loopback/local spawned hosts from a parsed challenge object.
+
+    Challenge metadata is untrusted and must not authorize arbitrary outbound
+    network access. Remote targets require explicit operator approval through
+    config/system_config.yaml or CTF_AGENTS_ALLOWED_NETWORKS.
+    """
     candidates: List[str] = []
     for key in ("url", "rpc_url", "rpcUrl", "flag_url", "flagUrl"):
         value = challenge.get(key)
@@ -207,7 +212,7 @@ def networks_from_challenge(challenge: dict) -> List[str]:
     networks: List[str] = []
     for value in candidates:
         host = _host_from_urlish(value)
-        if host and host not in networks:
+        if host and _is_loopback_host(host) and host not in networks:
             networks.append(host)
     return networks
 
@@ -271,6 +276,16 @@ def _looks_like_ip(value: str) -> bool:
     try:
         ipaddress.ip_address(value)
         return True
+    except ValueError:
+        return False
+
+
+def _is_loopback_host(host: str) -> bool:
+    host = host.lower().rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
 

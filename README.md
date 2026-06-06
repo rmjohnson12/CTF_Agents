@@ -224,12 +224,12 @@ No API key is required for the default local Ollama setup.
   focused patches for recognized vulnerability patterns, save the updated file,
   and call the target's verification endpoint. The current playbook covers
   legacy flat-file user databases vulnerable to newline/pipe row injection.
-- **Run-Scoped Target Allowlisting**: Explicit challenge URLs, IP:port pairs,
-  and connection-info endpoints are temporarily allowed only for the active
-  solve, preserving outbound network restrictions for unrelated destinations.
-  The same policy is enforced across HTTP/browser tools, blockchain metadata
-  fetches, raw crypto sockets, Docker readiness checks, nmap scans, and
-  directory-discovery fallbacks.
+- **Explicit Target Allowlisting**: Remote challenge URLs, IP:port pairs, and
+  connection-info endpoints must be approved through `config/system_config.yaml`
+  or `CTF_AGENTS_ALLOWED_NETWORKS`; pasted challenge metadata cannot approve
+  itself. The same policy is enforced across HTTP/browser tools, blockchain
+  metadata fetches, raw crypto sockets, Docker readiness checks, nmap scans,
+  and directory-discovery fallbacks.
 - **Reduced Secret Exposure**: Challenge-facing subprocesses run with a minimal
   environment by default so API keys and other host secrets are not inherited by
   LLM-generated scripts or untrusted challenge binaries unless a tool opts in.
@@ -269,9 +269,9 @@ No API key is required for the default local Ollama setup.
    ```
 
    Outbound HTTP/browser access is restricted by `security.allowed_networks` in
-   `config/system_config.yaml`. Hosts explicitly present in the challenge
-   prompt or JSON are temporarily allowed only for that solve. For additional
-   authorized networks, extend the policy for that run:
+   `config/system_config.yaml`. Remote hosts in pasted prompts or imported
+   challenge JSON do not authorize themselves. For additional authorized
+   networks, extend the policy explicitly for that run:
    ```bash
    CTF_AGENTS_ALLOWED_NETWORKS=TARGET python3 ask.py "Solve this web challenge at http://TARGET:PORT"
    ```
@@ -280,9 +280,9 @@ No API key is required for the default local Ollama setup.
    CTF_AGENTS_ALLOWED_NETWORKS=example.web.ctf.local python3 ask.py "Web challenge https://example.web.ctf.local"
    ```
 
-   Sensitive browser session artifacts are not persisted by default. For an
-   authorized troubleshooting run where storing cookies or Web Storage is
-   intentional, opt in explicitly:
+   Sensitive browser session artifacts are not collected or persisted by
+   default. For an authorized troubleshooting run where storing cookies or Web
+   Storage is intentional, opt in explicitly:
    ```bash
    CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS=1 python3 ask.py "Solve this web challenge at http://TARGET:PORT"
    ```

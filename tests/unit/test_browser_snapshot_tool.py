@@ -1,4 +1,5 @@
 import pytest
+import json
 from pathlib import Path
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
@@ -74,6 +75,45 @@ def test_browser_snapshot_with_cookies(tmp_path: Path, mocker, monkeypatch):
     
     assert res.title == "Admin Page"
     assert res.text_preview == "Admin"
+    assert res.cookies == []
+    assert res.local_storage == {}
+    assert res.session_storage == {}
+
+    snapshot = json.loads(Path(res.json_path).read_text())
+    assert snapshot["cookies"] == []
+    assert snapshot["local_storage"] == {}
+    assert snapshot["session_storage"] == {}
+    assert "admin" not in json.dumps(snapshot["cookies"])
+
+
+def test_browser_snapshot_persists_session_state_only_when_enabled(tmp_path: Path, mocker, monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "example.com")
+    monkeypatch.setenv("CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS", "1")
+    mock_sync_playwright = mocker.patch("tools.web.browser_snapshot_tool.sync_playwright")
+    mock_p = mock_sync_playwright.return_value.__enter__.return_value
+    mock_browser = mock_p.chromium.launch.return_value
+    mock_context = mock_browser.new_context.return_value
+    mock_page = mock_context.new_page.return_value
+
+    mock_page.url = "https://example.com/admin"
+    mock_page.title.return_value = "Admin Page"
+    mock_page.content.return_value = "<html><body>Admin</body></html>"
+    mock_page.eval_on_selector.return_value = "Admin"
+    mock_page.eval_on_selector_all.return_value = []
+    mock_page.evaluate.side_effect = [
+        {"jwt": "secret-jwt"},
+        {"csrf": "secret-csrf"},
+    ]
+    mock_context.cookies.return_value = [{"name": "admin", "value": "true"}]
+
+    tool = BrowserSnapshotTool(results_dir=str(tmp_path))
+
+    res = tool.snapshot("https://example.com/admin")
+
+    snapshot = json.loads(Path(res.json_path).read_text())
+    assert snapshot["cookies"] == [{"name": "admin", "value": "true"}]
+    assert snapshot["local_storage"] == {"jwt": "secret-jwt"}
+    assert snapshot["session_storage"] == {"csrf": "secret-csrf"}
 
 
 def test_browser_snapshot_blocks_non_allowlisted_host(tmp_path: Path, monkeypatch):

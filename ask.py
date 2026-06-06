@@ -27,7 +27,6 @@ from agents.support.recon_agent import ReconAgent
 from agents.specialists.pwn.pwn_agent import PwnAgent
 from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
 from agents.specialists.secure_coding.secure_coding_agent import SecureCodingAgent
-from core.utils.security import networks_from_challenge, temporary_allowed_networks
 from tools.common.elf_utils import is_elf_binary
 
 def _parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -600,8 +599,7 @@ Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) i
             print(f"Target files: {challenge.get('files')}")
 
         # Step 2: Solve
-        with temporary_allowed_networks(networks_from_challenge(challenge)):
-            result = coordinator.solve_challenge(challenge, resume=resume)
+        result = coordinator.solve_challenge(challenge, resume=resume)
 
         print("\n--- Step Result ---")
         print(f"Status: {result.get('status')}")
