@@ -262,6 +262,9 @@ class LLMReasoner:
         return default_order
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> ChallengeAnalysis:
+        if self._is_live_web_challenge(challenge):
+            return self._heuristic_analysis(challenge)
+
         if self.client is None:
             return self._heuristic_analysis(challenge)
 
@@ -289,6 +292,14 @@ class LLMReasoner:
         analysis: ChallengeAnalysis,
         history: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
+        if self._is_live_web_challenge(challenge) and not history:
+            return {
+                "next_action": "run_agent",
+                "target": "web_agent",
+                "reasoning": "Detected an already-classified live web challenge; dispatching directly to web_agent before LLM recovery.",
+                "inputs": {},
+            }
+
         if self._is_web_prime_product_runner(challenge):
             return {
                 "next_action": "run_agent",
@@ -715,6 +726,13 @@ class LLMReasoner:
             and any(word in text for word in ["product", "multiply", "multiplying"])
             and any(word in text for word in ["number", "numbers", "list", "key"])
         )
+
+    @staticmethod
+    def _is_live_web_challenge(challenge: Dict[str, Any]) -> bool:
+        if challenge.get("category") != "web":
+            return False
+        url = challenge.get("url") or challenge.get("target", {}).get("url")
+        return bool(url)
 
     @staticmethod
     def _is_hardware_logic_challenge(challenge: Dict[str, Any]) -> bool:

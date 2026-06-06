@@ -11,7 +11,7 @@ from config.defaults import COMMON_WEB_PATHS, DEFAULT_AUTH_HEADERS, SQLI_PAYLOAD
 from agents.base_agent import BaseAgent, AgentType
 from tools.common.python_tool import PythonTool
 from core.decision_engine.llm_reasoner import LLMReasoner
-from core.utils.flag_utils import find_first_flag
+from core.utils.flag_utils import find_first_flag, KNOWN_FLAG_PREFIXES
 import re
 
 logger = logging.getLogger(__name__)
@@ -287,17 +287,26 @@ for path in paths:
             
         try:
             cipher_bytes = binascii.unhexlify(cipher_text)
-            prefixes = [b"HTB{", b"CTF{", b"flag{", b"SKY-"]
-            
-            for prefix in prefixes:
-                # Derive 4-byte key
-                key = bytes([cipher_bytes[i] ^ prefix[i] for i in range(len(prefix))])
-                # Decrypt
-                decrypted = bytes([cipher_bytes[i] ^ key[i % len(key)] for i in range(len(cipher_bytes))])
+
+            for prefix in (p.encode() for p in KNOWN_FLAG_PREFIXES):
+                if len(prefix) > len(cipher_bytes):
+                    continue
+                # Guess the plaintext starts with this prefix and derive a
+                # repeating key of length len(prefix).
+                key = bytes(cipher_bytes[i] ^ prefix[i] for i in range(len(prefix)))
+                decrypted = bytes(
+                    cipher_bytes[i] ^ key[i % len(key)] for i in range(len(cipher_bytes))
+                )
                 res = decrypted.decode('utf-8', errors='ignore')
-                if prefix.decode() in res:
-                    return res
-        except: pass
+                # Validate with the real extractor (needs a closing brace and a
+                # sane charset). The naive `prefix in res` check was tautological:
+                # deriving the key from the prefix forces the first bytes to equal
+                # it, so it "matched" even when the key length was wrong.
+                found = find_first_flag(res)
+                if found:
+                    return found
+        except Exception:
+            pass
         return None
 
     def _solve_prime_sum_prompt(self, task_desc: str) -> Optional[str]:

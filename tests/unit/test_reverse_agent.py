@@ -55,6 +55,17 @@ class TestFlagUtilsRegression:
     def test_accepts_multiword_uppercase_prefix(self):
         assert find_first_flag("UACTF{some_flag}") == "UACTF{some_flag}"
 
+    def test_accepts_uscg_formats(self):
+        # US Cyber Games flag formats
+        assert find_first_flag("SVIUSCG{This_is_a_Flag}") == "SVIUSCG{This_is_a_Flag}"
+        assert find_first_flag("SVBRG{This_is_a_Flag}") == "SVBRG{This_is_a_Flag}"
+        assert find_first_flag("SVIBGR{jw7_4i_7rus7_issu3}") == "SVIBGR{jw7_4i_7rus7_issu3}"
+
+    def test_uscg_prefixes_registered(self):
+        from core.utils.flag_utils import KNOWN_FLAG_PREFIXES
+        for p in ("SVIUSCG{", "SVIBGR{", "SVBRG{"):
+            assert p in KNOWN_FLAG_PREFIXES
+
     def test_rejects_mixed_case_unknown(self):
         # Mixed-case unknown platform should not match
         assert find_first_flag("xYz{some_flag_here}") is None

@@ -444,6 +444,97 @@ def test_web_agent_renders_binary_stl_header_artifact(tmp_path, monkeypatch):
     assert any("Detected binary STL artifact" in step for step in result["steps"])
 
 
+def test_web_agent_solves_leaked_jwt_comment_chat_api():
+    class ClippyHttpTool:
+        def __init__(self):
+            self.posts = []
+            self.base_token = WebExploitationAgent()._encode_hs256_jwt(
+                {"role": "user", "ai_mode": "safe"},
+                "not-the-real-secret",
+            )
+
+        def fetch(self, url, **kwargs):
+            method = kwargs.get("method", "GET")
+            if method == "POST" and url.endswith("/api/chat"):
+                self.posts.append((url, kwargs))
+                token = kwargs.get("cookies", {}).get("clippygpt_session", "")
+                _header, payload = WebExploitationAgent()._decode_jwt(token)
+                message = kwargs.get("json_data", {}).get("message")
+                if (
+                    payload
+                    and payload.get("role") == "admin"
+                    and payload.get("ai_mode") == "debug"
+                    and message == "!get_flag"
+                ):
+                    return HttpFetchResult(
+                        url,
+                        url,
+                        "POST",
+                        200,
+                        {},
+                        '{"reply":"SVIBGR{jw7_4i_7rus7_issu3}"}',
+                        0.1,
+                    )
+                return HttpFetchResult(url, url, "POST", 403, {}, '{"reply":"denied"}', 0.1)
+
+            if url.endswith("/static/app.js"):
+                return HttpFetchResult(
+                    url,
+                    url,
+                    "GET",
+                    200,
+                    {},
+                    'async function chat(message){ return fetch("/api/chat", {method:"POST"}); }',
+                    0.1,
+                )
+
+            body = """
+                <html>
+                  <script src="/static/app.js"></script>
+                  <!-- TODO: use 'cl1ppy123!!!' as signing key and change ai_mode to 'debug' for internal testing. -->
+                </html>
+            """
+            return HttpFetchResult(
+                url,
+                url,
+                "GET",
+                200,
+                {"Set-Cookie": f"clippygpt_session={self.base_token}; Path=/; HttpOnly"},
+                body,
+                0.1,
+                {"clippygpt_session": self.base_token},
+            )
+
+        def fetch_content(self, url, **kwargs):
+            return HttpContentResult(url, url, "GET", 404, {}, b"", 0.1)
+
+    http = ClippyHttpTool()
+    class FailingBrowserTool(MockBrowserTool):
+        def snapshot(self, url, cookies=None):
+            raise AssertionError("JWT source solve should return before browser snapshot")
+
+    agent = WebExploitationAgent(
+        browser_tool=FailingBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "clippygpt",
+        "category": "web",
+        "description": "ClippyGPT web challenge",
+        "url": "https://clippy.test",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIBGR{jw7_4i_7rus7_issu3}"
+    assert any("JWT source playbook SUCCESS" in step for step in result["steps"])
+    assert result["artifacts"]["jwt_source_playbook"]["captured_sensitive_values"] is False
+    assert "cl1ppy123!!!" not in json.dumps(result["artifacts"])
+    assert not any("cl1ppy123!!!" in step for step in result["steps"])
+    assert http.posts
+
+
 def test_react2shell_tool_refuses_non_local_targets_by_default(monkeypatch):
     monkeypatch.delenv("CTF_AGENTS_ALLOW_REMOTE_R2S", raising=False)
     with pytest.raises(PermissionError):

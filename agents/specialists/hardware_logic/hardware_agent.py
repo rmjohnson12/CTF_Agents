@@ -100,8 +100,9 @@ class HardwareLogicAgent(BaseAgent):
             "challenge_id": challenge.get("id"),
             "agent_id": self.agent_id,
             "status": "solved" if flag else "attempted",
-            "flag": flag or output_text,
+            "flag": flag,
             "steps": steps,
+            "artifacts": {"decoded_text": output_text} if output_text and not flag else {},
         }
 
     def get_capabilities(self) -> List[str]:

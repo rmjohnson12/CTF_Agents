@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -106,15 +107,14 @@ def _merge_heuristic_context(
     """Preserve concrete user-supplied context when LLM mapping omits it."""
     if not challenge.get("url") and heuristic.get("url"):
         challenge["url"] = heuristic["url"]
+    if heuristic.get("id"):
+        challenge["id"] = heuristic["id"]
 
-    # Heuristic files are guaranteed to exist on disk; LLM files may be hallucinated.
-    # Always prefer real files the heuristic found from the user's paths.
-    if heuristic.get("files"):
-        llm_files = [f for f in (challenge.get("files") or [])
-                     if os.path.exists(_normalize_path(f))]
-        challenge["files"] = sorted(set(heuristic["files"] + llm_files))
-    elif not challenge.get("files"):
-        challenge["files"] = []
+    # Heuristic files are grounded in paths found in the user's instruction.
+    # LLM files may be stale or hallucinated, and if they happen to exist
+    # locally they can contaminate a fresh prompt with artifacts from a prior
+    # challenge. Treat the heuristic as the source of truth for local files.
+    challenge["files"] = sorted(set(heuristic.get("files") or []))
 
     # When the heuristic derived a specific category from real files on disk,
     # trust it over the LLM — the LLM can misclassify based on keywords alone.
@@ -126,7 +126,7 @@ def _merge_heuristic_context(
     elif (
         heuristic.get("url")
         and heuristic_cat == "web"
-        and llm_cat in {None, "", "misc", "unknown"}
+        and (not heuristic.get("files"))
     ):
         challenge["category"] = "web"
 
@@ -136,6 +136,33 @@ def _merge_heuristic_context(
         challenge["description"] = f"{description}\n\nOriginal instruction: {heuristic_description}".strip()
 
     return challenge
+
+
+def _looks_like_new_challenge_instruction(user_input: str) -> bool:
+    """Detect a fresh challenge prompt in interactive mode."""
+    lowered = user_input.lower()
+    has_target = bool(re.search(
+        r"(?:https?://|www\.)[^\s<>\"]+|(?:\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b)",
+        user_input,
+    ))
+    has_file_locator = any(
+        phrase in lowered
+        for phrase in ("files are in", "file is in", "files are located", "the files are")
+    )
+    has_challenge_word = "challenge" in lowered
+    return has_target or has_file_locator or has_challenge_word
+
+
+def _challenge_id_from_instruction(user_input: str, url: Optional[str]) -> str:
+    """Build a stable per-prompt id so unrelated ad hoc runs do not share state."""
+    basis = url or user_input
+    digest = hashlib.sha256(basis.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    if url:
+        host = re.sub(r"^https?://", "", url).split("/", 1)[0].split(":", 1)[0]
+        slug = re.sub(r"[^A-Za-z0-9]+", "_", host).strip("_").lower()
+        return f"web_{slug}_{digest}" if slug else f"web_{digest}"
+    return f"heuristic_{digest}"
+
 
 def _extract_referenced_paths(user_input: str) -> List[str]:
     potential_paths = [
@@ -192,6 +219,8 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
         if p.is_dir():
             if lower_parts & skip_dir_terms:
                 continue
+            if _is_broad_artifact_directory(p):
+                continue
             if (p / "Dockerfile").exists():
                 expanded.append(str(p.resolve()))
                 continue
@@ -206,6 +235,23 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
             expanded.append(str(p.resolve()))
 
     return sorted(set(expanded))
+
+
+def _is_broad_artifact_directory(path: Path) -> bool:
+    """Avoid expanding catch-all user folders such as ~/Downloads."""
+    try:
+        resolved = path.expanduser().resolve()
+        home = Path.home().resolve()
+    except OSError:
+        return False
+
+    broad_dirs = {
+        home,
+        home / "Downloads",
+        home / "Desktop",
+        home / "Documents",
+    }
+    return resolved in broad_dirs
 
 def _heuristic_challenge_from_instruction(
     user_input: str,
@@ -324,12 +370,24 @@ def _heuristic_challenge_from_instruction(
         any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
         and any(f.lower().endswith(('.enc', '.encrypted', '.bin', '.dat')) for f in challenge_files)
     ) or (
+        # Ambiguous wording — bare "reverse" also shows up in "reverse shell",
+        # "reverse proxy", etc. Only treat as reversing when an actual ELF
+        # binary is attached.
         any(term in lowered_input for term in [
-            "ransomware", "encryption program", "reverse", "reversing",
-            "decompile", "disassemble", "crackme", "godot", "game loader",
-            "compromised",
+            "ransomware", "encryption program", "reverse",
+            "godot", "game loader", "compromised",
         ])
         and any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
+    ) or any(
+        # Unambiguous reverse-engineering wording: trust it even if the
+        # referenced binary is missing (e.g. a mistyped path). Never fall
+        # through to "misc" when the user explicitly said it's a reversing
+        # challenge.
+        re.search(r"\b" + re.escape(term) + r"\b", lowered_input)
+        for term in [
+            "reversing", "reverse engineer", "reverse-engineer",
+            "reverse engineering", "decompile", "disassemble", "crackme",
+        ]
     ):
         category = "reverse"
     elif challenge_files and any(term in lowered_input for term in strong_crypto_terms):
@@ -359,7 +417,7 @@ def _heuristic_challenge_from_instruction(
         category = "misc"
 
     return {
-        "id": "heuristic_task",
+        "id": _challenge_id_from_instruction(user_input, url),
         "name": "Heuristic Task",
         "category": category,
         "description": user_input,
@@ -479,6 +537,10 @@ def main(argv: Optional[List[str]] = None):
             user_input = _unwrap_ask_command(user_input)
 
         print(f"\n--- Processing Instruction: \"{user_input}\" ---")
+
+        if challenge and _looks_like_new_challenge_instruction(user_input):
+            challenge = None
+            resume = False
 
         if not challenge:
             heuristic = _heuristic_challenge_from_instruction(user_input, available_tools)

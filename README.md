@@ -35,6 +35,7 @@ the solving loop.
   mass-assignment checks, source-guided JSON coercion, HTB-style code-runner
   endpoints, header-disclosed backup/artifact paths, certutil/PEM-style
   encoded artifacts, Krita/SVG text layers, binary STL/OpenSCAD projections,
+  leaked JWT signing-key/source-comment hints with debug/admin claim forging,
   and XXE-style CTF patterns.
 - Secure-coding challenges where a spawned target exposes editable source and a
   verification endpoint. The secure-coding agent can inspect source through
@@ -192,6 +193,16 @@ No API key is required for the default local Ollama setup.
   web agent can fetch those paths, decode certutil/PEM-style base64 blocks,
   reconstruct hidden SVG text from Krita-style archives, and render binary
   STL/OpenSCAD projections for manual flag reading.
+- **Static-Source JWT Recovery**: Live web targets are checked early for
+  leaked JWT signing-key hints in HTML comments and static JavaScript. When a
+  valid session token is present, the web agent can forge focused debug/admin
+  claim variants and probe discovered chat/API endpoints without persisting raw
+  secrets or forged tokens in artifacts.
+- **Fast Live-Web Dispatch**: If `ask.py` has already classified a prompt as a
+  live web challenge with an explicit URL, the coordinator dispatches the first
+  attempt directly to `web_agent` instead of waiting on LLM classification or
+  routing. LLM-assisted recovery remains available after a failed specialist
+  run.
 - **HTB Code-Runner Playbooks**: Web challenges exposing `/run`-style Python
   execution endpoints can submit compact solvers for coding/math tasks such as
   prime-product key recovery.
@@ -263,6 +274,10 @@ No API key is required for the default local Ollama setup.
    authorized networks, extend the policy for that run:
    ```bash
    CTF_AGENTS_ALLOWED_NETWORKS=TARGET python3 ask.py "Solve this web challenge at http://TARGET:PORT"
+   ```
+   For hosted CTF subdomains, use the hostname itself:
+   ```bash
+   CTF_AGENTS_ALLOWED_NETWORKS=example.web.ctf.local python3 ask.py "Web challenge https://example.web.ctf.local"
    ```
 
    Sensitive browser session artifacts are not persisted by default. For an

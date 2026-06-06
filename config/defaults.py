@@ -86,6 +86,9 @@ JS_COMMON_PATHS: List[str] = [
 FLAG_PATTERNS: List[str] = [
     r"SKY-[A-Z0-9-]+",
     r"NCL-[A-Z0-9-]+",
+    r"SVIUSCG\{[^}]+\}",  # US Cyber Games
+    r"SVIBGR\{[^}]+\}",   # US Cyber Games
+    r"SVBRG\{[^}]+\}",    # US Cyber Games
     r"CTF\{[^}]+\}",
     r"HTB\{[^}]+\}",
     r"flag\{[^}]+\}",

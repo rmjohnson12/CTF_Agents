@@ -134,3 +134,33 @@ def test_coding_agent_runs_xor_fallback_after_llm_scripts_fail(tmp_path):
 
     assert result["status"] == "solved"
     assert result["flag"] == "HTB{rep34t3d_x0r_n0t_s0_s3cur3}"
+
+
+def test_coding_agent_xor_fallback_recovers_uscg_flag(tmp_path):
+    # Key length == len("SVIBGR{") so the known-plaintext prefix derives the
+    # correct repeating key. Verifies USCG formats are in the prefix list.
+    key = b"keylen7"
+    plaintext = b"SVIBGR{x0r_us_cyber_games}"
+    cipher = bytes(plaintext[i] ^ key[i % len(key)] for i in range(len(plaintext))).hex()
+    output = tmp_path / "output.txt"
+    output.write_text(cipher)
+
+    class NoFlagReasoner:
+        is_available = True
+
+        def generate_script(self, challenge, task_description):
+            return "print('no flag here')"
+
+        def fix_script(self, challenge, script, error, stdout=None):
+            return "print('still no flag')"
+
+    agent = CodingAgent(reasoner=NoFlagReasoner())
+    result = agent.solve_challenge({
+        "id": "xor_fallback_uscg",
+        "category": "crypto",
+        "description": "Who needs AES when you have XOR?",
+        "files": [str(output)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIBGR{x0r_us_cyber_games}"

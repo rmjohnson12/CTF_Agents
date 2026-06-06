@@ -1,7 +1,10 @@
 import json
 
 from ask import (
+    _expand_challenge_artifacts,
     _heuristic_challenge_from_instruction,
+    _looks_like_new_challenge_instruction,
+    _merge_heuristic_context,
     _normalize_challenge,
     _normalize_path,
     _normalize_url,
@@ -44,7 +47,7 @@ def test_heuristic_mapping_keeps_non_json_artifacts_as_files(tmp_path, monkeypat
         available_tools=[],
     )
 
-    assert challenge["id"] == "heuristic_task"
+    assert challenge["id"].startswith("heuristic_")
     assert challenge["category"] == "crypto"
     assert challenge["files"] == [str(artifact)]
 
@@ -107,6 +110,67 @@ def test_heuristic_mapping_normalizes_bare_ip_port_to_http_url():
 
     assert challenge["category"] == "web"
     assert challenge["url"] == "http://154.57.164.65:30433"
+
+
+def test_web_prompt_with_downloads_typo_does_not_expand_downloads(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    downloads = home / "Downloads"
+    downloads.mkdir(parents=True)
+    stale = downloads / "input.csv"
+    stale.write_text("in0,in1,in2,in3\n1,1,0,0\n")
+    monkeypatch.setenv("HOME", str(home))
+
+    challenge = _heuristic_challenge_from_instruction(
+        "Web challenge https://ecyewxoj.web.ctf.uscybergames.com file is in ~/Downlaods/",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "web"
+    assert challenge["id"].startswith("web_ecyewxoj_web_ctf_uscybergames_com_")
+    assert challenge["url"] == "https://ecyewxoj.web.ctf.uscybergames.com"
+    assert challenge["files"] == []
+
+
+def test_downloads_root_is_not_expanded_as_challenge_directory(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    downloads = home / "Downloads"
+    downloads.mkdir(parents=True)
+    stale = downloads / "01_inverter_exterior_positions_ABCD.png"
+    stale.write_bytes(b"old hardware image")
+    monkeypatch.setenv("HOME", str(home))
+
+    assert _expand_challenge_artifacts([str(downloads)]) == []
+
+
+def test_merge_heuristic_context_drops_llm_invented_local_files(tmp_path):
+    stale = tmp_path / "input.csv"
+    stale.write_text("in0,in1,in2,in3\n1,1,0,0\n")
+    llm_challenge = {
+        "id": "llm_task",
+        "category": "hardware",
+        "description": "Web status page.",
+        "files": [str(stale)],
+    }
+    heuristic = {
+        "id": "web_example_test_12345678",
+        "category": "web",
+        "description": "Web challenge https://example.test",
+        "url": "https://example.test",
+        "files": [],
+    }
+
+    merged = _merge_heuristic_context(llm_challenge, heuristic)
+
+    assert merged["category"] == "web"
+    assert merged["id"] == "web_example_test_12345678"
+    assert merged["files"] == []
+    assert merged["url"] == "https://example.test"
+
+
+def test_interactive_new_challenge_detector_for_url_and_file_prompts():
+    assert _looks_like_new_challenge_instruction("Web challenge https://example.test")
+    assert _looks_like_new_challenge_instruction("files are in ~/Downloads/new_challenge")
+    assert not _looks_like_new_challenge_instruction("try the admin feed next")
 
 
 def test_heuristic_mapping_routes_secure_coding_ip_port_to_secure_coding():
@@ -339,3 +403,35 @@ def test_merge_heuristic_context_preserves_blockchain_category():
 
     assert merged["category"] == "blockchain"
     assert merged["url"] == "http://127.0.0.1:31337"
+
+
+def test_heuristic_mapping_routes_explicit_reversing_with_missing_file_to_reverse():
+    # Regression: an explicit "Reversing challenge" must route to reverse even
+    # when the referenced binary path is mistyped / does not exist on disk.
+    # Previously the reverse keyword was gated on a valid ELF file being
+    # present, so a typo'd path silently fell through to "misc".
+    challenge = _heuristic_challenge_from_instruction(
+        "Reversing challenge, file is in ~/Downloads/becaon_override",
+        available_tools=["python3"],
+    )
+    assert challenge["category"] == "reverse"
+
+
+def test_heuristic_mapping_routes_decompile_crackme_to_reverse():
+    for text in (
+        "Please decompile ~/Downloads/nope",
+        "crackme at /tmp/missing_thing",
+        "reverse engineer this binary ~/Downloads/foo",
+    ):
+        challenge = _heuristic_challenge_from_instruction(text, available_tools=[])
+        assert challenge["category"] == "reverse", text
+
+
+def test_heuristic_mapping_reverse_shell_does_not_route_to_reverse():
+    # Guardrail: "reverse shell" / "reverse proxy" must NOT be treated as a
+    # reverse-engineering challenge just because the word "reverse" appears.
+    challenge = _heuristic_challenge_from_instruction(
+        "Get a reverse shell on the box at http://target.example",
+        available_tools=[],
+    )
+    assert challenge["category"] == "web"
