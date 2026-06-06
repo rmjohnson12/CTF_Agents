@@ -137,6 +137,63 @@ class TestParseRodataStrings:
 
 
 # ---------------------------------------------------------------------------
+# indexed XOR/add phrase verifier
+# ---------------------------------------------------------------------------
+
+class TestIndexedXorPhrase:
+    DISASM = """
+      4011e5:\te8 56 fe ff ff       \tcallq\t0x401040 <strlen@plt>
+      4011ea:\t48 83 f8 17          \tcmpq\t$0x17, %rax
+      401212:\t48 8b 55 f8          \tmovq\t-0x8(%rbp), %rdx
+      401216:\t48 89 d6             \tmovq\t%rdx, %rsi
+      401219:\t89 c7                \tmovl\t%eax, %edi
+      40121b:\te8 46 ff ff ff       \tcallq\t0x401166
+      401220:\t48 8d 0d 09 0f 00 00\tleaq\t0xf09(%rip), %rcx        # 0x402130
+      401231:\t38 d0                \tcmpb\t%dl, %al
+      401241:\t48 83 7d f8 16       \tcmpq\t$0x16, -0x8(%rbp)
+      401166:\t83 f0 13             \txorl\t$0x13, %eax
+    """
+
+    RODATA = """
+    Contents of section .rodata:
+     402130 40465c54 58466e78 287b7a2e 89593174  @F\\TXFnx({z..Y1t
+     402140 30727335 8b3584                      0rs5.5.
+    """
+
+    def test_recovers_indexed_xor_phrase_from_objdump_outputs(self):
+        candidate = ReverseEngineeringAgent._recover_indexed_xor_phrase_from_objdump(
+            self.DISASM,
+            self.RODATA,
+        )
+
+        assert candidate == "SVIBGR{b3ac0n_0v3rr1d3}"
+
+    def test_strategy_solves_indexed_xor_phrase(self, tmp_path):
+        binary = tmp_path / "beacon_override"
+        binary.write_bytes(b"\x7fELF")
+        agent = ReverseEngineeringAgent()
+        steps = []
+
+        def fake_run(args, **kwargs):
+            if args[:2] == ["objdump", "-d"]:
+                return MagicMock(stdout=self.DISASM, returncode=0)
+            if args[:3] == ["objdump", "-s", "-j"]:
+                return MagicMock(stdout=self.RODATA, returncode=0)
+            raise AssertionError(f"unexpected command: {args}")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = agent._try_indexed_xor_phrase(
+                str(binary),
+                {"id": "beacon", "category": "reverse"},
+                steps,
+            )
+
+        assert result["status"] == "solved"
+        assert result["flag"] == "SVIBGR{b3ac0n_0v3rr1d3}"
+        assert any("indexed-XOR phrase candidate" in step for step in steps)
+
+
+# ---------------------------------------------------------------------------
 # _try_numeric_encoding
 # ---------------------------------------------------------------------------
 
@@ -905,6 +962,26 @@ class TestGodotGameLoader:
         assert decoded["payload_path"] == "p47l0ad_binary"
         assert decoded["flag_tail"] == "GD_M@lw4r3_PCB29543}"
         assert decoded["cookie"] == "57151533199105"
+
+    def test_godot_loader_partial_tail_is_artifact_not_flag(self, tmp_path):
+        script = tmp_path / "player.gd"
+        script.write_text(
+            """
+            var loap = [0x52, 0x30, 0x52, 0x66, 0x54, 0x55, 0x42, 0x73, 0x64, 0x7A, 0x52, 0x79, 0x4D, 0x31, 0x39, 0x51, 0x51, 0x30, 0x49, 0x79, 0x4F, 0x54, 0x55, 0x30, 0x4D, 0x33, 0x30, 0x3D]
+            """,
+            encoding="utf-8",
+        )
+        agent = ReverseEngineeringAgent()
+
+        result = agent._try_godot_game_loader(
+            [str(script)],
+            {"id": "godot_partial", "category": "reverse"},
+            [],
+        )
+
+        assert result["status"] == "attempted"
+        assert result.get("flag") is None
+        assert result["artifacts"]["partial_flag_tail"] == "GD_M@lw4r3_PCB29543}"
 
     def test_native_pck_extraction_recovers_encrypted_gdscript(self, tmp_path):
         AES = pytest.importorskip("Crypto.Cipher.AES")

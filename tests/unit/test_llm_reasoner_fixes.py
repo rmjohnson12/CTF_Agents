@@ -686,6 +686,30 @@ def test_live_web_challenge_bypasses_llm_initial_analysis(monkeypatch):
     assert decision["target"] == "web_agent"
 
 
+def test_explicit_pwn_challenge_bypasses_llm_initial_analysis(monkeypatch):
+    mock_client = MagicMock()
+    reasoner = LLMReasoner(client=mock_client)
+
+    def fail_call(_prompt):
+        raise AssertionError("explicit pwn fast path should not call the LLM")
+
+    monkeypatch.setattr(reasoner, "_call_llm", fail_call)
+
+    challenge = {
+        "id": "pwn_execute",
+        "category": "pwn",
+        "description": "Pwn challenge with source and remote host:port",
+        "files": ["/tmp/execute", "/tmp/execute.c"],
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+    decision = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert analysis.category_guess == "pwn"
+    assert decision["next_action"] == "run_agent"
+    assert decision["target"] == "pwn_agent"
+
+
 def test_analyze_falls_back_to_heuristic_on_bad_json():
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = MagicMock(

@@ -33,6 +33,12 @@ class SlowMockAgent(MockAgent):
         time.sleep(1)
         return super().solve_challenge(challenge)
 
+
+class BrieflySlowMockAgent(MockAgent):
+    def solve_challenge(self, challenge):
+        time.sleep(0.05)
+        return super().solve_challenge(challenge)
+
 class MockReasoner:
     def __init__(self, decisions):
         self.decisions = decisions
@@ -106,6 +112,27 @@ class MaxIterationRecoveryReasoner(MockReasoner):
         }
 
 
+class ExplodingPlannerReasoner(MockReasoner):
+    def __init__(self):
+        super().__init__([])
+
+    def choose_next_action(self, challenge, analysis, history):
+        raise AssertionError("direct category routing should bypass planner")
+
+
+class WebSourceBrowserFirstReasoner(ExplodingPlannerReasoner):
+    def analyze_challenge(self, challenge):
+        from core.decision_engine.llm_reasoner import ChallengeAnalysis
+        return ChallengeAnalysis(
+            category_guess="web",
+            confidence=0.89,
+            reasoning="Web challenge requiring initial inspection. Recommending browser_snapshot.",
+            recommended_target="browser_snapshot",
+            recommended_action="run_tool",
+            detected_indicators=["web_terms"],
+        )
+
+
 class CapturingMockAgent(MockAgent):
     def __init__(self, agent_id, status_on_solve="attempted", flag=None):
         super().__init__(agent_id, status_on_solve=status_on_solve, flag=flag)
@@ -139,6 +166,88 @@ def test_coordinator_iterative_loop_stops_on_solve():
     assert reasoner.analyze_called == 1
     assert agent1.solve_called == 1
     assert agent2.solve_called == 1
+
+
+def test_coordinator_direct_initial_category_bypasses_planner():
+    reasoner = ExplodingPlannerReasoner()
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    pwn_agent = MockAgent("pwn_agent", status_on_solve="solved", flag="HTB{direct_pwn}")
+    coordinator.register_agent(pwn_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "direct_pwn",
+        "category": "pwn",
+        "description": "Pwn challenge with files and host:port",
+        "files": ["/tmp/execute"],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{direct_pwn}"
+    assert pwn_agent.solve_called == 1
+    assert any("maps directly to pwn_agent" in step for step in result["steps"])
+
+
+def test_coordinator_direct_pwn_attempt_stops_before_llm_replan():
+    reasoner = ExplodingPlannerReasoner()
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    pwn_agent = MockAgent("pwn_agent", status_on_solve="attempted")
+    coordinator.register_agent(pwn_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "direct_pwn_attempted",
+        "category": "pwn",
+        "description": "Pwn challenge with unavailable remote",
+        "files": ["/tmp/execute"],
+    })
+
+    assert result["status"] == "attempted"
+    assert pwn_agent.solve_called == 1
+    assert any("stopping before LLM planning" in step for step in result["steps"])
+
+
+def test_coordinator_routes_source_backed_web_to_web_agent_before_snapshot():
+    reasoner = WebSourceBrowserFirstReasoner()
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    web_agent = MockAgent("web_agent", status_on_solve="solved", flag="SVIBGR{source_web}")
+    coordinator.register_agent(web_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "source_backed_web",
+        "category": "web",
+        "description": "Public status page with local source files.",
+        "url": "https://status.test",
+        "files": ["/tmp/source/app.py"],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIBGR{source_web}"
+    assert web_agent.solve_called == 1
+    assert any("maps directly to web_agent" in step for step in result["steps"])
+
+
+def test_coordinator_waits_for_direct_first_agent_before_replanning():
+    reasoner = ExplodingPlannerReasoner()
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    web_agent = BrieflySlowMockAgent("web_agent", status_on_solve="solved", flag="SVIBGR{fast_source}")
+    coordinator.register_agent(web_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "direct_wait_source_web",
+        "category": "web",
+        "description": "Public status page with local source files.",
+        "url": "https://status.test",
+        "files": ["/tmp/source/app.py"],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIBGR{fast_source}"
+    assert web_agent.solve_called == 1
+    assert result["iterations"] == 1
+
 
 def test_coordinator_iterative_loop_stops_on_max_iterations():
     # Set up reasoner to keep going with different targets to avoid duplicate check
@@ -306,7 +415,7 @@ def test_coordinator_keeps_live_jwt_web_target_on_web_agent():
     assert result["flag"] == "HTB{web_jwt}"
     assert crypto_agent.solve_called == 0
     assert web_agent.solve_called == 1
-    assert "Corrected decision: live JWT/session web target should use web_agent." in result["steps"]
+    assert any("maps directly to web_agent" in step for step in result["steps"])
 
 
 def test_coordinator_corrects_rsa_time_capsule_service_to_crypto_agent(tmp_path):
@@ -344,7 +453,7 @@ def test_coordinator_corrects_rsa_time_capsule_service_to_crypto_agent(tmp_path)
     assert result["flag"] == "HTB{rsa_fixed}"
     assert crypto_agent.solve_called == 1
     assert web_agent.solve_called == 0
-    assert "Corrected decision: RSA time-capsule TCP challenge should use crypto_agent." in result["steps"]
+    assert any("maps directly to crypto_agent" in step for step in result["steps"])
 
 
 def test_coordinator_writes_checkpoint_for_fast_solve(tmp_path, monkeypatch):

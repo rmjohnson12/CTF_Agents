@@ -178,6 +178,21 @@ class CoordinatorAgent(BaseAgent):
                     all_steps.append(f"Challenge solved by task {task_id}!")
                     self._cleanup_run_artifacts(history, all_steps)
                     return final_result
+
+                direct_target = self._direct_initial_agent(challenge, initial_analysis_obj)
+                if (
+                    direct_target
+                    and task_info.get("target") == direct_target
+                    and str(challenge.get("category") or "").lower() in {"pwn"}
+                    and result.get("status") == "attempted"
+                ):
+                    final_result["status"] = "attempted"
+                    all_steps.append(
+                        f"Direct {challenge.get('category')} specialist attempt completed without a flag; "
+                        "stopping before LLM planning."
+                    )
+                    self._cleanup_run_artifacts(history, all_steps)
+                    return final_result
             except Exception as e:
                 all_steps.append(f"Task {task_id} failed: {e}")
                 self.task_queue.fail_task(task_id, str(e))
@@ -209,11 +224,23 @@ class CoordinatorAgent(BaseAgent):
                     challenge_with_knowledge["prior_knowledge"] = prior_facts
                     all_steps.append(f"  [Knowledge] Retrieved {len(prior_facts)} fact(s) from storage.")
 
-                decision = self.reasoner.choose_next_action(
-                    challenge_with_knowledge, 
-                    initial_analysis_obj,
-                    history
-                )
+                direct_target = self._direct_initial_agent(challenge_with_knowledge, initial_analysis_obj)
+                if not history and not futures and direct_target:
+                    decision = {
+                        "next_action": "run_agent",
+                        "target": direct_target,
+                        "reasoning": (
+                            f"Parsed category '{challenge.get('category')}' maps directly to "
+                            f"{direct_target}; dispatching before LLM planning."
+                        ),
+                        "inputs": {},
+                    }
+                else:
+                    decision = self.reasoner.choose_next_action(
+                        challenge_with_knowledge,
+                        initial_analysis_obj,
+                        history
+                    )
 
                 action = decision.get("next_action", "stop")
                 target = decision.get("target", "none")
@@ -351,7 +378,13 @@ class CoordinatorAgent(BaseAgent):
                     self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                     continue
 
-                just_done, _ = concurrent.futures.wait([f], timeout=0.01)
+                direct_target = self._direct_initial_agent(challenge, initial_analysis_obj)
+                initial_direct_wait_s = 8.0 if (
+                    not history
+                    and action == "run_agent"
+                    and target == direct_target
+                ) else 0.01
+                just_done, _ = concurrent.futures.wait([f], timeout=initial_direct_wait_s)
                 if f in just_done:
                     completed_result = record_completed_future(f, "Exec")
                     if completed_result is not None:
@@ -761,6 +794,48 @@ class CoordinatorAgent(BaseAgent):
 
     def _all_agent_ids(self) -> set[str]:
         return set(self.specialist_agents) | set(self.support_agents)
+
+    def _direct_initial_agent(
+        self,
+        challenge: Dict[str, Any],
+        analysis: Optional[ChallengeAnalysis] = None,
+    ) -> Optional[str]:
+        category = str(challenge.get("category") or "").lower()
+        direct_routes = {
+            "web": "web_agent",
+            "crypto": "crypto_agent",
+            "cryptography": "crypto_agent",
+            "reverse": "reverse_agent",
+            "reversing": "reverse_agent",
+            "rev": "reverse_agent",
+            "forensics": "forensics_agent",
+            "pwn": "pwn_agent",
+            "binary": "pwn_agent",
+            "hardware": "hardware_agent",
+            "blockchain": "blockchain_agent",
+            "secure_coding": "secure_coding_agent",
+            "secure-coding": "secure_coding_agent",
+            "log": "log_agent",
+            "networking": "networking_agent",
+            "network": "networking_agent",
+            "osint": "osint_agent",
+            "coding": "coding_agent",
+        }
+        target = direct_routes.get(category)
+        if analysis is not None:
+            recommended = (analysis.recommended_target or "none").strip()
+            source_backed_web = (
+                target == "web_agent"
+                and recommended == "browser_snapshot"
+                and bool(challenge.get("files"))
+            )
+            if source_backed_web:
+                recommended = target
+            if recommended not in {"", "none", target}:
+                return None
+        if target in self.specialist_agents or target in self.support_agents:
+            return target
+        return None
 
     @staticmethod
     def _hydrate_challenge_from_facts(challenge: Dict[str, Any], facts: List[Dict[str, Any]]) -> None:

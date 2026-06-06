@@ -444,6 +444,40 @@ def test_web_agent_renders_binary_stl_header_artifact(tmp_path, monkeypatch):
     assert any("Detected binary STL artifact" in step for step in result["steps"])
 
 
+def test_web_agent_extracts_stl_projection_flag_with_macos_vision(tmp_path, monkeypatch):
+    image = tmp_path / "projection.png"
+    image.write_bytes(b"not really an image; subprocess is mocked")
+    agent = WebExploitationAgent()
+    steps = []
+
+    monkeypatch.setattr("agents.specialists.web_exploitation.web_agent.shutil.which", lambda name: "/usr/bin/swift")
+
+    def fake_run(argv, **kwargs):
+        assert argv[0] == "swift"
+        assert argv[2] == str(image)
+        return type("RunResult", (), {
+            "returncode": 0,
+            "stdout": "SVIBGR{n3v3r_d1sm1ss_th3_f1n3_4rts}\n",
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr("agents.specialists.web_exploitation.web_agent.subprocess.run", fake_run)
+
+    flag = agent._extract_flag_from_projection_with_macos_vision(str(image), steps)
+
+    assert flag == "SVIBGR{n3v3r_d1sm1ss_th3_f1n3_4rts}"
+    assert any("Vision OCR recovered flag" in step for step in steps)
+
+
+def test_web_agent_normalizes_stl_ocr_line_breaks_inside_flag():
+    text = "SVIBGR{n3v3r_d1sm1ss_th3_f1n3\n4rts}"
+
+    assert (
+        WebExploitationAgent._find_flag_in_ocr_text(text)
+        == "SVIBGR{n3v3r_d1sm1ss_th3_f1n3_4rts}"
+    )
+
+
 def test_web_agent_solves_leaked_jwt_comment_chat_api():
     class ClippyHttpTool:
         def __init__(self):
@@ -533,6 +567,74 @@ def test_web_agent_solves_leaked_jwt_comment_chat_api():
     assert "cl1ppy123!!!" not in json.dumps(result["artifacts"])
     assert not any("cl1ppy123!!!" in step for step in result["steps"])
     assert http.posts
+
+
+def test_web_agent_solves_source_guided_public_incident_filter(tmp_path):
+    source_dir = tmp_path / "incidental"
+    source_dir.mkdir()
+    (source_dir / "app.py").write_text(
+        '''
+from flask import Flask, jsonify, request
+app = Flask(__name__)
+
+@app.get("/api/incidents")
+def api_incidents():
+    v = request.args.get("public")
+    if v is None:
+        selected = data
+    elif v.lower() in {"1", "true", "yes"}:
+        selected = [i for i in data if i["public"]]
+    elif v.lower() in {"0", "false", "no"}:
+        selected = [i for i in data if not i["public"]]
+    return jsonify({"incidents": selected})
+''',
+        encoding="utf-8",
+    )
+    static_dir = source_dir / "static"
+    static_dir.mkdir()
+    (static_dir / "status-page.js").write_text(
+        'async function boot(){ return fetch("/api/incidents?public=1"); }',
+        encoding="utf-8",
+    )
+
+    class IncidentHttpTool:
+        def __init__(self):
+            self.urls = []
+
+        def fetch(self, url, **kwargs):
+            self.urls.append(url)
+            body = '{"incidents":[]}'
+            if url.endswith("/api/incidents?public=0"):
+                body = '{"body":"Action item tracking token: SVIBGR{pr073c7_y0ur_s747us_p4g3s}"}'
+            return HttpFetchResult(url, url, "GET", 200, {}, body, 0.1)
+
+        def fetch_content(self, url, **kwargs):
+            return HttpContentResult(url, url, "GET", 404, {}, b"", 0.1)
+
+    class FailingBrowserTool(MockBrowserTool):
+        def snapshot(self, url, cookies=None):
+            raise AssertionError("source-guided API probe should return before browser snapshot")
+
+    http = IncidentHttpTool()
+    agent = WebExploitationAgent(
+        browser_tool=FailingBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "incidental",
+        "category": "web",
+        "description": "Public status page has internal incident feed data nearby.",
+        "url": "https://status.test",
+        "files": [str(source_dir)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIBGR{pr073c7_y0ur_s747us_p4g3s}"
+    assert "https://status.test/api/incidents?public=0" in http.urls
+    assert any("Source-guided API probe SUCCESS" in step for step in result["steps"])
+    assert result["artifacts"]["source_api_param_probe"]["captured_sensitive_values"] is False
 
 
 def test_react2shell_tool_refuses_non_local_targets_by_default(monkeypatch):

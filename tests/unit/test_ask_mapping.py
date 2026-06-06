@@ -3,6 +3,7 @@ import json
 from ask import (
     _expand_challenge_artifacts,
     _heuristic_challenge_from_instruction,
+    _heuristic_mapping_is_actionable,
     _looks_like_new_challenge_instruction,
     _merge_heuristic_context,
     _normalize_challenge,
@@ -50,6 +51,22 @@ def test_heuristic_mapping_keeps_non_json_artifacts_as_files(tmp_path, monkeypat
     assert challenge["id"].startswith("heuristic_")
     assert challenge["category"] == "crypto"
     assert challenge["files"] == [str(artifact)]
+
+
+def test_actionable_heuristic_mapping_skips_llm_gate_for_pwn_files(tmp_path, monkeypatch):
+    binary = tmp_path / "execute"
+    binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    source = tmp_path / "execute.c"
+    source.write_text("int main(){return 0;}")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        f"Pwn challenge. Can you feed the hungry code? files in {tmp_path} ip and port are 154.57.164.80:30338",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "pwn"
+    assert _heuristic_mapping_is_actionable(challenge) is True
 
 
 def test_heuristic_mapping_routes_hidden_binary_artifact_to_forensics(tmp_path, monkeypatch):

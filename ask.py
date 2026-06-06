@@ -152,6 +152,14 @@ def _looks_like_new_challenge_instruction(user_input: str) -> bool:
     return has_target or has_file_locator or has_challenge_word
 
 
+def _heuristic_mapping_is_actionable(heuristic: Dict[str, Any]) -> bool:
+    """Return True when local parsing is concrete enough to skip LLM mapping."""
+    category = str(heuristic.get("category") or "").lower()
+    if category in {"", "unknown", "misc"}:
+        return False
+    return bool(heuristic.get("files") or heuristic.get("url") or heuristic.get("target"))
+
+
 def _challenge_id_from_instruction(user_input: str, url: Optional[str]) -> str:
     """Build a stable per-prompt id so unrelated ad hoc runs do not share state."""
     basis = url or user_input
@@ -313,6 +321,7 @@ def _heuristic_challenge_from_instruction(
     log_terms = ["log", "auth", "ssh", "brute force", "failed password", "authentication"]
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
     web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web", "docker", "dockerfile", "container"]
+    pwn_terms = ["pwn", "overflow", "rop", "ret2libc", "shellcode", "buffer overflow"]
     hardware_terms = ["hardware", "chip", "logic", "circuit", "gate", "verilog", "vhdl", "schematic"]
     secure_coding_terms = [
         "secure coding",
@@ -391,6 +400,14 @@ def _heuristic_challenge_from_instruction(
         category = "reverse"
     elif challenge_files and any(term in lowered_input for term in strong_crypto_terms):
         category = "crypto"
+    elif (
+        any(term in lowered_input for term in pwn_terms)
+        or (
+            any(f.lower().endswith('.elf') or (not Path(f).suffix and is_elf_binary(f)) for f in challenge_files)
+            and any(term in lowered_input for term in ["exploit", "pwn", "overflow", "binary", "attack"])
+        )
+    ):
+        category = "pwn"
     elif url or any(term in lowered_input for term in web_terms):
         category = "web"
     elif (
@@ -398,14 +415,6 @@ def _heuristic_challenge_from_instruction(
         or any(term in lowered_input for term in strong_crypto_terms)
     ):
         category = "crypto"
-    elif (
-        any(term in lowered_input for term in ["pwn", "overflow", "rop", "ret2libc", "shellcode", "buffer overflow"])
-        or (
-            any(f.lower().endswith('.elf') or (not Path(f).suffix and is_elf_binary(f)) for f in challenge_files)
-            and any(term in lowered_input for term in ["exploit", "pwn", "overflow", "binary", "attack"])
-        )
-    ):
-        category = "pwn"
     elif (
         any(f.lower().endswith(('.py', '.exe', '.elf')) for f in challenge_files)
         or any(not Path(f).suffix and is_elf_binary(f) for f in challenge_files)
@@ -544,6 +553,8 @@ def main(argv: Optional[List[str]] = None):
         if not challenge:
             heuristic = _heuristic_challenge_from_instruction(user_input, available_tools)
             if (heuristic.get("metadata") or {}).get("loaded_from_challenge_json"):
+                challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
+            elif _heuristic_mapping_is_actionable(heuristic):
                 challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
             else:
                 # Step 1: Use LLM to convert natural language to challenge JSON

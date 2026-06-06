@@ -190,6 +190,124 @@ def test_pwn_agent_skips_angr_gracefully_when_not_installed():
     assert angr_step, f"Expected angr-skipped step, got: {result['steps']}"
 
 
+def test_pwn_agent_solves_execute_buffer_blacklist_source_pattern(tmp_path, monkeypatch):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    binary = tmp_path / "execute"
+    binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    source = tmp_path / "execute.c"
+    source.write_text(
+        r'''
+        int check(char *a, char *b, int size, int op) { return 1337; }
+        int main() {
+            char buf[62];
+            char blacklist[] = "\x3b\x54\x62\x69\x6e\x73\x68\xf6\xd2\xc0\x5f\xc9\x66\x6c\x61\x67";
+            int size = read(0, buf, 60);
+            if(!check(blacklist, buf, size, strlen(blacklist))) exit(1337);
+            ( ( void (*) () ) buf) ();
+        }
+        '''
+    )
+
+    class FakeSocket:
+        def __init__(self):
+            self.sent = []
+            self.recv_count = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def recv(self, _size):
+            self.recv_count += 1
+            if self.recv_count == 1:
+                return b"hungry banner\n"
+            return b"HTB{staged_shellcode_flag}\n"
+
+        def sendall(self, data):
+            self.sent.append(data)
+
+    fake_socket = FakeSocket()
+    monkeypatch.setattr(
+        "agents.specialists.pwn.pwn_agent.socket.create_connection",
+        lambda *args, **kwargs: fake_socket,
+    )
+    monkeypatch.setattr("agents.specialists.pwn.pwn_agent.time.sleep", lambda *_args, **_kwargs: None)
+
+    agent = PwnAgent()
+    with patch.object(agent, "_phase_checksec", return_value=[]):
+        with patch.object(agent, "_phase_ghidra", side_effect=AssertionError("should not run ghidra")):
+            with patch.object(agent, "_phase_angr", side_effect=AssertionError("should not run angr")):
+                result = agent.solve_challenge({
+                    "id": "pwn_execute",
+                    "description": "Can you feed the hungry code? ip and port are 154.57.164.80:30338",
+                    "files": [str(binary), str(source)],
+                    "category": "pwn",
+                })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{staged_shellcode_flag}"
+    assert fake_socket.sent[0] == PwnAgent._build_badbyte_safe_read_stage(
+        PwnAgent._extract_blacklist_bytes(source.read_text())
+    )
+    assert fake_socket.sent[1] == PwnAgent._execve_bin_sh_shellcode()
+    assert fake_socket.sent[2] == b"cat flag.txt\n"
+    assert any("source-guided executable-stack" in step.lower() for step in result["steps"])
+
+
+def test_pwn_agent_extracts_connection_info_from_description():
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    challenge = {
+        "description": "Pwn challenge files are local; ip and port are 154.57.164.80:30338",
+    }
+
+    assert PwnAgent()._extract_connection_info(challenge) == "154.57.164.80:30338"
+
+
+def test_pwn_agent_source_guided_remote_failure_does_not_fall_through_to_angr(tmp_path, monkeypatch):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    binary = tmp_path / "execute"
+    binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    source = tmp_path / "execute.c"
+    source.write_text(
+        r'''
+        int main() {
+            char buf[62];
+            char blacklist[] = "\x3b\x54\x62\x69\x6e\x73\x68";
+            int size = read(0, buf, 60);
+            if(!check(blacklist, buf, size, strlen(blacklist))) exit(1337);
+            ( ( void (*) () ) buf) ();
+        }
+        '''
+    )
+
+    def refused(*_args, **_kwargs):
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr("agents.specialists.pwn.pwn_agent.socket.create_connection", refused)
+
+    agent = PwnAgent()
+    with patch.object(agent, "_phase_checksec", return_value=[]):
+        with patch.object(agent, "_phase_ghidra", side_effect=AssertionError("should not run ghidra")):
+            with patch.object(agent, "_phase_angr", side_effect=AssertionError("should not run angr")):
+                result = agent.solve_challenge({
+                    "id": "pwn_execute_down",
+                    "description": "Pwn challenge at 154.57.164.80:30338",
+                    "files": [str(binary), str(source)],
+                    "category": "pwn",
+                })
+
+    assert result["status"] == "attempted"
+    assert any("staged shellcode exploit failed" in step.lower() for step in result["steps"])
+
+
 # ---------------------------------------------------------------------------
 # 4. Extensionless ELF detection
 # ---------------------------------------------------------------------------

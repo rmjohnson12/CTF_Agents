@@ -262,7 +262,7 @@ class LLMReasoner:
         return default_order
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> ChallengeAnalysis:
-        if self._is_live_web_challenge(challenge):
+        if self._direct_agent_for_category(challenge):
             return self._heuristic_analysis(challenge)
 
         if self.client is None:
@@ -292,11 +292,15 @@ class LLMReasoner:
         analysis: ChallengeAnalysis,
         history: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        if self._is_live_web_challenge(challenge) and not history:
+        direct_agent = self._direct_agent_for_category(challenge)
+        if direct_agent and not history and self._analysis_allows_direct_route(direct_agent, analysis):
             return {
                 "next_action": "run_agent",
-                "target": "web_agent",
-                "reasoning": "Detected an already-classified live web challenge; dispatching directly to web_agent before LLM recovery.",
+                "target": direct_agent,
+                "reasoning": (
+                    f"Detected an already-classified {challenge.get('category')} challenge; "
+                    f"dispatching directly to {direct_agent} before LLM recovery."
+                ),
                 "inputs": {},
             }
 
@@ -733,6 +737,36 @@ class LLMReasoner:
             return False
         url = challenge.get("url") or challenge.get("target", {}).get("url")
         return bool(url)
+
+    @staticmethod
+    def _direct_agent_for_category(challenge: Dict[str, Any]) -> Optional[str]:
+        category = str(challenge.get("category") or "").lower()
+        direct_routes = {
+            "web": "web_agent",
+            "crypto": "crypto_agent",
+            "cryptography": "crypto_agent",
+            "reverse": "reverse_agent",
+            "reversing": "reverse_agent",
+            "rev": "reverse_agent",
+            "forensics": "forensics_agent",
+            "pwn": "pwn_agent",
+            "binary": "pwn_agent",
+            "hardware": "hardware_agent",
+            "blockchain": "blockchain_agent",
+            "secure_coding": "secure_coding_agent",
+            "secure-coding": "secure_coding_agent",
+            "log": "log_agent",
+            "networking": "networking_agent",
+            "network": "networking_agent",
+            "osint": "osint_agent",
+            "coding": "coding_agent",
+        }
+        return direct_routes.get(category)
+
+    @staticmethod
+    def _analysis_allows_direct_route(direct_agent: str, analysis: ChallengeAnalysis) -> bool:
+        recommended = (analysis.recommended_target or "none").strip()
+        return recommended in {"", "none", direct_agent}
 
     @staticmethod
     def _is_hardware_logic_challenge(challenge: Dict[str, Any]) -> bool:
