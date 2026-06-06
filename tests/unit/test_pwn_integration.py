@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import stat
+import struct
 import subprocess
 import sys
 import types
@@ -847,6 +848,172 @@ def test_phase_ret2win_brute_forces_common_offsets(tmp_path):
     assert tried_offsets[0] == 40    # starts at smallest common offset
     assert 88 in tried_offsets
     assert 104 not in tried_offsets  # stops as soon as one works
+
+
+# ---------------------------------------------------------------------------
+# 11b. _phase_ret2libc
+# ---------------------------------------------------------------------------
+
+def test_solve_challenge_ret2libc_runs_before_heavy_analysis(tmp_path):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    fake_binary = tmp_path / "restaurant"
+    fake_binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    agent = PwnAgent()
+
+    with patch.object(agent, "_phase_checksec", return_value=[]):
+        with patch.object(agent, "_phase_source_guided_shellcode", return_value=([], None, False)):
+            with patch.object(agent, "_phase_ret2libc",
+                              return_value=(["ret2libc solved"], "HTB{ret2libc_fast}")):
+                with patch.object(agent, "_phase_ghidra") as ghidra:
+                    with patch.object(agent, "_phase_angr") as angr:
+                        result = agent.solve_challenge({
+                            "id": "restaurant",
+                            "description": "Welcome restaurant pwn 1.2.3.4:31337",
+                            "files": [str(fake_binary)],
+                            "category": "pwn",
+                        })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{ret2libc_fast}"
+    ghidra.assert_not_called()
+    angr.assert_not_called()
+
+
+def test_solve_challenge_stops_after_failed_remote_ret2libc_attempt(tmp_path):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    fake_binary = tmp_path / "restaurant"
+    fake_binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    agent = PwnAgent()
+
+    with patch.object(agent, "_phase_checksec", return_value=[]):
+        with patch.object(agent, "_phase_source_guided_shellcode", return_value=([], None, False)):
+            with patch.object(
+                agent,
+                "_phase_ret2libc",
+                return_value=(
+                    [
+                        "Attempting ret2libc exploitation with bundled libc...",
+                        "ret2libc: trying remote leak with offset=40 against 1.2.3.4:31337",
+                        "ret2libc: could not parse puts leak from remote output",
+                    ],
+                    None,
+                ),
+            ):
+                with patch.object(agent, "_phase_ghidra") as ghidra:
+                    with patch.object(agent, "_phase_angr") as angr:
+                        with patch.object(agent, "_phase_pwntools_fallback") as fallback:
+                            result = agent.solve_challenge({
+                                "id": "restaurant_down",
+                                "description": "Welcome restaurant pwn 1.2.3.4:31337",
+                                "files": [str(fake_binary)],
+                                "category": "pwn",
+                            })
+
+    assert result["status"] == "attempted"
+    assert any("stopping before slow generic" in step for step in result["steps"])
+    ghidra.assert_not_called()
+    angr.assert_not_called()
+    fallback.assert_not_called()
+
+
+def test_phase_pwntools_fallback_skips_llm_by_default(monkeypatch, tmp_path):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    fake_binary = tmp_path / "restaurant"
+    fake_binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+
+    class ExplodingReasoner:
+        is_available = True
+
+        def _call_llm(self, prompt):
+            raise AssertionError("pwn LLM fallback should be opt-in")
+
+    monkeypatch.delenv("CTF_AGENTS_ENABLE_PWN_LLM_FALLBACK", raising=False)
+    agent = PwnAgent(reasoner=ExplodingReasoner())
+
+    steps = agent._phase_pwntools_fallback(
+        str(fake_binary),
+        {"description": "restaurant pwn 1.2.3.4:31337"},
+    )
+
+    assert any("Skipping pwn LLM fallback" in step for step in steps)
+
+
+def test_phase_ret2libc_uses_bundled_libc_and_description_connection(tmp_path):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    fake_binary = tmp_path / "restaurant"
+    fake_binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    fake_libc = tmp_path / "libc.so.6"
+    fake_libc.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    agent = PwnAgent()
+
+    context = {
+        "pop_rdi": 0x4010a3,
+        "ret": 0x40063e,
+        "puts_plt": 0x400650,
+        "puts_got": 0x601fa8,
+        "main": 0x400f68,
+        "libc_puts": 0x80aa0,
+        "libc_system": 0x4f550,
+        "libc_binsh": 0x1b3e1a,
+    }
+    calls = []
+
+    def fake_try(conn_info, offset, ctx):
+        calls.append((conn_info, offset, ctx))
+        return ["flag"], "HTB{restaurant}"
+
+    with patch.object(agent, "_is_pie", return_value=False):
+        with patch.object(agent, "_build_ret2libc_context", return_value=context):
+            with patch.object(agent, "_candidate_overflow_offsets", return_value=[40]):
+                with patch.object(agent, "_try_ret2libc_at_offset", side_effect=fake_try):
+                    steps, flag = agent._phase_ret2libc(
+                        str(fake_binary),
+                        [str(fake_binary), str(fake_libc)],
+                        {
+                            "id": "restaurant",
+                            "description": "port and IP are 154.57.164.69:30439",
+                        },
+                    )
+
+    assert flag == "HTB{restaurant}"
+    assert calls == [("154.57.164.69:30439", 40, context)]
+    assert any("bundled libc" in step for step in steps)
+
+
+def test_ret2libc_payloads_use_amd64_packing_and_parse_leak():
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    context = {
+        "pop_rdi": 0x4010a3,
+        "ret": 0x40063e,
+        "puts_plt": 0x400650,
+        "puts_got": 0x601fa8,
+        "main": 0x400f68,
+    }
+
+    leak_payload = PwnAgent._ret2libc_leak_payload(40, context)
+    shell_payload = PwnAgent._ret2libc_shell_payload(
+        40,
+        context,
+        system=0x7ffff7e2e550,
+        binsh=0x7ffff7f92e1a,
+    )
+    output = (
+        b"\nEnjoy your "
+        + b"A" * 40
+        + struct.pack("<Q", context["pop_rdi"]).rstrip(b"\x00")
+        + b"\xa0\xfa\xe5\xe4\x72\x7f\n"
+        + b"\x1b[1;6;36m Welcome"
+    )
+
+    assert len(leak_payload) == 40 + 8 * 4
+    assert struct.pack("<Q", context["puts_got"]) in leak_payload
+    assert len(shell_payload) == 40 + 8 * 4
+    assert PwnAgent._parse_ret2libc_leak(output, context["pop_rdi"]) == 0x7f72e4e5faa0
 
 
 # ---------------------------------------------------------------------------

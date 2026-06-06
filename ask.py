@@ -160,14 +160,36 @@ def _heuristic_mapping_is_actionable(heuristic: Dict[str, Any]) -> bool:
     return bool(heuristic.get("files") or heuristic.get("url") or heuristic.get("target"))
 
 
-def _challenge_id_from_instruction(user_input: str, url: Optional[str]) -> str:
+def _should_disable_llm_for_direct_cli(
+    user_input: str,
+    available_tools: List[str],
+    plan_mode: bool,
+) -> bool:
+    """Keep deterministic direct pwn one-shot runs out of provider calls."""
+    if plan_mode or not user_input:
+        return False
+    if os.getenv("CTF_AGENTS_ENABLE_LLM_FOR_DIRECT_PWN") == "1":
+        return False
+
+    heuristic = _heuristic_challenge_from_instruction(user_input, available_tools)
+    category = str(heuristic.get("category") or "").lower()
+    return category in {"pwn", "binary"} and _heuristic_mapping_is_actionable(heuristic)
+
+
+def _challenge_id_from_instruction(
+    user_input: str,
+    url: Optional[str],
+    category: Optional[str] = None,
+) -> str:
     """Build a stable per-prompt id so unrelated ad hoc runs do not share state."""
     basis = url or user_input
     digest = hashlib.sha256(basis.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    prefix = re.sub(r"[^A-Za-z0-9]+", "_", str(category or "heuristic")).strip("_").lower()
+    prefix = prefix or "heuristic"
     if url:
         host = re.sub(r"^https?://", "", url).split("/", 1)[0].split(":", 1)[0]
         slug = re.sub(r"[^A-Za-z0-9]+", "_", host).strip("_").lower()
-        return f"web_{slug}_{digest}" if slug else f"web_{digest}"
+        return f"{prefix}_{slug}_{digest}" if slug else f"{prefix}_{digest}"
     return f"heuristic_{digest}"
 
 
@@ -425,7 +447,7 @@ def _heuristic_challenge_from_instruction(
         category = "misc"
 
     return {
-        "id": _challenge_id_from_instruction(user_input, url),
+        "id": _challenge_id_from_instruction(user_input, url, category),
         "name": "Heuristic Task",
         "category": category,
         "description": user_input,
@@ -480,6 +502,8 @@ def main(argv: Optional[List[str]] = None):
     
     from core.utils.system_checks import get_available_tools, get_system_context
     available_tools = get_available_tools()
+    if _should_disable_llm_for_direct_cli(user_input, available_tools, plan_mode):
+        os.environ["LLM_PROVIDER"] = "none"
     system_ctx = get_system_context()
 
     # Initialize Tools and Coordinator once
@@ -503,7 +527,7 @@ def main(argv: Optional[List[str]] = None):
     coordinator.register_agent(HardwareLogicAgent())
     coordinator.register_agent(DockerChallengeAgent())
     coordinator.register_agent(ReconAgent())
-    coordinator.register_agent(PwnAgent())
+    coordinator.register_agent(PwnAgent(reasoner=coordinator.reasoner))
     coordinator.register_agent(BlockchainAgent())
     coordinator.register_agent(SecureCodingAgent())
 
@@ -637,4 +661,20 @@ Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) i
         user_input = "" # Clear for next loop iteration input
 
 if __name__ == "__main__":
-    main()
+    _one_shot_cli = len(sys.argv) > 1
+    _exit_code = 0
+    try:
+        main()
+    except KeyboardInterrupt:
+        _exit_code = 130
+        print("\nInterrupted.", file=sys.stderr)
+    except Exception:
+        _exit_code = 1
+        import traceback
+        traceback.print_exc()
+    finally:
+        if _one_shot_cli:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(_exit_code)
+    sys.exit(_exit_code)

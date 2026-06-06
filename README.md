@@ -87,7 +87,7 @@ For a fuller architecture map, see `PROJECT_STRUCTURE.md` and
   - `NVAPI_KEY` or `NVAPI_KEYS` for NVIDIA NIM.
   - `ANTHROPIC_API_KEY` for Claude.
   - `OPENAI_API_KEY` for OpenAI.
-  - `GOOGLE_API_KEY` for Gemini / Gemini Enterprise Agent Platform API-key testing.
+  - `GOOGLE_API_KEY` or `GEMINI_API_KEY` for Gemini / Gemini Enterprise Agent Platform API-key testing.
   - Or a local Ollama server for API-free local model routing.
 
 ## Installation
@@ -146,6 +146,9 @@ GOOGLE_API_KEY=your_google_key_here
 GOOGLE_MODEL=gemini-2.5-flash
 ```
 
+`GEMINI_API_KEY` is also accepted as an alias. Keep real keys in the root
+`.env` file only, never in prompts, reports, challenge files, or commits.
+
 After saving the key, run `python3 check_setup.py` to confirm the provider is
 detected before starting a solve.
 
@@ -180,6 +183,13 @@ No API key is required for the default local Ollama setup.
   SQL-specific evidence such as database errors, query parameters, or
   login/search forms, so artifact-led web challenges do not pivot to generic
   SQL guesses.
+- **Solve Trace Learning Store**: Successful runs are recorded in a compact
+  SQLite trace database with category, routing signature, artifact keys,
+  indicators, flag prefix, and a flag hash. The raw flag is not stored, giving
+  retrieval/training work useful examples without turning the database into an
+  answer cache. The coordinator now retrieves similar solved traces at the
+  start of a challenge and can use a high-confidence, untried prior route as a
+  routing hint before asking an LLM.
 - **Robust Path Resolution**: Intelligent path normalization handles complex file inputs, including `~/` expansion even when mixed with absolute paths.
 - **Source-Only Web Audits**: Local web source folders are inspected for framework and dependency clues, including vulnerable React/Next.js combinations.
 - **Source-Guided Web Exploits**: Local source can drive live payloads for
@@ -206,6 +216,10 @@ No API key is required for the default local Ollama setup.
 - **HTB Code-Runner Playbooks**: Web challenges exposing `/run`-style Python
   execution endpoints can submit compact solvers for coding/math tasks such as
   prime-product key recovery.
+- **Remote ret2libc Pwn Playbook**: Linux ELF pwn challenges with no PIE, NX
+  enabled, a bundled `libc.so.6`, and a remote `host:port` can be exploited
+  without local Linux execution. The pwn agent leaks `puts`, computes the libc
+  base, builds a `system("/bin/sh")` chain, and retrieves common flag paths.
 - **Hardware Logic Agent**: Hardware/chip/circuit prompts can route to a
   specialist that combines challenge text, local files, images, and CSV tables
   to derive logic and decode output streams. Saleae `.sal` archives are
@@ -450,6 +464,8 @@ Generated outputs are local-only and ignored by git:
 - `logs/checkpoints/` stores coordinator progress snapshots for resume support.
 - `logs/knowledge.db` stores the local knowledge base.
 - `logs/performance.db` stores local agent performance history.
+- `logs/solve_traces.db` stores compact solved-run traces used for similar-case
+  routing hints and future training experiments.
 
 Before reports, broker payloads, or knowledge facts are written, sensitive
 fields such as cookies, tokens, API keys, private keys, passwords, and session

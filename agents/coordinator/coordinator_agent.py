@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -26,6 +27,7 @@ from core.utils.result_manager import ResultManager
 from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
 from core.knowledge_base.knowledge_store import KnowledgeStore
+from core.knowledge_base.solve_trace_store import SolveTraceStore
 from core.utils.security import redact_sensitive_data, safe_checkpoint_path, safe_slug
 import concurrent.futures
 
@@ -53,6 +55,8 @@ class CoordinatorAgent(BaseAgent):
         max_iterations: int = 5,
         broker: Optional[MessageBroker] = None,
         knowledge_store: Optional[KnowledgeStore] = None,
+        solve_trace_store: Optional[SolveTraceStore] = None,
+        performance_tracker: Optional[Any] = None,
     ):
         ks = knowledge_store or KnowledgeStore()
         super().__init__(agent_id, AgentType.COORDINATOR, knowledge_store=ks)
@@ -60,13 +64,14 @@ class CoordinatorAgent(BaseAgent):
         self.specialist_agents: Dict[str, BaseAgent] = {}
         self.support_agents: Dict[str, BaseAgent] = {}
         self.active_challenges: Dict[str, Dict[str, Any]] = {}
-        self.performance_tracker = PerformanceTracker()
+        self.performance_tracker = performance_tracker or self._create_performance_tracker()
 
         self.browser_snapshot_tool = browser_snapshot_tool
         self.tony_sql_adapter = tony_sql_adapter
         self.reasoner = LLMReasoner(client=llm_client)
         self.max_iterations = max_iterations
         self.result_manager = ResultManager()
+        self.solve_trace_store = solve_trace_store or self._create_solve_trace_store()
         self.broker = broker or MessageBroker()
         self.task_queue = TaskQueue()
 
@@ -125,6 +130,7 @@ class CoordinatorAgent(BaseAgent):
         initial_analysis = self._analysis_to_dict(challenge, initial_analysis_obj)
         checkpoint = self._load_checkpoint(checkpoint_dir, challenge_id) if resume else None
         history: List[Dict[str, Any]] = checkpoint.get("history", []) if checkpoint else []
+        trace_hints = self._get_solve_trace_hints_best_effort(challenge)
         
         if checkpoint:
             all_steps = checkpoint.get("steps", [])
@@ -135,13 +141,23 @@ class CoordinatorAgent(BaseAgent):
                 f"Initial category guess: {initial_analysis['category']}",
                 f"Initial confidence: {initial_analysis['confidence']:.2f}",
             ]
-            hint = self.performance_tracker.get_routing_hint(initial_analysis["category"])
+            hint = self._get_routing_hint_best_effort(initial_analysis["category"])
             if hint:
                 all_steps.append(
                     f"Performance hint: '{hint[0]}' has a {hint[1]:.0%} historical solve rate "
                     f"for '{initial_analysis['category']}' challenges."
                 )
             start_iteration = 0
+
+        if trace_hints:
+            top_hint = trace_hints[0]
+            all_steps.append(
+                "Trace memory: "
+                f"{len(trace_hints)} similar solved pattern(s); top target "
+                f"{top_hint.get('successful_target')} "
+                f"(score {top_hint.get('similarity_score')}, "
+                f"shared {top_hint.get('shared_indicators')})."
+            )
 
         final_result = {
             "challenge_id": challenge_id,
@@ -158,41 +174,36 @@ class CoordinatorAgent(BaseAgent):
         deferred_duplicate_targets = set()
         recovery_review_attempted = False
 
+        def record_task_result(
+            task_info: Dict[str, Any],
+            result: Dict[str, Any],
+            step_prefix: str,
+        ) -> Optional[Dict[str, Any]]:
+            task_id = task_info["task_id"]
+            self.task_queue.complete_task(task_id, result)
+            history.append(result)
+            if result.get("steps"):
+                all_steps.extend([f"  [{step_prefix}] {s}" for s in result["steps"]])
+
+            self._publish_result(result)
+            if result.get("artifacts"):
+                self._publish_knowledge(challenge_id, result["artifacts"])
+
+            if result.get("status") == "solved" or result.get("flag"):
+                final_result["status"] = "solved"
+                final_result["flag"] = result.get("flag")
+                all_steps.append(f"Challenge solved by task {task_id}!")
+                self._cleanup_run_artifacts(history, all_steps)
+                return final_result
+
+            return None
+
         def record_completed_future(f, step_prefix: str) -> Optional[Dict[str, Any]]:
             task_info = futures.pop(f)
             task_id = task_info["task_id"]
             try:
                 result = f.result()
-                self.task_queue.complete_task(task_id, result)
-                history.append(result)
-                if result.get("steps"):
-                    all_steps.extend([f"  [{step_prefix}] {s}" for s in result["steps"]])
-
-                self._publish_result(result)
-                if result.get("artifacts"):
-                    self._publish_knowledge(challenge_id, result["artifacts"])
-
-                if result.get("status") == "solved" or result.get("flag"):
-                    final_result["status"] = "solved"
-                    final_result["flag"] = result.get("flag")
-                    all_steps.append(f"Challenge solved by task {task_id}!")
-                    self._cleanup_run_artifacts(history, all_steps)
-                    return final_result
-
-                direct_target = self._direct_initial_agent(challenge, initial_analysis_obj)
-                if (
-                    direct_target
-                    and task_info.get("target") == direct_target
-                    and str(challenge.get("category") or "").lower() in {"pwn"}
-                    and result.get("status") == "attempted"
-                ):
-                    final_result["status"] = "attempted"
-                    all_steps.append(
-                        f"Direct {challenge.get('category')} specialist attempt completed without a flag; "
-                        "stopping before LLM planning."
-                    )
-                    self._cleanup_run_artifacts(history, all_steps)
-                    return final_result
+                return record_task_result(task_info, result, step_prefix)
             except Exception as e:
                 all_steps.append(f"Task {task_id} failed: {e}")
                 self.task_queue.fail_task(task_id, str(e))
@@ -214,6 +225,7 @@ class CoordinatorAgent(BaseAgent):
                         completed_result["history"] = history
                         self.active_challenges.pop(challenge_id, None)
                         self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                        self._record_solve_trace_best_effort(challenge, completed_result)
                         self.result_manager.save_run_result(completed_result)
                         return completed_result
 
@@ -223,6 +235,8 @@ class CoordinatorAgent(BaseAgent):
                 if prior_facts:
                     challenge_with_knowledge["prior_knowledge"] = prior_facts
                     all_steps.append(f"  [Knowledge] Retrieved {len(prior_facts)} fact(s) from storage.")
+                if trace_hints:
+                    challenge_with_knowledge["solve_trace_hints"] = trace_hints
 
                 direct_target = self._direct_initial_agent(challenge_with_knowledge, initial_analysis_obj)
                 if not history and not futures and direct_target:
@@ -236,11 +250,15 @@ class CoordinatorAgent(BaseAgent):
                         "inputs": {},
                     }
                 else:
-                    decision = self.reasoner.choose_next_action(
-                        challenge_with_knowledge,
-                        initial_analysis_obj,
-                        history
-                    )
+                    trace_decision = self._decision_from_trace_hints(trace_hints, history)
+                    if trace_decision:
+                        decision = trace_decision
+                    else:
+                        decision = self.reasoner.choose_next_action(
+                            challenge_with_knowledge,
+                            initial_analysis_obj,
+                            history
+                        )
 
                 action = decision.get("next_action", "stop")
                 target = decision.get("target", "none")
@@ -327,6 +345,7 @@ class CoordinatorAgent(BaseAgent):
                             completed_result["history"] = history
                             self.active_challenges.pop(challenge_id, None)
                             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                            self._record_solve_trace_best_effort(challenge, completed_result)
                             self.result_manager.save_run_result(completed_result)
                             return completed_result
                     if done:
@@ -367,8 +386,33 @@ class CoordinatorAgent(BaseAgent):
                     if decision.get("inputs", {}).get("task"):
                         agent_challenge['current_task_description'] = decision["inputs"]["task"]
                     
+                    direct_target = self._direct_initial_agent(challenge, initial_analysis_obj)
+                    run_direct_pwn_in_main_thread = (
+                        not history
+                        and not futures
+                        and target == direct_target == "pwn_agent"
+                    )
+                    task_info = {"task_id": task_id, "action": action, "target": target}
+                    if run_direct_pwn_in_main_thread:
+                        try:
+                            result = self._run_selected_agent(agent_challenge, target, [])
+                            completed_result = record_task_result(task_info, result, "Exec")
+                            if completed_result is not None:
+                                completed_result["steps"] = all_steps
+                                completed_result["history"] = history
+                                self.active_challenges.pop(challenge_id, None)
+                                self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                                self._record_solve_trace_best_effort(challenge, completed_result)
+                                self.result_manager.save_run_result(completed_result)
+                                return completed_result
+                        except Exception as e:
+                            all_steps.append(f"Task {task_id} failed: {e}")
+                            self.task_queue.fail_task(task_id, str(e))
+                        self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                        continue
+
                     f = executor.submit(self._run_selected_agent, agent_challenge, target, [])
-                    futures[f] = {"task_id": task_id, "action": action, "target": target}
+                    futures[f] = task_info
                 elif action == "run_tool":
                     f = executor.submit(self._run_selected_tool, challenge, target, [])
                     futures[f] = {"task_id": task_id, "action": action, "target": target}
@@ -392,6 +436,7 @@ class CoordinatorAgent(BaseAgent):
                         completed_result["history"] = history
                         self.active_challenges.pop(challenge_id, None)
                         self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+                        self._record_solve_trace_best_effort(challenge, completed_result)
                         self.result_manager.save_run_result(completed_result)
                         return completed_result
 
@@ -453,6 +498,7 @@ class CoordinatorAgent(BaseAgent):
             
             self._cleanup_run_artifacts(history, all_steps)
             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
+            self._record_solve_trace_best_effort(challenge, final_result)
             self.result_manager.save_run_result(final_result)
             return final_result
 
@@ -519,7 +565,7 @@ class CoordinatorAgent(BaseAgent):
                 "selected_target": target_agent_id,
                 "execution_type": "agent",
             }
-            self.performance_tracker.record_outcome(
+            self._record_performance_outcome_best_effort(
                 agent_id=target_agent_id,
                 category=challenge.get("category", "misc"),
                 challenge_id=challenge.get("id", "unknown"),
@@ -585,6 +631,15 @@ class CoordinatorAgent(BaseAgent):
     ) -> Optional[Dict[str, Any]]:
         """Ask an available LLM for one recovery action after a failed trace."""
         if already_attempted:
+            return None
+
+        category = str(challenge.get("category") or analysis.category_guess or "").lower()
+        if category in {"pwn", "binary"} and os.getenv("CTF_AGENTS_ENABLE_PWN_LLM_RECOVERY") != "1":
+            if history or any("[Exec]" in step or "[Async Result]" in step for step in steps):
+                steps.append(
+                    "Skipping pwn LLM recovery by default; set "
+                    "CTF_AGENTS_ENABLE_PWN_LLM_RECOVERY=1 to enable it."
+                )
             return None
 
         has_failed_trace = bool(history) or any(
@@ -655,7 +710,7 @@ class CoordinatorAgent(BaseAgent):
                 "flag": None,
                 "steps": routing_steps + [f"Unknown tool target '{target_tool}'."],
             }
-        self.performance_tracker.record_outcome(
+        self._record_performance_outcome_best_effort(
             agent_id=target_tool,
             category=challenge.get("category", "misc"),
             challenge_id=challenge.get("id", "unknown"),
@@ -663,6 +718,145 @@ class CoordinatorAgent(BaseAgent):
             duration_sec=time.monotonic() - t0,
         )
         return result
+
+    def _record_performance_outcome_best_effort(
+        self,
+        agent_id: str,
+        category: str,
+        challenge_id: str,
+        status: str,
+        duration_sec: Optional[float] = None,
+    ) -> None:
+        """Record optional telemetry without letting SQLite issues abort solving."""
+        if self.performance_tracker is None:
+            return
+        try:
+            self.performance_tracker.record_outcome(
+                agent_id=agent_id,
+                category=category,
+                challenge_id=challenge_id,
+                status=status,
+                duration_sec=duration_sec,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Skipping performance telemetry for %s/%s: %s",
+                challenge_id,
+                agent_id,
+                exc,
+            )
+
+    def _get_routing_hint_best_effort(self, category: str) -> Optional[tuple[str, float]]:
+        if self.performance_tracker is None:
+            return None
+        try:
+            return self.performance_tracker.get_routing_hint(category)
+        except Exception as exc:
+            logger.warning("Skipping performance hint for %s: %s", category, exc)
+            return None
+
+    @staticmethod
+    def _create_performance_tracker() -> Optional[PerformanceTracker]:
+        try:
+            return PerformanceTracker()
+        except Exception as exc:
+            logger.warning("Performance telemetry unavailable: %s", exc)
+            return None
+
+    @staticmethod
+    def _create_solve_trace_store() -> Optional[SolveTraceStore]:
+        if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("CTF_AGENTS_RECORD_TEST_TRACES") != "1":
+            return None
+        try:
+            return SolveTraceStore()
+        except Exception as exc:
+            logger.warning("Solve trace store unavailable: %s", exc)
+            return None
+
+    def _record_solve_trace_best_effort(
+        self,
+        challenge: Dict[str, Any],
+        result: Dict[str, Any],
+    ) -> None:
+        """Record solved challenge patterns for future retrieval/training."""
+        try:
+            self.solve_trace_store.record_solve(challenge, result)
+        except Exception as exc:
+            logger.warning(
+                "Skipping solve trace recording for %s: %s",
+                challenge.get("id", "unknown"),
+                exc,
+            )
+
+    def _get_solve_trace_hints_best_effort(
+        self,
+        challenge: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Retrieve compact prior solve patterns without making solving depend on SQLite."""
+        if self.solve_trace_store is None:
+            return []
+        try:
+            return self.solve_trace_store.find_similar_patterns(challenge, limit=5)
+        except Exception as exc:
+            logger.warning(
+                "Skipping solve trace retrieval for %s: %s",
+                challenge.get("id", "unknown"),
+                exc,
+            )
+            return []
+
+    def _decision_from_trace_hints(
+        self,
+        trace_hints: List[Dict[str, Any]],
+        history: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Turn a strong prior solve pattern into an advisory routing decision."""
+        if not trace_hints:
+            return None
+
+        tried_targets = set()
+        for entry in history:
+            routing = entry.get("routing") or {}
+            if routing.get("selected_target"):
+                tried_targets.add(str(routing["selected_target"]))
+            if entry.get("agent_id"):
+                tried_targets.add(str(entry["agent_id"]))
+
+        tool_targets = {"browser_snapshot", "tony_htb_sql"}
+        for hint in trace_hints:
+            if int(hint.get("similarity_score") or 0) < 6:
+                continue
+            target = hint.get("successful_target") or hint.get("successful_agent")
+            if not target or target == self.agent_id or target in tried_targets:
+                continue
+            target = str(target)
+
+            if target in self._all_agent_ids():
+                action = "run_agent"
+            elif target in tool_targets:
+                action = "run_tool"
+            else:
+                continue
+
+            shared = ", ".join(hint.get("shared_indicators") or [])
+            return {
+                "next_action": action,
+                "target": target,
+                "reasoning": (
+                    "Trace memory matched a prior solved challenge "
+                    f"({hint.get('challenge_id')}) with score "
+                    f"{hint.get('similarity_score')}; trying {target}. "
+                    f"Shared indicators: {shared}."
+                ),
+                "inputs": {
+                    "task": (
+                        "Use the prior solved route pattern as a hint, but derive "
+                        "the current answer from current artifacts and live target."
+                    )
+                },
+            }
+
+        return None
 
     def _run_browser_snapshot(
         self,

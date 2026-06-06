@@ -72,6 +72,9 @@ pytest tests/unit/
 # Run end-to-end smoke prompts
 pytest tests/e2e/test_smoke_prompts.py
 
+# Run opt-in live LLM provider smoke tests
+CTF_AGENTS_RUN_LIVE_LLM_TESTS=1 pytest tests/integration/test_live_llm_provider.py
+
 # Run with coverage
 pytest --cov=agents --cov=core --cov=tools
 
@@ -87,6 +90,9 @@ pytest -v
 Test dependencies are installed from the repository's main `requirements.txt`.
 At minimum, the checked-in test suite expects `pytest` and any runtime packages
 used by the agents under test.
+
+Live LLM tests are skipped unless `CTF_AGENTS_RUN_LIVE_LLM_TESTS=1` is set and
+the root `.env` or shell environment contains a supported provider key.
 
 ## Continuous Integration
 

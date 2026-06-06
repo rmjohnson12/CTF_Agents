@@ -1,8 +1,10 @@
 import pytest
 import time
 import json
+import threading
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.base_agent import BaseAgent, AgentType, AgentStatus
+from core.knowledge_base.solve_trace_store import SolveTraceStore
 from typing import Dict, Any, List
 
 class MockAgent(BaseAgent):
@@ -92,6 +94,38 @@ class RecoveryReasoner(MockReasoner):
             "inputs": {"task": "Try a different decoding strategy based on the failed trace."},
         }
 
+
+class DirectPwnRecoveryReasoner(MockReasoner):
+    is_available = True
+
+    def __init__(self):
+        super().__init__([
+            {"next_action": "stop", "target": "none", "reasoning": "Normal planner is stuck after pwn."},
+        ])
+        self.recovery_calls = 0
+
+    def analyze_challenge(self, challenge):
+        self.analyze_called += 1
+        from core.decision_engine.llm_reasoner import ChallengeAnalysis
+        return ChallengeAnalysis(
+            category_guess="pwn",
+            confidence=0.91,
+            reasoning="Pwn challenge with source and remote.",
+            recommended_target="pwn_agent",
+            recommended_action="run_agent",
+            detected_indicators=["pwn_terms"],
+        )
+
+    def suggest_recovery_action(self, challenge, analysis, history, steps):
+        self.recovery_calls += 1
+        return {
+            "next_action": "run_agent",
+            "target": "coding_agent",
+            "reasoning": "Pwn specialist failed; inspect source and derive a payload script.",
+            "inputs": {"task": "Analyze the pwn source and produce a remote payload."},
+        }
+
+
 class MaxIterationRecoveryReasoner(MockReasoner):
     is_available = True
 
@@ -142,6 +176,20 @@ class CapturingMockAgent(MockAgent):
         self.last_challenge = challenge
         return super().solve_challenge(challenge)
 
+
+class MainThreadAssertingAgent(MockAgent):
+    def solve_challenge(self, challenge):
+        assert threading.current_thread() is threading.main_thread()
+        return super().solve_challenge(challenge)
+
+
+class FailingPerformanceTracker:
+    def get_routing_hint(self, category):
+        raise RuntimeError("attempt to write a readonly database")
+
+    def record_outcome(self, *args, **kwargs):
+        raise RuntimeError("attempt to write a readonly database")
+
 def test_coordinator_iterative_loop_stops_on_solve():
     decisions = [
         {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try first agent"},
@@ -188,12 +236,85 @@ def test_coordinator_direct_initial_category_bypasses_planner():
     assert any("maps directly to pwn_agent" in step for step in result["steps"])
 
 
-def test_coordinator_direct_pwn_attempt_stops_before_llm_replan():
+def test_coordinator_runs_direct_pwn_on_main_thread():
     reasoner = ExplodingPlannerReasoner()
     coordinator = CoordinatorAgent()
     coordinator.reasoner = reasoner
-    pwn_agent = MockAgent("pwn_agent", status_on_solve="attempted")
+    pwn_agent = MainThreadAssertingAgent("pwn_agent", status_on_solve="solved", flag="HTB{main_thread}")
     coordinator.register_agent(pwn_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "direct_pwn_main_thread",
+        "category": "pwn",
+        "description": "Pwn challenge with files and host:port",
+        "files": ["/tmp/restaurant"],
+        "url": "http://127.0.0.1:31337",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{main_thread}"
+    assert pwn_agent.solve_called == 1
+
+
+def test_coordinator_routes_from_solve_trace_memory_before_llm(tmp_path):
+    store = SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
+    store.record_solve(
+        {
+            "id": "old_matrix_route",
+            "category": "misc",
+            "description": "matrix route state conjugation",
+            "files": ["/tmp/output.json"],
+        },
+        {
+            "challenge_id": "old_matrix_route",
+            "agent_id": "coordinator",
+            "status": "solved",
+            "flag": "SVIBGR{old_matrix_flag}",
+            "history": [
+                {
+                    "agent_id": "coding_agent",
+                    "status": "solved",
+                    "flag": "SVIBGR{old_matrix_flag}",
+                    "routing": {
+                        "selected_target": "coding_agent",
+                        "execution_type": "agent",
+                    },
+                    "artifacts": {"solver_script": "solve.py"},
+                }
+            ],
+        },
+    )
+    reasoner = ExplodingPlannerReasoner()
+    coordinator = CoordinatorAgent(solve_trace_store=store)
+    coordinator.reasoner = reasoner
+    coding_agent = MockAgent("coding_agent", status_on_solve="solved", flag="SVIBGR{new_matrix_flag}")
+    coordinator.register_agent(coding_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "new_matrix_route",
+        "category": "misc",
+        "description": "Recover live route from encrypted matrices",
+        "files": ["/tmp/new/output.json"],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIBGR{new_matrix_flag}"
+    assert coding_agent.solve_called == 1
+    assert any("Trace memory:" in step for step in result["steps"])
+    assert any("Trace memory matched a prior solved challenge" in step for step in result["steps"])
+
+
+def test_coordinator_direct_pwn_attempt_skips_llm_recovery_by_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("CTF_AGENTS_ENABLE_PWN_LLM_RECOVERY", raising=False)
+    reasoner = DirectPwnRecoveryReasoner()
+    coordinator = CoordinatorAgent(
+        solve_trace_store=SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
+    )
+    coordinator.reasoner = reasoner
+    pwn_agent = MockAgent("pwn_agent", status_on_solve="attempted")
+    coding_agent = MockAgent("coding_agent", status_on_solve="solved", flag="HTB{pwn_recovered}")
+    coordinator.register_agent(pwn_agent)
+    coordinator.register_agent(coding_agent)
 
     result = coordinator.solve_challenge({
         "id": "direct_pwn_attempted",
@@ -203,8 +324,39 @@ def test_coordinator_direct_pwn_attempt_stops_before_llm_replan():
     })
 
     assert result["status"] == "attempted"
+    assert result["flag"] is None
     assert pwn_agent.solve_called == 1
-    assert any("stopping before LLM planning" in step for step in result["steps"])
+    assert coding_agent.solve_called == 0
+    assert reasoner.recovery_calls == 0
+    assert any("Skipping pwn LLM recovery by default" in step for step in result["steps"])
+
+
+def test_coordinator_direct_pwn_attempt_can_recover_with_llm_when_enabled(monkeypatch, tmp_path):
+    monkeypatch.setenv("CTF_AGENTS_ENABLE_PWN_LLM_RECOVERY", "1")
+    reasoner = DirectPwnRecoveryReasoner()
+    coordinator = CoordinatorAgent(
+        solve_trace_store=SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
+    )
+    coordinator.reasoner = reasoner
+    pwn_agent = MockAgent("pwn_agent", status_on_solve="attempted")
+    coding_agent = MockAgent("coding_agent", status_on_solve="solved", flag="HTB{pwn_recovered}")
+    coordinator.register_agent(pwn_agent)
+    coordinator.register_agent(coding_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "direct_pwn_attempted_opt_in",
+        "category": "pwn",
+        "description": "Pwn challenge with unavailable remote",
+        "files": ["/tmp/execute"],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{pwn_recovered}"
+    assert pwn_agent.solve_called == 1
+    assert coding_agent.solve_called == 1
+    assert reasoner.recovery_calls == 1
+    assert not any("stopping before LLM planning" in step for step in result["steps"])
+    assert any("LLM failure review suggested recovery" in step for step in result["steps"])
 
 
 def test_coordinator_routes_source_backed_web_to_web_agent_before_snapshot():
@@ -329,6 +481,49 @@ def test_coordinator_asks_llm_for_recovery_after_failed_stop():
     assert agent2.solve_called == 1
     assert reasoner.recovery_calls == 1
     assert any("LLM failure review suggested recovery" in step for step in result["steps"])
+
+
+def test_coordinator_solves_when_performance_telemetry_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    decisions = [
+        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try the agent"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent(performance_tracker=FailingPerformanceTracker())
+    coordinator.reasoner = reasoner
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="solved", flag="CTF{no_telemetry}"))
+
+    result = coordinator.solve_challenge({"id": "readonly_perf_db", "description": "test telemetry failure"})
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{no_telemetry}"
+    assert not any("Task readonly_perf_db_step_1 failed" in step for step in result["steps"])
+
+
+def test_coordinator_records_solved_trace_for_learning_database(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    store = SolveTraceStore(db_path=str(tmp_path / "logs" / "solve_traces.db"))
+    decisions = [
+        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try the agent"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent(solve_trace_store=store)
+    coordinator.reasoner = reasoner
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="solved", flag="CTF{trace_saved}"))
+
+    result = coordinator.solve_challenge({
+        "id": "trace_db",
+        "category": "misc",
+        "description": "test solve trace database",
+    })
+    rows = store.get_recent_solves(category="misc")
+
+    assert result["status"] == "solved"
+    assert len(rows) == 1
+    assert rows[0]["challenge_id"] == "trace_db"
+    assert rows[0]["flag_prefix"] == "CTF"
+    assert rows[0]["successful_agent"] == "agent_1"
+    assert rows[0]["route_signature"] == "agent:agent_1:solved"
 
 
 def test_coordinator_asks_llm_for_final_recovery_after_iteration_limit():

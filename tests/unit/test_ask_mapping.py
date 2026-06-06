@@ -9,6 +9,7 @@ from ask import (
     _normalize_challenge,
     _normalize_path,
     _normalize_url,
+    _should_disable_llm_for_direct_cli,
     _unwrap_ask_command,
 )
 
@@ -66,7 +67,34 @@ def test_actionable_heuristic_mapping_skips_llm_gate_for_pwn_files(tmp_path, mon
     )
 
     assert challenge["category"] == "pwn"
+    assert challenge["id"].startswith("pwn_154_57_164_80_")
     assert _heuristic_mapping_is_actionable(challenge) is True
+
+
+def test_direct_pwn_cli_disables_llm_before_coordinator_init(tmp_path, monkeypatch):
+    binary = tmp_path / "restaurant"
+    binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CTF_AGENTS_ENABLE_LLM_FOR_DIRECT_PWN", raising=False)
+
+    assert _should_disable_llm_for_direct_cli(
+        f"Pwn challenge files in {tmp_path} ip and port are 154.57.164.66:31594",
+        available_tools=[],
+        plan_mode=False,
+    ) is True
+
+
+def test_direct_pwn_cli_can_opt_into_llm(tmp_path, monkeypatch):
+    binary = tmp_path / "restaurant"
+    binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CTF_AGENTS_ENABLE_LLM_FOR_DIRECT_PWN", "1")
+
+    assert _should_disable_llm_for_direct_cli(
+        f"Pwn challenge files in {tmp_path} ip and port are 154.57.164.66:31594",
+        available_tools=[],
+        plan_mode=False,
+    ) is False
 
 
 def test_heuristic_mapping_routes_hidden_binary_artifact_to_forensics(tmp_path, monkeypatch):
