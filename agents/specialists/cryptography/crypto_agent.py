@@ -17,12 +17,20 @@ from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
-from core.utils.flag_utils import find_first_flag
+from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
 import base64
 import binascii
 import re
 
 logger = logging.getLogger(__name__)
+
+try:
+    from fpylll import IntegerMatrix as _FPYLLL_INTEGER_MATRIX, LLL as _FPYLLL_LLL  # type: ignore
+    _FPYLLL_IMPORT_ERROR: Optional[Exception] = None
+except Exception as exc:
+    _FPYLLL_INTEGER_MATRIX = None
+    _FPYLLL_LLL = None
+    _FPYLLL_IMPORT_ERROR = exc
 
 
 class CryptographyAgent(BaseAgent):
@@ -47,11 +55,13 @@ class CryptographyAgent(BaseAgent):
             "hash_cracking",
             "encoding",
             "rsa",
+            "rsa_partial_prime_leak",
             "aes",
             "classical_ciphers",
             "base64",
             "hex",
             "xor",
+            "threebyte_rotate_xor",
             "decimal",
             "octal"
         ]
@@ -108,7 +118,7 @@ class CryptographyAgent(BaseAgent):
         if "xor" in description or metadata.get("cipher_type") == "xor":
             cipher_types.append("single_byte_xor")
 
-        if any(k in description for k in ["rsa", "public key", "private key"]):
+        if any(k in description for k in ["rsa", "public key", "private key", "prime leak", "p_high"]):
             cipher_types.append("rsa")
 
         cipher_types = sorted(set(cipher_types))
@@ -138,12 +148,52 @@ class CryptographyAgent(BaseAgent):
         
         steps.append(f"Extracted ciphertext: {cipher_text}")
 
+        rsa_low_exponent_result = self._try_rsa_low_exponent_from_files(challenge.get("files", []), steps)
+        if rsa_low_exponent_result:
+            found = find_first_flag(rsa_low_exponent_result)
+            if found:
+                steps.append("SUCCESS: Found flag via RSA low-exponent plaintext recovery.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps
+                }
+
         rsa_broadcast_result = self._try_rsa_broadcast_from_files(challenge, steps)
         if rsa_broadcast_result:
             plaintext = rsa_broadcast_result
             found = find_first_flag(plaintext)
             if found:
                 steps.append("SUCCESS: Found flag via RSA broadcast attack.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps
+                }
+
+        rsa_partial_prime_result = self._try_rsa_partial_prime_leak_from_files(challenge.get("files", []), steps)
+        if rsa_partial_prime_result:
+            plaintext = rsa_partial_prime_result
+            found = find_first_flag(plaintext)
+            if found:
+                steps.append("SUCCESS: Found flag via RSA partial-prime Coppersmith attack.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps
+                }
+
+        custom_cipher_result = self._try_threebyte_rotate_xor_cipher_from_files(challenge.get("files", []), steps)
+        if custom_cipher_result:
+            found = find_first_flag(custom_cipher_result)
+            if found:
+                steps.append("SUCCESS: Found flag via 3-byte rotate/XOR custom-cipher inversion.")
                 return {
                     "challenge_id": challenge.get("id"),
                     "agent_id": self.agent_id,
@@ -628,6 +678,88 @@ class CryptographyAgent(BaseAgent):
         steps.append(f"  Collected {len(samples)} capsules from {host}:{port}; recovered RSA plaintext.")
         return plaintext
 
+    def _try_rsa_low_exponent_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
+        """Recover unpadded low-exponent RSA plaintexts from local output files."""
+        values: Dict[str, int] = {}
+        source_names: List[str] = []
+        for file_path in files:
+            path = Path(file_path)
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read RSA low-exponent file %s: %s", path, exc)
+                continue
+            parsed = self._extract_named_integer_assignments(text)
+            if parsed:
+                values.update(parsed)
+                source_names.append(path.name)
+
+        exponent = values.get("e")
+        modulus = values.get("N") or values.get("n")
+        if not exponent or exponent < 2 or exponent > 11:
+            return None
+
+        ciphertext_items = [
+            (name, value)
+            for name, value in values.items()
+            if re.fullmatch(r"c\d*|ciphertext\d*|ct\d*", name, re.IGNORECASE)
+        ]
+        if not ciphertext_items:
+            return None
+
+        steps.append(
+            "  Detected local RSA parameters with small public exponent "
+            f"e={exponent} in {', '.join(source_names) or 'provided files'}."
+        )
+        for name, ciphertext in sorted(ciphertext_items):
+            if modulus and ciphertext >= modulus:
+                continue
+            root, exact = self._integer_nth_root(ciphertext, exponent)
+            if not exact:
+                continue
+            plaintext = self._int_to_bytes(root).decode("utf-8", errors="replace")
+            if find_first_flag(plaintext):
+                steps.append(f"  Exact integer root of {name} with degree e={exponent} recovered plaintext.")
+                return plaintext
+
+        if exponent == 3 and "c1" in values and "c2" in values:
+            related = self._try_rsa_e3_consecutive_message_difference(values["c1"], values["c2"])
+            if related and find_first_flag(related):
+                steps.append("  Recovered plaintext from e=3 consecutive-message relation c2=(m+1)^3.")
+                return related
+
+        return None
+
+    @staticmethod
+    def _extract_named_integer_assignments(text: str) -> Dict[str, int]:
+        return {
+            name: int(value)
+            for name, value in re.findall(
+                r"^(N|n|e|c\d*|ciphertext\d*|ct\d*|d_high)\s*=\s*(\d+)",
+                text,
+                re.MULTILINE | re.IGNORECASE,
+            )
+        }
+
+    @classmethod
+    def _try_rsa_e3_consecutive_message_difference(cls, c1: int, c2: int) -> Optional[str]:
+        difference = c2 - c1
+        if difference <= 0:
+            return None
+        discriminant = 12 * difference - 3
+        sqrt_disc, exact = cls._integer_nth_root(discriminant, 2)
+        if not exact:
+            return None
+        numerator = sqrt_disc - 3
+        if numerator < 0 or numerator % 6 != 0:
+            return None
+        message = numerator // 6
+        if message < 0:
+            return None
+        return cls._int_to_bytes(message).decode("utf-8", errors="replace")
+
     @staticmethod
     def _extract_small_rsa_exponent(source: str) -> Optional[int]:
         match = re.search(r"\bself\.e\s*=\s*(\d+)", source)
@@ -744,6 +876,369 @@ class CryptographyAgent(BaseAgent):
         if value == 0:
             return b"\x00"
         return value.to_bytes((value.bit_length() + 7) // 8, "big")
+
+    def _try_rsa_partial_prime_leak_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
+        """Recover RSA when high bits of p are leaked and the low bits are small."""
+        for file_path in files:
+            path = Path(file_path)
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read RSA partial-prime file %s: %s", path, exc)
+                continue
+
+            params = self._extract_rsa_partial_prime_params(text)
+            if not params:
+                continue
+
+            n = params["n"]
+            e = params.get("e", 65537)
+            p_high = params["p_high"]
+            c = params["c"]
+            unknown_bits = self._infer_zeroed_low_bits(p_high, text)
+            if not unknown_bits or unknown_bits <= 0:
+                steps.append(f"  Found RSA partial-prime fields in {path.name}, but could not infer unknown low-bit count.")
+                continue
+
+            steps.append(
+                f"  Detected RSA partial-prime leak in {path.name}: "
+                f"recovering {unknown_bits} unknown low bits of p."
+            )
+            root = self._coppersmith_linear_factor_root(n, p_high, 1 << unknown_bits, steps)
+            if root is None:
+                continue
+
+            p = p_high + root
+            if p <= 1 or n % p != 0:
+                steps.append("  Coppersmith returned a candidate, but it did not divide n.")
+                continue
+
+            q = n // p
+            phi = (p - 1) * (q - 1)
+            try:
+                d = pow(e, -1, phi)
+            except ValueError:
+                steps.append("  Recovered factors but could not invert RSA exponent.")
+                continue
+
+            plaintext = pow(c, d, n)
+            raw = plaintext.to_bytes((n.bit_length() + 7) // 8, "big")
+            message = self._strip_pkcs1_v15_padding(raw) or raw
+            decoded = message.decode("utf-8", errors="replace")
+            steps.append("  Factored RSA modulus from leaked high bits and decrypted ciphertext.")
+            return decoded
+
+        return None
+
+    def _try_threebyte_rotate_xor_cipher_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
+        source_files = [Path(f) for f in files if str(f).lower().endswith(".py")]
+        data_files = [Path(f) for f in files if not str(f).lower().endswith(".py")]
+        if not source_files or not data_files:
+            return None
+
+        for source_path in source_files:
+            try:
+                source = source_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read custom cipher source file %s: %s", source_path, exc)
+                continue
+
+            if not self._looks_like_threebyte_rotate_xor_cipher(source):
+                continue
+
+            prefix = self._extract_flag_prefix_from_source(source) or "SVIUSCG{"
+            for data_path in data_files:
+                ciphertext = self._read_first_hex_blob(data_path)
+                if not ciphertext:
+                    continue
+                if len(ciphertext) < len(prefix) + 1:
+                    continue
+
+                steps.append(
+                    "  Detected 3-byte rotate/XOR custom cipher in "
+                    f"{source_path.name}; inverting {data_path.name} with Z3."
+                )
+                plaintext = self._solve_threebyte_rotate_xor_cipher(ciphertext, prefix, steps)
+                if plaintext:
+                    return plaintext
+
+        return None
+
+    @staticmethod
+    def _looks_like_threebyte_rotate_xor_cipher(source: str) -> bool:
+        compact = re.sub(r"\s+", "", source)
+        required = [
+            "int.from_bytes(key,\"big\")",
+            "range(0,len(flag)-2,3)",
+            "index%8",
+            "&0xff",
+            "&0xffffff",
+            "th&0x07",
+            "flag.hex()",
+        ]
+        return all(item in compact for item in required)
+
+    @staticmethod
+    def _extract_flag_prefix_from_source(source: str) -> Optional[str]:
+        for prefix in KNOWN_FLAG_PREFIXES:
+            if prefix in source:
+                return prefix
+        match = re.search(r"b[\"']([A-Za-z0-9_-]+\{)", source)
+        if match:
+            return match.group(1)
+        return None
+
+    @staticmethod
+    def _read_first_hex_blob(path: Path) -> Optional[bytes]:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception as exc:
+            logger.debug("Could not read custom cipher output file %s: %s", path, exc)
+            return None
+
+        candidates = re.findall(r"\b[0-9a-fA-F]{16,}\b", text)
+        if not candidates:
+            return None
+        blob = max(candidates, key=len)
+        if len(blob) % 2 != 0:
+            return None
+        try:
+            return bytes.fromhex(blob)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _solve_threebyte_rotate_xor_cipher(ciphertext: bytes, prefix: str, steps: List[str]) -> Optional[str]:
+        try:
+            import z3  # type: ignore
+        except Exception as exc:
+            steps.append(f"  Z3 unavailable for custom-cipher inversion: {exc}")
+            return None
+
+        length = len(ciphertext)
+        key32 = z3.BitVec("threebyte_key32", 32)
+        round_keys = []
+        key_state = z3.ZeroExt(32, key32)
+        for _round in range(8):
+            round_keys.append(key_state)
+            key_state = z3.LShR(key_state, 3) | (key_state << 61)
+
+        state = [z3.BitVecVal(byte, 8) for byte in ciphertext]
+        solver = z3.Solver()
+        solver.set("timeout", 30_000)
+        mask24 = z3.BitVecVal((1 << 24) - 1, 24)
+
+        def rol24_const(value, rotation: int):
+            return ((value << rotation) | z3.LShR(value, 24 - rotation)) & mask24
+
+        for round_index in range(7, -1, -1):
+            new_state = state[:]
+            key_for_round = round_keys[round_index]
+            for index in range(0, length - 2, 3):
+                rotated = (
+                    (z3.ZeroExt(16, state[index]) << 16)
+                    | (z3.ZeroExt(16, state[index + 1]) << 8)
+                    | z3.ZeroExt(16, state[index + 2])
+                )
+                rotation = z3.BitVec(f"threebyte_r_{round_index}_{index}", 24)
+                solver.add(z3.ULE(rotation, 7))
+
+                candidate = z3.BitVecVal(0, 24)
+                for rotation_value in range(8):
+                    candidate = z3.If(
+                        rotation == rotation_value,
+                        rol24_const(rotated, rotation_value),
+                        candidate,
+                    )
+                solver.add((candidate & z3.BitVecVal(7, 24)) == rotation)
+
+                key_byte = z3.Extract((index % 8) * 8 + 7, (index % 8) * 8, key_for_round)
+                new_state[index] = z3.Extract(23, 16, candidate)
+                new_state[index + 1] = z3.Extract(15, 8, candidate)
+                new_state[index + 2] = z3.Extract(7, 0, candidate) ^ key_byte
+            state = new_state
+
+        prefix_bytes = prefix.encode()
+        if len(prefix_bytes) >= length:
+            return None
+        for index, byte in enumerate(prefix_bytes):
+            solver.add(state[index] == byte)
+        solver.add(state[-1] == ord("}"))
+
+        body_alphabet = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+        for index in range(len(prefix_bytes), length - 1):
+            solver.add(z3.Or([state[index] == byte for byte in body_alphabet]))
+
+        result = solver.check()
+        if result != z3.sat:
+            steps.append(f"  Z3 custom-cipher inversion did not find a model: {result}.")
+            return None
+
+        model = solver.model()
+        plaintext = bytes(
+            model.eval(byte, model_completion=True).as_long()
+            for byte in state
+        )
+        decoded = plaintext.decode("utf-8", errors="replace")
+        key = model.eval(key32, model_completion=True).as_long()
+        steps.append(f"  Recovered custom-cipher key candidate: {key.to_bytes(4, 'big').hex()}.")
+        return decoded
+
+    @staticmethod
+    def _extract_rsa_partial_prime_params(text: str) -> Optional[Dict[str, int]]:
+        values = {
+            name: int(value)
+            for name, value in re.findall(r"^(n|e|p_high|c)\s*=\s*(\d+)", text, re.MULTILINE)
+        }
+        required = {"n", "p_high", "c"}
+        if required.issubset(values):
+            return values
+        return None
+
+    @staticmethod
+    def _infer_zeroed_low_bits(p_high: int, text: str) -> Optional[int]:
+        match = re.search(r"bottom\s+(\d+)\s+bits?\s+(?:are\s+)?(?:still\s+)?unknown", text, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+
+        if p_high <= 0:
+            return None
+        return (p_high & -p_high).bit_length() - 1
+
+    @staticmethod
+    def _strip_pkcs1_v15_padding(raw: bytes) -> Optional[bytes]:
+        if not raw.startswith(b"\x00\x02"):
+            return None
+        separator = raw.find(b"\x00", 2)
+        if separator < 0:
+            return None
+        return raw[separator + 1:]
+
+    @classmethod
+    def _coppersmith_linear_factor_root(
+        cls,
+        modulus: int,
+        known_high: int,
+        bound: int,
+        steps: List[str],
+    ) -> Optional[int]:
+        if _FPYLLL_IMPORT_ERROR is not None or _FPYLLL_INTEGER_MATRIX is None or _FPYLLL_LLL is None:
+            steps.append(
+                "  RSA partial-prime leak needs fpylll for lattice reduction; "
+                f"optional backend unavailable: {_FPYLLL_IMPORT_ERROR}"
+            )
+            return None
+
+        try:
+            from sympy import Poly, symbols
+        except Exception as exc:
+            steps.append(
+                "  RSA partial-prime leak needs sympy for polynomial recovery; "
+                f"optional backend unavailable: {exc}"
+            )
+            return None
+
+        x = symbols("x")
+        f = Poly(known_high + x, x, domain="ZZ")
+        for m, t in ((4, 5), (4, 6), (5, 5), (6, 6), (8, 4)):
+            root = cls._try_coppersmith_linear_params(
+                modulus,
+                f,
+                bound,
+                m,
+                t,
+                _FPYLLL_INTEGER_MATRIX,
+                _FPYLLL_LLL,
+                Poly,
+                x,
+            )
+            if root is not None:
+                steps.append(f"  Coppersmith small-root search succeeded with lattice parameters m={m}, t={t}.")
+                return root
+
+        steps.append("  Coppersmith small-root search did not recover a factor.")
+        return None
+
+    @staticmethod
+    def _try_coppersmith_linear_params(
+        modulus: int,
+        polynomial,
+        bound: int,
+        m: int,
+        t: int,
+        integer_matrix_cls,
+        lll_cls,
+        poly_cls,
+        symbol,
+    ) -> Optional[int]:
+        basis_polys = []
+        degree = polynomial.degree()
+        for i in range(m):
+            for j in range(degree):
+                basis_polys.append(
+                    poly_cls(
+                        (symbol ** j) * (modulus ** (m - i)) * (polynomial.as_expr() ** i),
+                        symbol,
+                        domain="ZZ",
+                    )
+                )
+        for j in range(t):
+            basis_polys.append(
+                poly_cls((symbol ** j) * (polynomial.as_expr() ** m), symbol, domain="ZZ")
+            )
+
+        max_degree = max(poly.degree() for poly in basis_polys)
+        matrix = integer_matrix_cls(len(basis_polys), max_degree + 1)
+        for row_idx, poly in enumerate(basis_polys):
+            for col_idx in range(max_degree + 1):
+                matrix[row_idx, col_idx] = int(poly.nth(col_idx)) * (bound ** col_idx)
+
+        lll_cls.reduction(matrix)
+        for row_idx in range(matrix.nrows):
+            row = [int(matrix[row_idx, col_idx]) for col_idx in range(matrix.ncols)]
+            reduced_poly = CryptographyAgent._scaled_row_to_poly(row, bound, poly_cls, symbol)
+            if reduced_poly is None or reduced_poly.degree() < 1:
+                continue
+            for root in CryptographyAgent._integer_roots(reduced_poly):
+                candidate = int(root)
+                if 0 <= candidate < bound and modulus % (int(polynomial.nth(0)) + candidate) == 0:
+                    return candidate
+        return None
+
+    @staticmethod
+    def _scaled_row_to_poly(row: List[int], bound: int, poly_cls, symbol):
+        expr = 0
+        for index, coeff in enumerate(row):
+            if not coeff:
+                continue
+            scale = bound ** index
+            if coeff % scale != 0:
+                return None
+            expr += (coeff // scale) * (symbol ** index)
+        if expr == 0:
+            return None
+        return poly_cls(expr, symbol, domain="ZZ")
+
+    @staticmethod
+    def _integer_roots(poly) -> List[int]:
+        roots = set()
+        try:
+            for factor, _exp in poly.factor_list()[1]:
+                if factor.degree() == 1:
+                    leading, constant = [int(value) for value in factor.all_coeffs()]
+                    if leading and (-constant) % leading == 0:
+                        roots.add((-constant) // leading)
+        except Exception as exc:
+            logger.debug("Coppersmith polynomial factorization failed: %s", exc)
+
+        try:
+            roots.update(int(root) for root in poly.ground_roots())
+        except Exception as exc:
+            logger.debug("Coppersmith ground_roots failed: %s", exc)
+
+        return list(roots)
 
     @staticmethod
     def _extract_affine_mod256_params(source: str) -> Optional[Tuple[int, int]]:

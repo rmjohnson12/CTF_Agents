@@ -569,6 +569,84 @@ def test_web_agent_solves_leaked_jwt_comment_chat_api():
     assert http.posts
 
 
+def test_web_agent_solves_client_side_hash_auth_impersonation():
+    base = "https://intern-net.test"
+    normal_hash = "$2b$12$normalnormalnormalnormalnormalnormalnormalnormalnormalno"
+    senior_hash = "$2b$12$seniorseniorseniorseniorseniorseniorseniorseniorsenio"
+    normal_cookie = base64.b64encode(normal_hash.encode()).decode()
+    senior_cookie = base64.b64encode(senior_hash.encode()).decode()
+
+    class InternNetHttpTool:
+        def fetch(self, url, **kwargs):
+            method = kwargs.get("method", "GET")
+            json_data = kwargs.get("json_data") or {}
+            cookies = kwargs.get("cookies") or {}
+            path = url.replace(base, "")
+
+            if path in ("", "/", "/login"):
+                body = """
+                <form id="login-form"></form>
+                <script src="/static/js/login.js"></script>
+                """
+                return HttpFetchResult(url, url, method, 200, {}, body, 0.1)
+            if path == "/static/js/login.js":
+                body = """
+                const hashRes = await fetch('/api/auth/hash', {method: 'POST'});
+                const isValid = await bcrypt.compare(password, hash);
+                const token = btoa(hash);
+                document.cookie = `auth_token=${token}; path=/; SameSite=Lax`;
+                window.location.href = '/announcements';
+                """
+                return HttpFetchResult(url, url, method, 200, {}, body, 0.1)
+            if path == "/api/register":
+                return HttpFetchResult(url, url, method, 200, {}, '{"success":true}', 0.1)
+            if path == "/api/auth/hash":
+                username = json_data.get("username")
+                if username and username.startswith("ctfagent_"):
+                    return HttpFetchResult(url, url, method, 200, {}, json.dumps({"hash": normal_hash}), 0.1)
+                if username == "alex.rivera":
+                    return HttpFetchResult(url, url, method, 200, {}, json.dumps({"hash": senior_hash}), 0.1)
+                return HttpFetchResult(url, url, method, 404, {}, '{"error":"User not found"}', 0.1)
+            if path == "/announcements":
+                if cookies.get("auth_token") == senior_cookie:
+                    body = "<span>Signed in as <strong>Alex Rivera</strong></span> SVIUSCG{hash_auth_solved}"
+                elif cookies.get("auth_token") == normal_cookie:
+                    body = """
+                    <span class="post-author">Alex Rivera</span>
+                    <span class="badge badge-senior">Senior Intern</span>
+                    <div class="locked-notice">Restricted to Senior Interns only.</div>
+                    """
+                else:
+                    body = "<a href='/login'>login</a>"
+                return HttpFetchResult(url, url, method, 200, {}, body, 0.1)
+            return HttpFetchResult(url, url, method, 404, {}, "not found", 0.1)
+
+        def fetch_content(self, url, **kwargs):
+            return HttpContentResult(url, url, "GET", 404, {}, b"", 0.1)
+
+    class FailBrowser:
+        def snapshot(self, url, cookies=None):
+            raise AssertionError("hash-auth playbook should return before browser snapshot")
+
+    agent = WebExploitationAgent(
+        http_tool=InternNetHttpTool(),
+        browser_tool=FailBrowser(),
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+    result = agent.solve_challenge({
+        "id": "intern_net",
+        "category": "web",
+        "url": base,
+        "description": "Intern portal web challenge.",
+        "files": [],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIUSCG{hash_auth_solved}"
+    assert any("Hash-auth playbook SUCCESS" in step for step in result["steps"])
+    assert result["artifacts"]["client_side_hash_auth"]["captured_sensitive_values"] is False
+
+
 def test_web_agent_solves_source_guided_public_incident_filter(tmp_path):
     source_dir = tmp_path / "incidental"
     source_dir.mkdir()

@@ -30,6 +30,8 @@ web3>=7.0.0
 # Cryptography
 cryptography>=41.0.0
 pycryptodome>=3.19.0
+fpylll>=0.6.4  # Lattice reduction for RSA partial-key/Coppersmith attacks
+cysignals>=1.12.6  # Runtime dependency for fpylll
 
 # Data processing
 pandas>=2.1.0

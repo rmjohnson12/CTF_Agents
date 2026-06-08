@@ -194,6 +194,83 @@ class TestIndexedXorPhrase:
 
 
 # ---------------------------------------------------------------------------
+# substitution-table bytecode VM verifier
+# ---------------------------------------------------------------------------
+
+class TestSubstitutionTableVm:
+    PROGRAM_HEX = (
+        "0118020a0803a7043a058a090110020a0803ad04d3051209010e020803c6044f0559090dcc0105020a0803ce04f305df"
+        "090d580107020a08037604fd0539090dc2010b0208033e04d705ee09011a020a08031a04b60528090103020a0803a704"
+        "c405b3090120020803e704f20584090d5b0126020a0803b804b7057a090116020a0803b004e3054d090def0104020803"
+        "3d04b4051f090112020a08032c0450055f090d9e010c020a08031e04b105b6090dcf01020208031704a305ee090d3e01"
+        "13020a0803b204c605e9090101020a08038704380586090d6001220208035b0486052b09011c020a0803a3047c05a809"
+        "0109020a080315046205340901060208030104bd05e7090b1c01c3c2c0c8cac1fec6bdc743cbc3cfc0cac163c697c703"
+        "cbc3d9c0c8cac1ebc646c754cbc3ddc0cac1a1c670c7adcbc3eac0c8cac116c68ac7dccbc91dc20d2b0e021702040206"
+        "092b0d010e0219022f021109760d0c0e021d021b021509710d130e02030224021809650d120e0228022d0229095b0d2f"
+        "0e0228022d021d09040d190e02110218020109c90d290e020c02170203097d0d2b0e021202060224099d0d040e021302"
+        "1b021509a70d170e0224022b020309cd0d040e02180211021309840d2d0e021d020c021b099b0d010e02120206021509"
+        "e30d290e02190228022f09cf0d120e02180229022409930d010e021b0219022809930d110e02170213022b09380d2d0e"
+        "0215021d020609790d2f0e0204020c020309dc0a250b"
+    )
+    TABLE_HEX = (
+        "7299d85f6a4430f2f8c10b3d78e99095628b5dc71432a54a76931192592bcbc398d99f7d58f4bb1ffb8ad3c217e4caf3"
+        "3bfa34be8c8f2c2e0db4067a500ab163b01ea75ea23e7771187be05602afa11ccfbf9efc61f18efe3355944eaad139e2"
+        "41ba0146ab20dc05ad9607a0db8069ded54c3aedb5f7132615654029aee8f5856e8174ef9bf9910986fdeef62a53a897"
+        "ddb8e1a916080ece359a47b282eb89009c7fd70fbc88f0525ad44224dfe64884102767794d126f9d4fb745c6285737c8"
+        "b6046038a4b3a3ecd23170c97ce76864513c1903ffb9dad05b6da66c5487ea49c043bd36e32f1a2dcd23c58d0cd6211b"
+        "cc737e224b3f1d5cacc4836b256675e5"
+    )
+
+    def test_recovers_flag_from_substitution_table_vm(self):
+        candidate = ReverseEngineeringAgent._recover_substitution_table_vm_flag(
+            bytes.fromhex(self.PROGRAM_HEX),
+            bytes.fromhex(self.TABLE_HEX),
+        )
+
+        assert candidate == "SVIUSCG{by3_buddy_h0p3_yu0_f1nd_y0ur_d4d}"
+
+    def test_normalizes_legacy_uscg_flag_prefix_for_submission(self):
+        candidate = ReverseEngineeringAgent._normalize_uscg_submission_candidate(
+            "SVIUSCG{by3_buddy_h0p3_yu0_f1nd_y0ur_d4d}"
+        )
+
+        assert candidate == "SVBRG{by3_buddy_h0p3_yu0_f1nd_y0ur_d4d}"
+
+    def test_lists_uscg_submission_candidates_for_legacy_prefix(self):
+        candidates = ReverseEngineeringAgent._uscg_submission_candidates(
+            "SVIUSCG{by3_buddy_h0p3_yu0_f1nd_y0ur_d4d}"
+        )
+
+        assert candidates == [
+            "SVIUSCG{by3_buddy_h0p3_yu0_f1nd_y0ur_d4d}",
+            "SVBRG{by3_buddy_h0p3_yu0_f1nd_y0ur_d4d}",
+            "SVIBGR{by3_buddy_h0p3_yu0_f1nd_y0ur_d4d}",
+        ]
+
+
+def test_reverse_strings_llm_fallback_is_opt_in(tmp_path, monkeypatch):
+    class FailIfCalledReasoner:
+        is_available = True
+
+        def _call_llm(self, _prompt):
+            raise AssertionError("LLM fallback should be opt-in")
+
+    monkeypatch.delenv("CTF_AGENTS_ENABLE_REVERSE_LLM_FALLBACK", raising=False)
+    sample = tmp_path / "sample.dat"
+    sample.write_bytes(b"plain diagnostic string without a flag\n")
+    agent = ReverseEngineeringAgent(reasoner=FailIfCalledReasoner())
+
+    result = agent.solve_challenge({
+        "id": "reverse_no_llm",
+        "category": "reverse",
+        "files": [str(sample)],
+    })
+
+    assert result["status"] == "attempted"
+    assert any("Skipping reverse LLM strings fallback" in step for step in result["steps"])
+
+
+# ---------------------------------------------------------------------------
 # _try_numeric_encoding
 # ---------------------------------------------------------------------------
 

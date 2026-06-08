@@ -36,3 +36,9 @@ def test_no_flags():
 def test_ignores_single_letter_brace_fragments():
     text = 'input(f"\\n{prompt_text}").strip()'
     assert extract_flags(text) == []
+
+
+def test_ignores_redacted_placeholder_flags():
+    text = 'flag_input = b"SVIUSCG{REDACTED}"'
+    assert extract_flags(text) == []
+    assert find_first_flag(text) is None

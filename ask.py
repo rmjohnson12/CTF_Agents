@@ -68,6 +68,10 @@ def _normalize_path(p: str) -> str:
     if os.path.exists(expanded):
         return expanded
 
+    corrected = _correct_common_home_path_typo(p)
+    if corrected:
+        return corrected
+
     # LLMs sometimes strip the leading "~/" and return Downloads/foo from a
     # prompt that said ~/Downloads/foo. Prefer the user's real Downloads path.
     if not os.path.isabs(p) and p.startswith("Downloads/"):
@@ -76,6 +80,23 @@ def _normalize_path(p: str) -> str:
             return os.path.abspath(home_download)
 
     return expanded
+
+
+def _correct_common_home_path_typo(path_text: str) -> Optional[str]:
+    """Recover common home-folder typos only when the corrected path exists."""
+    raw = str(path_text).strip()
+    replacements = {
+        "~/Downlaods/": "~/Downloads/",
+        "~/Downlaods": "~/Downloads",
+        "~/Donwloads/": "~/Downloads/",
+        "~/Donwloads": "~/Downloads",
+    }
+    for wrong, right in replacements.items():
+        if raw == wrong or raw.startswith(wrong):
+            candidate = os.path.abspath(os.path.expanduser(right + raw[len(wrong):]))
+            if os.path.exists(candidate):
+                return candidate
+    return None
 
 def _normalize_url(url: Optional[str]) -> Optional[str]:
     if not url:
@@ -119,8 +140,13 @@ def _merge_heuristic_context(
     # trust it over the LLM — the LLM can misclassify based on keywords alone.
     _HEURISTIC_WINS = {"reverse", "pwn", "hardware", "forensics", "blockchain"}
     heuristic_cat = heuristic.get("category", "")
-    llm_cat = challenge.get("category", "")
+    heuristic_description = heuristic.get("description") or ""
     if heuristic_cat in _HEURISTIC_WINS and heuristic.get("files"):
+        challenge["category"] = heuristic_cat
+    elif heuristic_cat in _HEURISTIC_WINS and _instruction_declares_category(
+        heuristic_description,
+        heuristic_cat,
+    ):
         challenge["category"] = heuristic_cat
     elif (
         heuristic.get("url")
@@ -130,7 +156,6 @@ def _merge_heuristic_context(
         challenge["category"] = "web"
 
     description = challenge.get("description") or ""
-    heuristic_description = heuristic.get("description") or ""
     if heuristic.get("url") and heuristic.get("url") not in description:
         challenge["description"] = f"{description}\n\nOriginal instruction: {heuristic_description}".strip()
 
@@ -157,7 +182,50 @@ def _heuristic_mapping_is_actionable(heuristic: Dict[str, Any]) -> bool:
     category = str(heuristic.get("category") or "").lower()
     if category in {"", "unknown", "misc"}:
         return False
+    if _instruction_declares_category(str(heuristic.get("description") or ""), category):
+        return True
     return bool(heuristic.get("files") or heuristic.get("url") or heuristic.get("target"))
+
+
+def _instruction_declares_category(text: str, category: str) -> bool:
+    return _declared_category_from_instruction(text) == category
+
+
+def _declared_category_from_instruction(text: str) -> Optional[str]:
+    lowered = text.lower()
+    declared_patterns = {
+        "reverse": [
+            r"\breversing\s+challenge\b",
+            r"\breverse[-\s]+engineering\s+challenge\b",
+            r"\brev\s+challenge\b",
+            r"\bcrackme\b",
+            r"\bdecompile\b",
+            r"\bdisassemble\b",
+            r"\breverse\s+engineer\b",
+        ],
+        "pwn": [r"\bpwn\s+challenge\b", r"\bbinary\s+exploitation\s+challenge\b"],
+        "hardware": [r"\bhardware\s+challenge\b", r"\bchip\s+challenge\b"],
+        "blockchain": [r"\bblockchain\s+challenge\b", r"\bsmart\s+contract\s+challenge\b"],
+        "secure_coding": [r"\bsecure[-\s]+coding\s+challenge\b"],
+        "web": [r"\bweb\s+challenge\b"],
+        "forensics": [r"\bforensics\s+challenge\b"],
+        "crypto": [r"\bcrypto\s+challenge\b", r"\bcryptography\s+challenge\b"],
+        "log": [r"\blog\s+challenge\b"],
+    }
+    for category in (
+        "secure_coding",
+        "blockchain",
+        "hardware",
+        "reverse",
+        "pwn",
+        "crypto",
+        "forensics",
+        "web",
+        "log",
+    ):
+        if any(re.search(pattern, lowered) for pattern in declared_patterns.get(category, [])):
+            return category
+    return None
 
 
 def _should_disable_llm_for_direct_cli(
@@ -340,7 +408,6 @@ def _heuristic_challenge_from_instruction(
 
     forensics_terms = ["hidden", "artifact", "forensics", "extract", "embedded", "strings"]
 
-    log_terms = ["log", "auth", "ssh", "brute force", "failed password", "authentication"]
     coding_terms = ["calculate", "sum", "prime", "algorithm", "program", "script", "format ctf"]
     web_terms = ["jwt", "session", "cookie", "token", ".cloud", "http", "portal", "endpoint", "url", "site", "web", "docker", "dockerfile", "container"]
     pwn_terms = ["pwn", "overflow", "rop", "ret2libc", "shellcode", "buffer overflow"]
@@ -365,8 +432,21 @@ def _heuristic_challenge_from_instruction(
         re.search(r"\b" + re.escape(term) + r"\b", lowered_input)
         for term in hardware_terms
     )
+    has_log_term = any(
+        re.search(pattern, lowered_input)
+        for pattern in (
+            r"\blog(?:s|file| analysis)?\b",
+            r"\bauth(?:entication)?(?:\s+log|\s+events?)?\b",
+            r"\bssh\b",
+            r"\bbrute force\b",
+            r"\bfailed password\b",
+        )
+    )
+    declared_category = _declared_category_from_instruction(user_input)
 
-    if any(term in lowered_input for term in secure_coding_terms):
+    if declared_category:
+        category = declared_category
+    elif any(term in lowered_input for term in secure_coding_terms):
         category = "secure_coding"
     elif (
         any(f.lower().endswith(".sol") for f in challenge_files)
@@ -384,7 +464,7 @@ def _heuristic_challenge_from_instruction(
     elif any(f.lower().endswith((".exe", ".pck", ".gdc")) for f in challenge_files):
         # PE/Windows binaries are always reversing — never pwn or log
         category = "reverse"
-    elif any(term in lowered_input for term in log_terms):
+    elif has_log_term:
         category = "log"
     elif (
         any(f.lower().endswith(('.pdf', '.pcap', '.pcapng')) for f in challenge_files)

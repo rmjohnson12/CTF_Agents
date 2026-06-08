@@ -10,6 +10,7 @@ import ctypes
 import hashlib
 import http.client
 import io
+import itertools
 import logging
 import os
 import re
@@ -143,6 +144,7 @@ class ReverseEngineeringAgent(BaseAgent):
             "encryptor_reversal",
             "crackme_rodata_extraction",
             "indexed_xor_phrase",
+            "substitution_table_vm",
             "godot_game_loader",
         ]
 
@@ -217,33 +219,39 @@ class ReverseEngineeringAgent(BaseAgent):
             if result:
                 return result
 
-        # --- Strategy 4: indexed XOR/add phrase verifier ---
+        # --- Strategy 4: substitution-table bytecode VM verifier ---
+        for binary in binaries:
+            result = self._try_substitution_table_vm(binary, challenge, steps)
+            if result:
+                return result
+
+        # --- Strategy 5: indexed XOR/add phrase verifier ---
         for binary in binaries:
             result = self._try_indexed_xor_phrase(binary, challenge, steps)
             if result:
                 return result
 
-        # --- Strategy 5: .NET assembly with encrypted embedded resource ---
+        # --- Strategy 6: .NET assembly with encrypted embedded resource ---
         for binary in binaries:
             if is_pe_binary(binary):
                 result = self._try_dotnet_resource(binary, challenge, steps)
                 if result:
                     return result
 
-        # --- Strategy 6: AES-NI self-decrypting shellcode (PE) ---
+        # --- Strategy 7: AES-NI self-decrypting shellcode (PE) ---
         for binary in binaries:
             if is_pe_binary(binary):
                 result = self._try_aes_ni_shellcode(binary, challenge, steps)
                 if result:
                     return result
 
-        # --- Strategy 7: source code constraint solving ---
+        # --- Strategy 8: source code constraint solving ---
         for file_path in source_files:
             result = self._try_source_analysis(file_path, challenge, steps)
             if result:
                 return result
 
-        # --- Strategy 8: strings + LLM on any remaining file ---
+        # --- Strategy 9: strings + optional LLM on any remaining file ---
         for file_path in effective_files:
             steps.append(f"Running strings on {file_path}")
             try:
@@ -256,7 +264,11 @@ class ReverseEngineeringAgent(BaseAgent):
                 if flag:
                     steps.append(f"Flag found in strings output: {flag}")
                     return self._result(challenge, "solved", steps, flag=flag)
-                if self.reasoner.is_available and printable.strip():
+                if (
+                    self.reasoner.is_available
+                    and printable.strip()
+                    and os.getenv("CTF_AGENTS_ENABLE_REVERSE_LLM_FALLBACK") == "1"
+                ):
                     steps.append("Requesting LLM analysis of strings output...")
                     prompt = (
                         f"Binary strings output from a CTF reverse engineering challenge "
@@ -272,6 +284,11 @@ class ReverseEngineeringAgent(BaseAgent):
                             return self._result(challenge, "solved", steps, flag=flag)
                     except Exception as exc:
                         steps.append(f"LLM unavailable: {exc}")
+                elif self.reasoner.is_available and printable.strip():
+                    steps.append(
+                        "Skipping reverse LLM strings fallback by default; "
+                        "set CTF_AGENTS_ENABLE_REVERSE_LLM_FALLBACK=1 to enable."
+                    )
             except Exception as exc:
                 logger.debug("strings failed on %s: %s", file_path, exc)
                 steps.append(f"strings error on {file_path}: {exc}")
@@ -1571,7 +1588,357 @@ class ReverseEngineeringAgent(BaseAgent):
         return None
 
     # ------------------------------------------------------------------
-    # Strategy 4: indexed XOR/add phrase verifier
+    # Strategy 4: substitution-table bytecode VM verifier
+    # ------------------------------------------------------------------
+
+    def _try_substitution_table_vm(
+        self,
+        binary: str,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        steps.append("Checking for substitution-table bytecode VM verifier.")
+        try:
+            sections = self._parse_elf_sections(Path(binary).read_bytes())
+        except Exception as exc:
+            steps.append(f"ELF section parsing failed: {exc}")
+            return None
+
+        data_section = sections.get(".data")
+        rodata_section = sections.get(".rodata")
+        if not data_section or not rodata_section:
+            return None
+
+        rodata = rodata_section["data"]
+        table_offsets = [0x78]
+        table_offsets.extend(
+            idx for idx in range(0, max(0, len(rodata) - 256))
+            if rodata[idx + 256:idx + 263] == b"yes\nno\n"
+        )
+
+        seen_offsets: set[int] = set()
+        for table_offset in table_offsets:
+            if table_offset in seen_offsets:
+                continue
+            seen_offsets.add(table_offset)
+            table = rodata[table_offset:table_offset + 256]
+            if len(table) != 256:
+                continue
+
+            candidate = self._recover_substitution_table_vm_flag(data_section["data"], table)
+            if not candidate:
+                continue
+
+            steps.append(f"Recovered substitution-table VM candidate: {candidate}")
+            submission_candidate = self._normalize_uscg_submission_candidate(candidate)
+            artifacts: Dict[str, Any] = {}
+            if submission_candidate != candidate:
+                steps.append(f"VM accepted input: {candidate}")
+                steps.append(f"Normalized US Cyber Games submission candidate: {submission_candidate}")
+                artifacts["vm_accepted_input"] = candidate
+                artifacts["submission_candidates"] = self._uscg_submission_candidates(candidate)
+
+            flag = find_first_flag(submission_candidate)
+            if flag:
+                return self._result(
+                    challenge,
+                    "solved",
+                    steps,
+                    flag=flag,
+                    artifacts=artifacts or None,
+                )
+
+        return None
+
+    @staticmethod
+    def _normalize_uscg_submission_candidate(candidate: str) -> str:
+        """Normalize legacy USCG crackme prefixes to a likely BGR submission prefix."""
+        if candidate.startswith("SVIUSCG{"):
+            return "SVBRG{" + candidate[len("SVIUSCG{"):]
+        return candidate
+
+    @staticmethod
+    def _uscg_submission_candidates(candidate: str) -> List[str]:
+        if not candidate.startswith("SVIUSCG{"):
+            return [candidate]
+        body = candidate[len("SVIUSCG{"):]
+        return [
+            candidate,
+            "SVBRG{" + body,
+            "SVIBGR{" + body,
+        ]
+
+    @staticmethod
+    def _parse_elf_sections(data: bytes) -> Dict[str, Dict[str, Any]]:
+        """Return ELF64 little-endian sections keyed by name."""
+        if len(data) < 0x40 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+            return {}
+
+        e_shoff = struct.unpack_from("<Q", data, 0x28)[0]
+        e_shentsize = struct.unpack_from("<H", data, 0x3A)[0]
+        e_shnum = struct.unpack_from("<H", data, 0x3C)[0]
+        e_shstrndx = struct.unpack_from("<H", data, 0x3E)[0]
+        if not e_shoff or not e_shentsize or e_shstrndx >= e_shnum:
+            return {}
+
+        raw_sections = []
+        for index in range(e_shnum):
+            offset = e_shoff + index * e_shentsize
+            if offset + 64 > len(data):
+                return {}
+            raw_sections.append(struct.unpack_from("<IIQQQQIIQQ", data, offset))
+
+        shstr = raw_sections[e_shstrndx]
+        shstr_data = data[shstr[4]:shstr[4] + shstr[5]]
+        sections: Dict[str, Dict[str, Any]] = {}
+        for section in raw_sections:
+            name_offset = section[0]
+            end = shstr_data.find(b"\0", name_offset)
+            if end < 0:
+                continue
+            name = shstr_data[name_offset:end].decode("utf-8", errors="replace")
+            file_offset = section[4]
+            size = section[5]
+            sections[name] = {
+                "addr": section[3],
+                "offset": file_offset,
+                "size": size,
+                "data": data[file_offset:file_offset + size],
+            }
+        return sections
+
+    @staticmethod
+    def _recover_substitution_table_vm_flag(program: bytes, table: bytes) -> Optional[str]:
+        """Solve the small substitution-table VM used by stripped crackmes."""
+        if len(program) < 16 or len(table) != 256:
+            return None
+
+        try:
+            import z3  # type: ignore
+        except Exception:
+            return None
+
+        class Expr:
+            def __init__(self, fn, deps: set[int]):
+                self.fn = fn
+                self.deps = set(deps)
+
+        def expr_var(index: int) -> Expr:
+            return Expr(lambda values, index=index: values[index], {index})
+
+        def expr_op(current: Expr, fn) -> Expr:
+            return Expr(
+                lambda values, current=current, fn=fn: fn(current.fn(values)) & 0xFF,
+                set(current.deps),
+            )
+
+        concrete_program = bytearray(program)
+        assigned: List[Optional[int]] = [None] * 128
+        pc = 0
+        r11 = 0
+        r12 = 0
+        expr = Expr(lambda values: 0, set())
+        printable = list(range(0x20, 0x7F)) + [0x0A, 0x00]
+
+        while pc < len(concrete_program):
+            opcode_pc = pc
+            opcode = concrete_program[pc]
+            pc += 1
+            if opcode == 0:
+                return None
+            if opcode == 1:
+                r11 = concrete_program[pc]
+                pc += 1
+            elif opcode == 2:
+                expr = expr_var(r11)
+            elif opcode == 3:
+                value = concrete_program[pc]
+                pc += 1
+                expr = expr_op(expr, lambda item, value=value: item ^ value)
+            elif opcode == 4:
+                value = concrete_program[pc]
+                pc += 1
+                expr = expr_op(expr, lambda item, value=value: item + value)
+            elif opcode == 5:
+                expected = concrete_program[pc]
+                pc += 1
+                unresolved = [idx for idx in expr.deps if assigned[idx] is None]
+                if len(unresolved) > 2:
+                    pc = opcode_pc
+                    break
+                matches = []
+                for values in itertools.product(printable, repeat=len(unresolved)):
+                    candidate = list(assigned)
+                    for idx, value in zip(unresolved, values):
+                        candidate[idx] = value
+                    try:
+                        if expr.fn(candidate) == expected:
+                            matches.append(candidate)
+                    except Exception:
+                        continue
+                if len(matches) != 1:
+                    pc = opcode_pc
+                    break
+                assigned = matches[0]
+            elif opcode == 6:
+                r11 = concrete_program[pc]
+                pc += 1
+                if assigned[r11] is None:
+                    assigned[r11] = 0x0A
+                elif assigned[r11] not in {0x00, 0x0A}:
+                    return None
+            elif opcode == 7:
+                return ReverseEngineeringAgent._bytes_to_flag_candidate(assigned)
+            elif opcode == 8:
+                expr = expr_op(expr, lambda item, r12=r12: item ^ r12)
+            elif opcode == 9:
+                if assigned[r11] is None:
+                    return None
+                r12 = table[(r12 ^ assigned[r11]) & 0xFF]
+            elif opcode == 10:
+                expr = expr_op(expr, lambda item, table=table: table[item])
+            elif opcode == 11:
+                if pc + 2 > len(concrete_program):
+                    return None
+                size = concrete_program[pc] | (concrete_program[pc + 1] << 8)
+                pc += 2
+                if pc + size > len(concrete_program):
+                    return None
+                for idx in range(size):
+                    concrete_program[pc + idx] ^= r12
+            elif opcode == 12:
+                pc += 3
+            elif opcode == 13:
+                pc += 1
+            elif opcode == 14:
+                index = concrete_program[pc]
+                pc += 1
+
+                def mixed(values, current=expr, index=index, table=table):
+                    item = current.fn(values)
+                    shifted = (item << 1) & 0xFF
+                    if item & 0x80:
+                        shifted ^= 0x4B
+                    return table[(shifted ^ item ^ values[index]) & 0xFF]
+
+                expr = Expr(mixed, set(expr.deps) | {index})
+            else:
+                return None
+
+        return ReverseEngineeringAgent._solve_substitution_vm_symbolically(
+            bytearray(program),
+            table,
+            assigned,
+        )
+
+    @staticmethod
+    def _solve_substitution_vm_symbolically(
+        program: bytearray,
+        table: bytes,
+        assigned: List[Optional[int]],
+    ) -> Optional[str]:
+        try:
+            import z3  # type: ignore
+        except Exception:
+            return None
+
+        solver = z3.Solver()
+        variables = [z3.BitVec(f"vm_input_{idx}", 8) for idx in range(128)]
+        for idx, value in enumerate(assigned):
+            if value is not None:
+                solver.add(variables[idx] == value)
+
+        allowed_bytes = list(range(0x20, 0x7F)) + [0x00, 0x0A]
+        for idx in range(64):
+            if assigned[idx] is None:
+                solver.add(z3.Or([variables[idx] == value for value in allowed_bytes]))
+
+        def table_lookup(item):
+            out = z3.BitVecVal(table[255], 8)
+            for idx in range(254, -1, -1):
+                out = z3.If(item == idx, z3.BitVecVal(table[idx], 8), out)
+            return out
+
+        def mix(item, index: int):
+            shifted = (item << 1) & 0xFF
+            reduced = z3.If((item & 0x80) != 0, shifted ^ z3.BitVecVal(0x4B, 8), shifted)
+            return table_lookup(reduced ^ item ^ variables[index])
+
+        pc = 0
+        r11 = 0
+        r12 = 0
+        expr = z3.BitVecVal(0, 8)
+        while pc < len(program):
+            opcode = program[pc]
+            pc += 1
+            if opcode == 0:
+                return None
+            if opcode == 1:
+                r11 = program[pc]
+                pc += 1
+            elif opcode == 2:
+                expr = variables[r11]
+            elif opcode == 3:
+                expr = expr ^ program[pc]
+                pc += 1
+            elif opcode == 4:
+                expr = expr + program[pc]
+                pc += 1
+            elif opcode == 5:
+                solver.add(expr == program[pc])
+                pc += 1
+            elif opcode == 6:
+                r11 = program[pc]
+                pc += 1
+                solver.add(z3.Or(variables[r11] == 0, variables[r11] == 0x0A))
+            elif opcode == 7:
+                break
+            elif opcode == 8:
+                expr = expr ^ r12
+            elif opcode == 9:
+                if assigned[r11] is None:
+                    return None
+                r12 = table[(r12 ^ assigned[r11]) & 0xFF]
+            elif opcode == 10:
+                expr = table_lookup(expr)
+            elif opcode == 11:
+                size = program[pc] | (program[pc + 1] << 8)
+                pc += 2
+                if pc + size > len(program):
+                    return None
+                for idx in range(size):
+                    program[pc + idx] ^= r12
+            elif opcode == 12:
+                left, right, expected = program[pc], program[pc + 1], program[pc + 2]
+                pc += 3
+                solver.add((variables[left] ^ variables[right]) == expected)
+            elif opcode == 13:
+                pc += 1
+            elif opcode == 14:
+                index = program[pc]
+                pc += 1
+                expr = mix(expr, index)
+            else:
+                return None
+
+        if solver.check() != z3.sat:
+            return None
+        model = solver.model()
+        solved = [
+            model.eval(variables[idx], model_completion=True).as_long()
+            for idx in range(128)
+        ]
+        return ReverseEngineeringAgent._bytes_to_flag_candidate(solved)
+
+    @staticmethod
+    def _bytes_to_flag_candidate(values: List[Optional[int]]) -> Optional[str]:
+        raw = bytes((value or 0) & 0xFF for value in values)
+        candidate = raw.split(b"\0", 1)[0].split(b"\n", 1)[0].decode("utf-8", errors="replace")
+        flag = find_first_flag(candidate)
+        return flag or None
+
+    # ------------------------------------------------------------------
+    # Strategy 5: indexed XOR/add phrase verifier
     # ------------------------------------------------------------------
 
     def _try_indexed_xor_phrase(

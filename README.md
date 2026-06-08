@@ -48,7 +48,10 @@ the solving loop.
   For no-PIE binaries with a bundled `libc.so.6`, it can perform remote
   ret2libc by leaking `puts`, computing the libc base, launching
   `system("/bin/sh")`, and reading common flag paths. Direct pwn runs execute
-  on the main thread so pwntools signal handling works reliably.
+  on the main thread so pwntools signal handling works reliably. Remote-only
+  UDS-over-TCP ECU prompts can use diagnostic sessions, security access,
+  firmware download, transfer, reset, and same-stream payload output to recover
+  flags from authorized automotive-style targets.
 - Blockchain smart-contract challenges using Solidity source, HTB-style
   `connection_info` endpoints, JSON-RPC targets, Web3 transactions, and
   deterministic exploit templates for common setup/target patterns such as
@@ -225,6 +228,11 @@ No API key is required for the default local Ollama setup.
   enabled, a bundled `libc.so.6`, and a remote `host:port` can be exploited
   without local Linux execution. The pwn agent leaks `puts`, computes the libc
   base, builds a `system("/bin/sh")` chain, and retrieves common flag paths.
+- **UDS-over-TCP ECU Pwn Playbook**: Automotive diagnostic prompts mentioning
+  UDS/ECU targets can perform length-prefixed UDS requests, unlock the two
+  security levels, upload a minimal firmware payload with the ECU checksum,
+  trigger diagnostic reset, and keep the same TCP stream open to capture
+  payload output.
 - **Hardware Logic Agent**: Hardware/chip/circuit prompts can route to a
   specialist that combines challenge text, local files, images, and CSV tables
   to derive logic and decode output streams. Saleae `.sal` archives are

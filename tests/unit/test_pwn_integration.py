@@ -738,6 +738,106 @@ def test_send_staged_shell_remote_blocks_non_allowlisted_host(monkeypatch):
     assert any("blocked by network policy" in s for s in steps)
 
 
+def test_pwn_agent_solves_uds_firmware_payload_same_stream(monkeypatch):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "challenge.ctf.uscybergames.com")
+
+    class FakeUDSSocket:
+        def __init__(self):
+            self.out = bytearray()
+            self.requests = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def settimeout(self, _timeout):
+            return None
+
+        def sendall(self, data):
+            size = int.from_bytes(data[:2], "big")
+            request = data[2:2 + size]
+            self.requests.append(request)
+            self._handle_request(request)
+
+        def recv(self, size):
+            if not self.out:
+                return b""
+            chunk = bytes(self.out[:size])
+            del self.out[:size]
+            return chunk
+
+        def _queue_frame(self, payload):
+            self.out.extend(len(payload).to_bytes(2, "big") + payload)
+
+        def _handle_request(self, request):
+            if request == b"\x10\x03":
+                self._queue_frame(b"\x50\x03\x00\x19\x01\xf4")
+            elif request == b"\x27\x01":
+                self._queue_frame(b"\x67\x01\x12\x34")
+            elif request == b"\x27\x02\x01\x03":
+                self._queue_frame(b"\x67\x02")
+            elif request == b"\x27\x03":
+                self._queue_frame(b"\x67\x03\x00\x01")
+            elif request == b"\x27\x04\x41\xc6":
+                self._queue_frame(b"\x67\x04")
+            elif request == b"\x10\x02":
+                self._queue_frame(b"\x50\x02\x00\x19\x01\xf4")
+            elif request.startswith(b"\x34\x00\x22\x40\x00"):
+                self._queue_frame(b"\x74\x40\x04\x00")
+            elif request.startswith(b"\x36\x01#!/bin/sh\ncat /flag.txt\n"):
+                payload = request[2:]
+                expected_checksum = ((sum(payload[:-2]) & 0xffff) ^ 0xbeef).to_bytes(2, "big")
+                assert payload[-2:] == expected_checksum
+                self._queue_frame(b"\x76\x01")
+            elif request == b"\x37":
+                self._queue_frame(b"\x77")
+            elif request == b"\x11\x01":
+                self._queue_frame(b"\x51\x01")
+                self.out.extend(b"SVIUSCG{uds_same_stream_flag}")
+            else:
+                self._queue_frame(b"\x7f" + request[:1] + b"\x11")
+
+    fake_socket = FakeUDSSocket()
+
+    def fake_connect(endpoint, timeout=0):
+        assert endpoint == ("challenge.ctf.uscybergames.com", 36539)
+        assert timeout == 8
+        return fake_socket
+
+    monkeypatch.setattr("agents.specialists.pwn.pwn_agent.socket.create_connection", fake_connect)
+
+    result = PwnAgent().solve_challenge({
+        "id": "uds_ecu",
+        "category": "pwn",
+        "description": (
+            "Interact directly with the ECU using UDS over TCP. "
+            "The ECU exposes 0x4000 bytes over the diagnostic interface. "
+            "nc challenge.ctf.uscybergames.com 36539"
+        ),
+        "connection_info": "challenge.ctf.uscybergames.com:36539",
+        "files": [],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIUSCG{uds_same_stream_flag}"
+    assert b"\x11\x01" in fake_socket.requests
+    assert any("keeping TCP stream open" in step for step in result["steps"])
+
+
+def test_pwn_agent_extracts_nc_style_connection_info():
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    conn_info = PwnAgent()._extract_connection_info({
+        "description": "Connect with nc challenge.ctf.uscybergames.com 36539",
+    })
+
+    assert conn_info == "challenge.ctf.uscybergames.com:36539"
+
+
 def test_ret2libc_remote_blocks_non_allowlisted_host(monkeypatch):
     from agents.specialists.pwn.pwn_agent import PwnAgent
 

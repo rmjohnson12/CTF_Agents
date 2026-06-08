@@ -125,6 +125,21 @@ def test_heuristic_mapping_routes_auth_text_file_to_log(tmp_path, monkeypatch):
     assert challenge["files"] == [str(log_file)]
 
 
+def test_explicit_crypto_challenge_with_authorisations_routes_to_crypto(tmp_path, monkeypatch):
+    challenge_file = tmp_path / "challenge.txt"
+    challenge_file.write_text("n = 123\ne = 65537\np_high = 456\nc = 789\n")
+
+    monkeypatch.chdir(tmp_path)
+    challenge = _heuristic_challenge_from_instruction(
+        "Crypto challenge. The treasury server encrypts confidential authorisations "
+        "with RSA-2048. File is in challenge.txt",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "crypto"
+    assert challenge["files"] == [str(challenge_file)]
+
+
 def test_unwrap_ask_command_from_interactive_prompt():
     instruction = _unwrap_ask_command(
         'python3 ask.py "Analyze this file for hidden flags. File is located in artifact.bin"'
@@ -141,6 +156,16 @@ def test_normalize_path_recovers_downloads_path_from_llm_output(tmp_path, monkey
     monkeypatch.setenv("HOME", str(home))
 
     assert _normalize_path("Downloads/challenge.py") == str(download_file)
+
+
+def test_normalize_path_recovers_common_downloads_typo(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    download_file = home / "Downloads" / "buddy"
+    download_file.parent.mkdir(parents=True)
+    download_file.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    monkeypatch.setenv("HOME", str(home))
+
+    assert _normalize_path("~/Downlaods/buddy") == str(download_file)
 
 
 def test_normalize_url_adds_scheme_to_bare_ip_port():
@@ -460,6 +485,43 @@ def test_heuristic_mapping_routes_explicit_reversing_with_missing_file_to_revers
         available_tools=["python3"],
     )
     assert challenge["category"] == "reverse"
+    assert _heuristic_mapping_is_actionable(challenge) is True
+
+
+def test_reversing_prompt_with_downloads_typo_recovers_file_and_category(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    buddy = home / "Downloads" / "buddy"
+    buddy.parent.mkdir(parents=True)
+    buddy.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    monkeypatch.setenv("HOME", str(home))
+
+    challenge = _heuristic_challenge_from_instruction(
+        "Reversing challenge. File is in ~/Downlaods/buddy",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "reverse"
+    assert challenge["files"] == [str(buddy)]
+
+
+def test_merge_heuristic_context_preserves_explicit_reversing_over_llm_misc():
+    llm_challenge = {
+        "id": "llm_task",
+        "category": "misc",
+        "description": "A miscellaneous file analysis task.",
+        "files": [],
+    }
+    heuristic = {
+        "id": "reverse_missing_file_12345678",
+        "category": "reverse",
+        "description": "Reversing challenge. File is in ~/Downlaods/buddy",
+        "files": [],
+    }
+
+    merged = _merge_heuristic_context(llm_challenge, heuristic)
+
+    assert merged["category"] == "reverse"
+    assert merged["id"] == "reverse_missing_file_12345678"
 
 
 def test_heuristic_mapping_routes_decompile_crackme_to_reverse():

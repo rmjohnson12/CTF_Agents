@@ -125,6 +125,48 @@ def test_crypto_agent_solves_chacha_known_plaintext_reuse(tmp_path):
     assert any("stream-cipher keystream reuse" in step for step in result["steps"])
 
 
+def test_crypto_agent_solves_threebyte_rotate_xor_custom_cipher(tmp_path):
+    source = tmp_path / "chall.py"
+    output = tmp_path / "output.txt"
+    source.write_text(
+        "import secrets\n\n"
+        "flag_input = b\"SVIUSCG{REDACTED}\"\n"
+        "key = secrets.token_bytes(4)\n"
+        "flag = bytearray(flag_input)\n"
+        "kint = int.from_bytes(key, \"big\")\n"
+        "for i in range(8):\n"
+        "    for index in range(0, len(flag) - 2, 3):\n"
+        "        h = flag[index]\n"
+        "        h2 = flag[index+1]\n"
+        "        h3 = flag[index+2]\n"
+        "        h = h << 16\n"
+        "        h2 = h2 << 8\n"
+        "        ki = index % 8\n"
+        "        hk = (kint >> (ki * 8)) & 0xff\n"
+        "        xh3 = h3 ^ hk\n"
+        "        th = h | h2 | xh3\n"
+        "        r = th & 0x07\n"
+        "        rh = ((th >> r) | (th << (24 - r))) & 0xffffff\n"
+        "        flag[index] = (rh >> 16) & 0xff\n"
+        "        flag[index+1] = (rh >> 8) & 0xff\n"
+        "        flag[index+2] = rh & 0xff\n"
+        "    kint = ((kint >> 3) | (kint << 61)) & 0xffffffffffffffff\n"
+        "print(flag.hex())\n"
+    )
+    output.write_text("733ccc9554d04d1de8dac8f07d")
+
+    result = CryptographyAgent().solve_challenge({
+        "id": "threebyte_rotate_xor",
+        "category": "crypto",
+        "description": "Custom Python cipher with source and output.",
+        "files": [str(source), str(output)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIUSCG{abcd}"
+    assert any("3-byte rotate/XOR custom cipher" in step for step in result["steps"])
+
+
 def test_crypto_agent_detects_rsa_time_capsule_needs_target(tmp_path):
     source = tmp_path / "server.py"
     source.write_text(
@@ -146,6 +188,27 @@ def test_crypto_agent_detects_rsa_time_capsule_needs_target(tmp_path):
     assert any("RSA broadcast pattern detected" in step for step in result["steps"])
 
 
+def test_crypto_agent_solves_local_rsa_low_exponent_unpadded_output(tmp_path):
+    output = tmp_path / "output.txt"
+    output.write_text(
+        "N = 100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000039\n"
+        "e = 3\n"
+        "c1 = 30313234911758512392721422802742314667416215457043725356568186385012843750308212299054741027488591862576768807088146049888862437183800861374318579594536449125\n"
+        "c2 = 30313234911758512392721422802742314667416215457043728273163082301629147057000259765169277712877317827480055173508743361558326230483438721152157454404227121656\n"
+    )
+
+    result = CryptographyAgent().solve_challenge({
+        "id": "rsa_low_e",
+        "category": "crypto",
+        "description": "RSA e=3 related-message challenge.",
+        "files": [str(output)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIUSCG{low_e_fixture}"
+    assert any("RSA low-exponent" in step for step in result["steps"])
+
+
 def test_crypto_agent_rsa_broadcast_math_helpers_recover_plaintext():
     agent = CryptographyAgent()
     plaintext = b"flag"
@@ -165,6 +228,44 @@ def test_crypto_agent_rsa_broadcast_math_helpers_recover_plaintext():
 
     assert exact
     assert agent._int_to_bytes(root) == plaintext
+
+
+def test_crypto_agent_solves_rsa_partial_prime_leak_when_root_finder_available(tmp_path, monkeypatch):
+    n = 6777416575772780455120361258643003332847866290477587026000820581850350458580817504900469611420276806052639728367466007688736561981368526042394026234839877
+    c = 1863870912085629168191501817942076791250298950304900451762735907095681675638316722130546188324468339114688286310463557745447816228440098793152105489694767
+    p_high = 74633293397496438820024045700863669312404786770390206301494878588362807050240
+    low_bits = 4893723
+    challenge_file = tmp_path / "challenge.txt"
+    challenge_file.write_text(
+        "# bottom 24 bits unknown\n"
+        f"n = {n}\n"
+        "e = 65537\n"
+        f"p_high = {p_high}\n"
+        f"c = {c}\n"
+    )
+
+    def fake_root_finder(cls, modulus, known_high, bound, steps):
+        assert modulus == n
+        assert known_high == p_high
+        assert bound == 1 << 24
+        return low_bits
+
+    monkeypatch.setattr(
+        CryptographyAgent,
+        "_coppersmith_linear_factor_root",
+        classmethod(fake_root_finder),
+    )
+
+    result = CryptographyAgent().solve_challenge({
+        "id": "rsa_partial_prime",
+        "category": "crypto",
+        "description": "RSA-2048 prime leak challenge.",
+        "files": [str(challenge_file)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "SVIUSCG{partial_prime_fixture}"
+    assert any("RSA partial-prime leak" in step for step in result["steps"])
 
 
 def test_crypto_time_capsule_socket_blocks_non_allowlisted_host(monkeypatch):

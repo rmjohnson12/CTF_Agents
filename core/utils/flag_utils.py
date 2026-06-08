@@ -44,12 +44,32 @@ def extract_flags(text: str) -> List[str]:
     flags = []
     # Match curly brace style
     for m in FLAG_REGEX_BRaces.finditer(text):
-        flags.append(m.group(0))
+        candidate = m.group(0)
+        if not _is_placeholder_flag(candidate):
+            flags.append(candidate)
     # Match NCL style
     for m in FLAG_REGEX_NCL.finditer(text):
         flags.append(m.group(0))
         
     return flags
+
+
+def _is_placeholder_flag(candidate: str) -> bool:
+    body_match = re.search(r"\{([^{}]+)\}", candidate)
+    if not body_match:
+        return False
+    body = body_match.group(1).strip().upper()
+    placeholders = {
+        "REDACTED",
+        "PLACEHOLDER",
+        "TODO",
+        "FAKE",
+        "FAKE_FLAG",
+        "EXAMPLE",
+        "YOUR_FLAG",
+    }
+    return body in placeholders
+
 
 def find_first_flag(text: str) -> Optional[str]:
     """
