@@ -1,5 +1,6 @@
 import sys
 from tools.common.runner import ToolRunner, RunnerConfig
+from tools.common.python_tool import PythonTool
 
 
 def test_runner_allowlist_blocks():
@@ -45,3 +46,23 @@ def test_runner_full_environment_inheritance_is_opt_in(monkeypatch):
     )
 
     assert "sk-real-secret" in res.stdout
+
+
+def test_python_tool_blocks_generated_script_execution_by_default(monkeypatch):
+    monkeypatch.delenv("CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION", raising=False)
+
+    res = PythonTool().run("print('should not run')")
+
+    assert res.exit_code == 126
+    assert res.stdout == ""
+    assert "Host Python script execution is disabled by default" in res.stderr
+    assert "CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1" in res.stderr
+
+
+def test_python_tool_host_execution_is_explicit_opt_in(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION", "1")
+
+    res = PythonTool().run("print('trusted run')", timeout_s=5)
+
+    assert res.exit_code == 0
+    assert "trusted run" in res.stdout

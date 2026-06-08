@@ -41,9 +41,14 @@ the solving loop.
   verification endpoint. The secure-coding agent can inspect source through
   editor-style APIs, apply targeted remediation for recognized vulnerable
   patterns, save the patch, and verify the fix for the flag.
-- Binary exploitation (pwn) via ret2win discovery (symbol lookup with `nm`/
-  `objdump`), cyclic overflow-offset detection, x86-64 stack-alignment gadget
-  insertion, and remote payload delivery with pwntools.
+- Binary exploitation (pwn) against Linux ELF challenges with local binaries
+  and remote `host:port` targets. The pwn agent can inspect mitigations, run
+  source-guided shellcode playbooks, discover ret2win symbols, calculate
+  overflow offsets, build ROP payloads, and deliver exploits with pwntools.
+  For no-PIE binaries with a bundled `libc.so.6`, it can perform remote
+  ret2libc by leaking `puts`, computing the libc base, launching
+  `system("/bin/sh")`, and reading common flag paths. Direct pwn runs execute
+  on the main thread so pwntools signal handling works reliably.
 - Blockchain smart-contract challenges using Solidity source, HTB-style
   `connection_info` endpoints, JSON-RPC targets, Web3 transactions, and
   deterministic exploit templates for common setup/target patterns such as
@@ -242,11 +247,13 @@ No API key is required for the default local Ollama setup.
   connection-info endpoints must be approved through `config/system_config.yaml`
   or `CTF_AGENTS_ALLOWED_NETWORKS`; pasted challenge metadata cannot approve
   itself. The same policy is enforced across HTTP/browser tools, blockchain
-  metadata fetches, raw crypto sockets, Docker readiness checks, nmap scans,
-  and directory-discovery fallbacks.
+  metadata fetches, raw crypto sockets, pwn remote delivery, Docker readiness
+  checks, nmap scans, and directory-discovery fallbacks.
 - **Reduced Secret Exposure**: Challenge-facing subprocesses run with a minimal
   environment by default so API keys and other host secrets are not inherited by
-  LLM-generated scripts or untrusted challenge binaries unless a tool opts in.
+  untrusted challenge binaries unless a tool opts in. Generated Python solver
+  scripts are not executed on the host unless the operator explicitly enables
+  that run with `CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1`.
 - **Artifact Redaction By Default**: Run reports, broker result messages, and
   the SQLite knowledge store redact sensitive keys before persistence. Browser
   cookies, Web Storage, and key-bearing generated scripts are not stored by
@@ -299,6 +306,13 @@ No API key is required for the default local Ollama setup.
    Storage is intentional, opt in explicitly:
    ```bash
    CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS=1 python3 ask.py "Solve this web challenge at http://TARGET:PORT"
+   ```
+
+   Generated Python solver scripts are blocked from host execution by default.
+   Enable them only for trusted, authorized challenge runs where local script
+   execution is expected:
+   ```bash
+   CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1 python3 ask.py "Solve this coding challenge from ~/Downloads/output.json"
    ```
 
    Source-only web challenges can point directly at a local app folder:

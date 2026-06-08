@@ -226,7 +226,7 @@ class CoordinatorAgent(BaseAgent):
                         self.active_challenges.pop(challenge_id, None)
                         self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                         self._record_solve_trace_best_effort(challenge, completed_result)
-                        self.result_manager.save_run_result(completed_result)
+                        self._save_run_result_best_effort(completed_result)
                         return completed_result
 
                 # Fetch prior knowledge for this challenge to inform the next decision
@@ -346,7 +346,7 @@ class CoordinatorAgent(BaseAgent):
                             self.active_challenges.pop(challenge_id, None)
                             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                             self._record_solve_trace_best_effort(challenge, completed_result)
-                            self.result_manager.save_run_result(completed_result)
+                            self._save_run_result_best_effort(completed_result)
                             return completed_result
                     if done:
                         deferred_duplicate_targets.add(decision_key)
@@ -403,7 +403,7 @@ class CoordinatorAgent(BaseAgent):
                                 self.active_challenges.pop(challenge_id, None)
                                 self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                                 self._record_solve_trace_best_effort(challenge, completed_result)
-                                self.result_manager.save_run_result(completed_result)
+                                self._save_run_result_best_effort(completed_result)
                                 return completed_result
                         except Exception as e:
                             all_steps.append(f"Task {task_id} failed: {e}")
@@ -437,7 +437,7 @@ class CoordinatorAgent(BaseAgent):
                         self.active_challenges.pop(challenge_id, None)
                         self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
                         self._record_solve_trace_best_effort(challenge, completed_result)
-                        self.result_manager.save_run_result(completed_result)
+                        self._save_run_result_best_effort(completed_result)
                         return completed_result
 
                 self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
@@ -499,7 +499,7 @@ class CoordinatorAgent(BaseAgent):
             self._cleanup_run_artifacts(history, all_steps)
             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
             self._record_solve_trace_best_effort(challenge, final_result)
-            self.result_manager.save_run_result(final_result)
+            self._save_run_result_best_effort(final_result)
             return final_result
 
         except Exception as exc:
@@ -779,12 +779,27 @@ class CoordinatorAgent(BaseAgent):
         result: Dict[str, Any],
     ) -> None:
         """Record solved challenge patterns for future retrieval/training."""
+        if self.solve_trace_store is None:
+            return
         try:
             self.solve_trace_store.record_solve(challenge, result)
         except Exception as exc:
             logger.warning(
                 "Skipping solve trace recording for %s: %s",
                 challenge.get("id", "unknown"),
+                exc,
+            )
+
+    def _save_run_result_best_effort(self, result: Dict[str, Any]) -> None:
+        """Persist run reports without allowing report I/O to change solve status."""
+        if self.result_manager is None:
+            return
+        try:
+            self.result_manager.save_run_result(result)
+        except Exception as exc:
+            logger.warning(
+                "Skipping run result persistence for %s: %s",
+                result.get("challenge_id", "unknown"),
                 exc,
             )
 

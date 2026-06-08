@@ -190,6 +190,12 @@ class FailingPerformanceTracker:
     def record_outcome(self, *args, **kwargs):
         raise RuntimeError("attempt to write a readonly database")
 
+
+class FailingResultManager:
+    def save_run_result(self, result):
+        raise RuntimeError("no write")
+
+
 def test_coordinator_iterative_loop_stops_on_solve():
     decisions = [
         {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try first agent"},
@@ -498,6 +504,36 @@ def test_coordinator_solves_when_performance_telemetry_fails(tmp_path, monkeypat
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{no_telemetry}"
     assert not any("Task readonly_perf_db_step_1 failed" in step for step in result["steps"])
+
+
+def test_coordinator_solves_when_result_persistence_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    decisions = [
+        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try the agent"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    coordinator.result_manager = FailingResultManager()
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="solved", flag="CTF{ok}"))
+
+    result = coordinator.solve_challenge({"id": "readonly_results", "description": "test result persistence failure"})
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{ok}"
+    assert not any("Coordinator error: no write" in step for step in result["steps"])
+
+
+def test_disabled_solve_trace_store_is_quiet(caplog):
+    coordinator = CoordinatorAgent(solve_trace_store=None)
+    coordinator.solve_trace_store = None
+
+    coordinator._record_solve_trace_best_effort(
+        {"id": "trace_disabled", "category": "misc"},
+        {"status": "solved", "flag": "CTF{quiet}"},
+    )
+
+    assert "Skipping solve trace recording" not in caplog.text
 
 
 def test_coordinator_records_solved_trace_for_learning_database(tmp_path, monkeypatch):

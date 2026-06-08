@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
-from core.utils.security import minimal_subprocess_env
+from core.utils.security import SecurityPolicyError, assert_host_allowed, minimal_subprocess_env
 from tools.common.elf_utils import is_elf_binary
 from tools.pwn.pwntools_wrapper import PwntoolsWrapper
 
@@ -511,11 +511,10 @@ class PwnAgent(BaseAgent):
         context: Dict[str, int],
     ) -> tuple[List[str], Optional[str]]:
         steps: List[str] = []
-        parsed = self._parse_host_port(conn_info)
-        if parsed is None:
-            steps.append(f"ret2libc: could not parse connection_info: {conn_info!r}")
+        endpoint = self._checked_remote_endpoint(conn_info, steps, label="ret2libc")
+        if endpoint is None:
             return steps, None
-        host, port = parsed
+        host, port = endpoint
 
         steps.append(f"ret2libc: trying remote leak with offset={offset} against {host}:{port}")
         try:
@@ -771,11 +770,10 @@ class PwnAgent(BaseAgent):
         commands: List[bytes],
     ) -> tuple[List[str], Optional[str]]:
         steps: List[str] = []
-        parsed = self._parse_host_port(conn_info)
-        if parsed is None:
-            steps.append(f"Could not parse connection_info: {conn_info!r}")
+        endpoint = self._checked_remote_endpoint(conn_info, steps, label="staged shellcode")
+        if endpoint is None:
             return steps, None
-        host, port = parsed
+        host, port = endpoint
         steps.append(f"Sending staged shellcode exploit to remote {host}:{port}...")
 
         try:
@@ -1004,11 +1002,10 @@ class PwnAgent(BaseAgent):
         self, conn_info: str, payload: bytes
     ) -> tuple[List[str], Optional[str]]:
         steps: List[str] = []
-        parsed = self._parse_host_port(conn_info)
-        if parsed is None:
-            steps.append(f"Could not parse connection_info: {conn_info!r}")
+        endpoint = self._checked_remote_endpoint(conn_info, steps, label="payload")
+        if endpoint is None:
             return steps, None
-        host, port = parsed
+        host, port = endpoint
 
         steps.append(f"Sending payload to remote {host}:{port}...")
 
@@ -1088,6 +1085,28 @@ class PwnAgent(BaseAgent):
         if parsed.hostname and parsed.port:
             return parsed.hostname, int(parsed.port)
         return None
+
+    @staticmethod
+    def _checked_remote_endpoint(
+        conn_info: str,
+        steps: List[str],
+        *,
+        label: str,
+    ) -> Optional[tuple[str, int]]:
+        parsed = PwnAgent._parse_host_port(conn_info)
+        if parsed is None:
+            prefix = "ret2libc: " if label == "ret2libc" else ""
+            steps.append(f"{prefix}Could not parse connection_info: {conn_info!r}")
+            return None
+
+        host, port = parsed
+        try:
+            assert_host_allowed(host, port=port)
+        except SecurityPolicyError as exc:
+            steps.append(f"{label}: remote target {host}:{port} blocked by network policy: {exc}")
+            return None
+
+        return host, port
 
     # ------------------------------------------------------------------
     # Lazy loaders

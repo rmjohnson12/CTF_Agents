@@ -194,6 +194,8 @@ def test_pwn_agent_skips_angr_gracefully_when_not_installed():
 def test_pwn_agent_solves_execute_buffer_blacklist_source_pattern(tmp_path, monkeypatch):
     from agents.specialists.pwn.pwn_agent import PwnAgent
 
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "154.57.164.80")
+
     binary = tmp_path / "execute"
     binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
     source = tmp_path / "execute.c"
@@ -273,6 +275,8 @@ def test_pwn_agent_extracts_connection_info_from_description():
 
 def test_pwn_agent_source_guided_remote_failure_does_not_fall_through_to_angr(tmp_path, monkeypatch):
     from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "154.57.164.80")
 
     binary = tmp_path / "execute"
     binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
@@ -643,6 +647,7 @@ def _fake_pwn_module(remote_cls=_FakePwnRemote):
 def test_send_payload_remote_extracts_flag(monkeypatch):
     from agents.specialists.pwn.pwn_agent import PwnAgent
 
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "1.2.3.4")
     monkeypatch.setitem(sys.modules, "pwn", _fake_pwn_module())
 
     steps, flag = PwnAgent()._send_payload_remote("1.2.3.4:4444", b"A" * 40 + b"\x34\x12\x40\x00\x00\x00\x00\x00")
@@ -654,6 +659,7 @@ def test_send_payload_remote_extracts_flag(monkeypatch):
 def test_send_payload_remote_records_banner(monkeypatch):
     from agents.specialists.pwn.pwn_agent import PwnAgent
 
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "1.2.3.4")
     monkeypatch.setitem(sys.modules, "pwn", _fake_pwn_module())
 
     steps, _ = PwnAgent()._send_payload_remote("1.2.3.4:4444", b"payload")
@@ -673,6 +679,7 @@ def test_send_payload_remote_bad_connection_info():
 def test_send_payload_remote_handles_missing_pwntools(monkeypatch):
     from agents.specialists.pwn.pwn_agent import PwnAgent
 
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "1.2.3.4")
     monkeypatch.setitem(sys.modules, "pwn", None)
 
     steps, flag = PwnAgent()._send_payload_remote("1.2.3.4:4444", b"payload")
@@ -684,6 +691,8 @@ def test_send_payload_remote_handles_missing_pwntools(monkeypatch):
 def test_send_payload_remote_handles_connection_error(monkeypatch):
     from agents.specialists.pwn.pwn_agent import PwnAgent
 
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "1.2.3.4")
+
     class _ErrorRemote:
         def __init__(self, *a, **kw):
             raise ConnectionRefusedError("refused")
@@ -694,6 +703,64 @@ def test_send_payload_remote_handles_connection_error(monkeypatch):
 
     assert flag is None
     assert any("failed" in s.lower() for s in steps)
+
+
+def test_send_payload_remote_blocks_non_allowlisted_host(monkeypatch):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "localhost")
+    monkeypatch.setitem(sys.modules, "pwn", _fake_pwn_module())
+
+    steps, flag = PwnAgent()._send_payload_remote("203.0.113.10:4444", b"payload")
+
+    assert flag is None
+    assert any("blocked by network policy" in s for s in steps)
+
+
+def test_send_staged_shell_remote_blocks_non_allowlisted_host(monkeypatch):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "localhost")
+
+    def should_not_connect(*_args, **_kwargs):
+        raise AssertionError("socket connection should be blocked before connect")
+
+    monkeypatch.setattr("agents.specialists.pwn.pwn_agent.socket.create_connection", should_not_connect)
+
+    steps, flag = PwnAgent()._send_staged_shell_remote(
+        "203.0.113.10:4444",
+        b"stage1",
+        b"stage2",
+        commands=[b"cat flag.txt\n"],
+    )
+
+    assert flag is None
+    assert any("blocked by network policy" in s for s in steps)
+
+
+def test_ret2libc_remote_blocks_non_allowlisted_host(monkeypatch):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "localhost")
+    monkeypatch.setitem(sys.modules, "pwn", _fake_pwn_module())
+
+    steps, flag = PwnAgent()._try_ret2libc_at_offset(
+        "203.0.113.10:4444",
+        40,
+        {
+            "pop_rdi": 0x4010A3,
+            "ret": 0x40063E,
+            "puts_plt": 0x400650,
+            "puts_got": 0x601FA8,
+            "main": 0x400F68,
+            "libc_puts": 0x80AA0,
+            "libc_system": 0x4F550,
+            "libc_binsh": 0x1B3E1A,
+        },
+    )
+
+    assert flag is None
+    assert any("blocked by network policy" in s for s in steps)
 
 
 # ---------------------------------------------------------------------------
