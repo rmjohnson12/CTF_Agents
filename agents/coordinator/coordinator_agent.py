@@ -124,7 +124,6 @@ class CoordinatorAgent(BaseAgent):
         challenge["id"] = challenge_id
         self.active_challenges[challenge_id] = challenge
         checkpoint_dir = Path("logs/checkpoints")
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         initial_analysis_obj = self.reasoner.analyze_challenge(challenge)
         initial_analysis = self._analysis_to_dict(challenge, initial_analysis_obj)
@@ -953,6 +952,7 @@ class CoordinatorAgent(BaseAgent):
     ) -> None:
         """Write a checkpoint JSON file so recovery is possible after a crash."""
         try:
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
             checkpoint_path = safe_checkpoint_path(checkpoint_dir, challenge_id)
             checkpoint = {
                 "challenge_id": challenge_id,

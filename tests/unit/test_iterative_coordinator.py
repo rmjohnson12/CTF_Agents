@@ -2,6 +2,7 @@ import pytest
 import time
 import json
 import threading
+from pathlib import Path
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.base_agent import BaseAgent, AgentType, AgentStatus
 from core.knowledge_base.solve_trace_store import SolveTraceStore
@@ -522,6 +523,33 @@ def test_coordinator_solves_when_result_persistence_fails(tmp_path, monkeypatch)
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{ok}"
     assert not any("Coordinator error: no write" in step for step in result["steps"])
+
+
+def test_coordinator_solves_when_checkpoint_directory_cannot_be_created(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    decisions = [
+        {"next_action": "run_agent", "target": "agent_1", "reasoning": "Try the agent"}
+    ]
+    reasoner = MockReasoner(decisions)
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    coordinator.result_manager = None
+    coordinator.solve_trace_store = None
+    coordinator.register_agent(MockAgent("agent_1", status_on_solve="solved", flag="CTF{no_checkpoint}"))
+
+    def fail_mkdir(self, *args, **kwargs):
+        if str(self).endswith("logs/checkpoints"):
+            raise OSError("read-only checkout")
+        return original_mkdir(self, *args, **kwargs)
+
+    original_mkdir = Path.mkdir
+    monkeypatch.setattr(Path, "mkdir", fail_mkdir)
+
+    result = coordinator.solve_challenge({"id": "readonly_checkpoints", "description": "test checkpoint failure"})
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{no_checkpoint}"
+    assert not any("Coordinator error: read-only checkout" in step for step in result["steps"])
 
 
 def test_disabled_solve_trace_store_is_quiet(caplog):

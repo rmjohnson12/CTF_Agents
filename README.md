@@ -358,9 +358,11 @@ No API key is required for the default local Ollama setup.
    ```
 
    Blockchain smart-contract challenges can point at a Solidity folder and a
-   spawned target:
+   spawned target. The blockchain flow generates and executes a local Python
+   exploit script, so enable host Python execution only for trusted,
+   authorized runs:
    ```bash
-   python3 ask.py "Solve this blockchain challenge at TARGET:PORT. Files are in ~/Survival"
+   CTF_AGENTS_ALLOWED_NETWORKS=TARGET CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1 python3 ask.py "Solve this blockchain challenge at TARGET:PORT. Files are in ~/Survival"
    ```
 
    Secure-coding challenges can point directly at a spawned editor/verification
