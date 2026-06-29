@@ -37,7 +37,8 @@ the solving loop.
   encoded artifacts, Krita/SVG text layers, binary STL/OpenSCAD projections,
   leaked JWT signing-key/source-comment hints with debug/admin claim forging,
   Mongoose prototype-pollution chains that reach localhost-only routes through
-  internal Node socket state, and XXE-style CTF patterns.
+  internal Node socket state, predictable file-backed sessions combined with
+  archive symlink extraction, and XXE-style CTF patterns.
 - Secure-coding challenges where a spawned target exposes editable source and a
   verification endpoint. The secure-coding agent can inspect source through
   editor-style APIs, apply targeted remediation for recognized vulnerable
@@ -225,6 +226,11 @@ No API key is required for the default local Ollama setup.
   vulnerable Mongoose version, unrestricted update flow, and localhost-only
   route, the web agent can exercise the document-initialization pollution chain
   and verify the internal Node socket result directly.
+- **Predictable File-Session Archive Chain**: Live targets matching the
+  Desires-style login/register and authenticated archive flow are handled with
+  disposable account bootstrap, a bounded timestamp-derived session window,
+  symlink extraction into the file-backed session store, and immediate admin
+  route verification.
 - **Fast Live-Web Dispatch**: If `ask.py` has already classified a prompt as a
   live web challenge with an explicit URL, the coordinator dispatches the first
   attempt directly to `web_agent` instead of waiting on LLM classification or
