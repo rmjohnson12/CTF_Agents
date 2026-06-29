@@ -1,0 +1,14 @@
+{
+  "id": "golden_web",
+  "name": "Golden Web Source Audit",
+  "category": "web",
+  "description": "Audit the local web source fixture without starting a server.",
+  "files": ["app.js"],
+  "expected": {
+    "command": "python3 main.py examples/web/challenge.json",
+    "category": "web",
+    "agent": "web_agent",
+    "status": "solved",
+    "flag": "HTB{golden_web}"
+  }
+}

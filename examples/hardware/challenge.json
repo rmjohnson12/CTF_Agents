@@ -1,0 +1,14 @@
+{
+  "id": "golden_hardware",
+  "name": "Golden Hardware",
+  "category": "hardware",
+  "description": "Evaluate the supplied four-input logic table and schematic.",
+  "files": ["logic.csv", "schematic.png"],
+  "expected": {
+    "command": "python3 main.py examples/hardware/challenge.json",
+    "category": "hardware",
+    "agent": "hardware_agent",
+    "status": "solved",
+    "flag": "HTB{golden_hardware}"
+  }
+}

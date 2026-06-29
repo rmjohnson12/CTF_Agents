@@ -1,0 +1,14 @@
+{
+  "id": "golden_forensics",
+  "name": "Golden Forensics",
+  "category": "forensics",
+  "description": "Inspect the supplied evidence text and recover the flag.",
+  "files": ["evidence.txt"],
+  "expected": {
+    "command": "python3 main.py examples/forensics/challenge.json",
+    "category": "forensics",
+    "agent": "forensics_agent",
+    "status": "solved",
+    "flag": "HTB{golden_forensics}"
+  }
+}

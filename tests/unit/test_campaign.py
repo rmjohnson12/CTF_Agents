@@ -101,3 +101,41 @@ def test_local_provider_reads_supported_solve_entries_from_manifest(tmp_path):
     challenges = LocalChallengeProvider(str(manifest)).list_challenges()
 
     assert [challenge["id"] for challenge in challenges] == ["ready"]
+
+
+def test_campaign_summary_exports_machine_readable_metrics_and_markdown(tmp_path):
+    store = AttemptStore(str(tmp_path / "attempts.db"))
+    challenge = {"id": "metric", "name": "Metric", "description": "x", "category": "web"}
+
+    def solve(_challenge):
+        return {
+            "status": "attempted",
+            "iterations": 2,
+            "steps": ["No flag found"],
+            "routing_summary": {"selected_target": "web_agent"},
+            "history": [
+                {
+                    "agent_id": "web_agent",
+                    "status": "attempted",
+                    "routing": {"execution_type": "agent", "selected_target": "web_agent"},
+                },
+                {
+                    "status": "failed",
+                    "routing": {"execution_type": "tool", "selected_target": "browser_snapshot"},
+                },
+            ],
+        }
+
+    summary = CampaignRunner(FakeProvider([challenge]), solve, store).run()
+    payload = summary.to_dict()
+
+    assert payload["attempted"] == 1
+    assert payload["solve_rate"] == 0.0
+    assert payload["iterations"] == 2
+    assert payload["tools_invoked"] == 1
+    assert payload["fallback_count"] == 1
+    assert payload["challenges"][0]["agent_selected"] == "web_agent"
+    assert payload["challenges"][0]["failure_reason"] == "No flag found"
+    markdown = summary.to_markdown()
+    assert "# CTF_Agents Benchmark Summary" in markdown
+    assert "| metric | attempted | web_agent |" in markdown

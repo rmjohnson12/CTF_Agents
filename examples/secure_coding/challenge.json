@@ -1,0 +1,14 @@
+{
+  "id": "golden_secure_coding",
+  "name": "Golden Secure Coding",
+  "category": "secure_coding",
+  "description": "Review the local vulnerable helper and plan a delimiter-injection remediation.",
+  "files": ["db.js"],
+  "expected": {
+    "command": "python3 main.py examples/secure_coding/challenge.json --plan",
+    "category": "secure_coding",
+    "agent": "secure_coding_agent",
+    "status": "planned",
+    "flag": "HTB{golden_secure_coding}"
+  }
+}

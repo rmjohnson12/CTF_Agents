@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from core.campaign import AttemptStore, CampaignRunner
 from core.campaign.providers import LocalChallengeProvider
@@ -20,6 +21,8 @@ def main(argv=None) -> int:
     parser.add_argument("--max-iterations", type=int, default=5, help="Coordinator iteration cap per challenge.")
     parser.add_argument("--retry-solved", action="store_true", help="Run challenges already solved by a prior campaign.")
     parser.add_argument("--db", default="logs/attempts.db", help="Attempt-ledger SQLite path.")
+    parser.add_argument("--json-out", help="Write the machine-readable benchmark summary to this path.")
+    parser.add_argument("--markdown-out", help="Write a Markdown benchmark summary to this path.")
     args = parser.parse_args(argv)
 
     if args.max_attempts < 1:
@@ -37,13 +40,16 @@ def main(argv=None) -> int:
         max_attempts=args.max_attempts,
         retry_solved=args.retry_solved,
     )
-    print(json.dumps({
-        "campaign_id": summary.campaign_id,
-        "queued": summary.queued,
-        "solved": summary.solved,
-        "failed": summary.failed,
-        "skipped": summary.skipped,
-    }, indent=2))
+    payload = summary.to_dict()
+    if args.json_out:
+        output_path = Path(args.json_out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if args.markdown_out:
+        output_path = Path(args.markdown_out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(summary.to_markdown(), encoding="utf-8")
+    print(json.dumps(payload, indent=2))
     return 0 if summary.failed == 0 else 2
 
 

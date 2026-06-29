@@ -127,6 +127,20 @@ class CoordinatorAgent(BaseAgent):
 
         initial_analysis_obj = self.reasoner.analyze_challenge(challenge)
         initial_analysis = self._analysis_to_dict(challenge, initial_analysis_obj)
+        initial_target = (
+            self._direct_initial_agent(challenge, initial_analysis_obj)
+            or initial_analysis["strategy"].get("target")
+            or "none"
+        )
+        routing_summary = {
+            "category": initial_analysis["category"],
+            "confidence": initial_analysis["confidence"],
+            "evidence": list(initial_analysis["strategy"].get("detected_indicators") or []),
+            "selected_action": "run_agent" if initial_target in self._all_agent_ids() else initial_analysis["strategy"].get("action", "stop"),
+            "selected_target": initial_target,
+            "reasoning": initial_analysis["strategy"].get("reasoning", ""),
+            "fallback_chain": self._fallback_chain_for(initial_analysis["category"], initial_target),
+        }
         checkpoint = self._load_checkpoint(checkpoint_dir, challenge_id) if resume else None
         history: List[Dict[str, Any]] = checkpoint.get("history", []) if checkpoint else []
         trace_hints = self._get_solve_trace_hints_best_effort(challenge)
@@ -165,6 +179,7 @@ class CoordinatorAgent(BaseAgent):
             "flag": None,
             "steps": all_steps,
             "iterations": 0,
+            "routing_summary": routing_summary,
         }
 
         # Thread pool for parallel execution
@@ -265,6 +280,13 @@ class CoordinatorAgent(BaseAgent):
                 recovery_decision = False
                 action, target = self._normalize_decision(action, target, challenge, all_steps)
                 decision_key = (action, target)
+                if not history and not futures:
+                    routing_summary["selected_action"] = action
+                    routing_summary["selected_target"] = target
+                    routing_summary["reasoning"] = reasoning
+                    routing_summary["fallback_chain"] = self._fallback_chain_for(
+                        initial_analysis["category"], target
+                    )
 
                 # Correct common reasoner mixups (agents vs tools)
                 if action == "run_tool" and target in self._all_agent_ids():
@@ -523,6 +545,21 @@ class CoordinatorAgent(BaseAgent):
             "resource_management",
             "llm_routing",
         ]
+
+    @staticmethod
+    def _fallback_chain_for(category: str, selected_target: str) -> List[str]:
+        """Return a short operator-facing fallback order, excluding the first target."""
+        chains = {
+            "web": ["web_agent", "recon_agent", "coding_agent"],
+            "reverse": ["reverse_agent", "forensics_agent", "coding_agent"],
+            "pwn": ["pwn_agent", "reverse_agent", "coding_agent"],
+            "forensics": ["forensics_agent", "reverse_agent", "coding_agent"],
+            "hardware": ["hardware_agent", "reverse_agent", "coding_agent"],
+            "crypto": ["crypto_agent", "coding_agent"],
+            "blockchain": ["blockchain_agent", "coding_agent"],
+            "secure_coding": ["secure_coding_agent", "coding_agent"],
+        }
+        return [target for target in chains.get(category, ["coding_agent"]) if target != selected_target]
 
     def _run_selected_agent(
         self,
