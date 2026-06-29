@@ -208,6 +208,7 @@ logs/checkpoints/
 logs/knowledge.db
 logs/performance.db
 logs/solve_traces.db
+logs/attempts.db
 
 # Local CTF scratch and challenge extraction artifacts
 .scratch/

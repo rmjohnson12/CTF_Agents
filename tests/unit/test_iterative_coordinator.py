@@ -750,6 +750,15 @@ def test_coordinator_sanitizes_checkpoint_id_path_traversal(tmp_path, monkeypatc
 
     assert result["status"] == "solved"
     assert result["challenge_id"] == "outside"
+    assert result["routing_summary"] == {
+        "category": "misc",
+        "confidence": 0.9,
+        "evidence": [],
+        "selected_action": "run_agent",
+        "selected_target": "agent_1",
+        "reasoning": "Try fast agent",
+        "fallback_chain": ["coding_agent"],
+    }
     assert (tmp_path / "logs" / "checkpoints" / "outside.json").exists()
     assert not (tmp_path / "outside.json").exists()
 
@@ -791,3 +800,9 @@ def test_coordinator_resumes_from_checkpoint_history(tmp_path, monkeypatch):
     assert result["iterations"] == 2
     assert [h["agent_id"] for h in result["history"]] == ["agent_1", "agent_2"]
     assert any("Resuming from checkpoint" in step for step in result["steps"])
+def test_operator_fallback_chain_is_category_specific_and_excludes_first_target():
+    assert CoordinatorAgent._fallback_chain_for("web", "web_agent") == [
+        "recon_agent",
+        "coding_agent",
+    ]
+    assert CoordinatorAgent._fallback_chain_for("crypto", "crypto_agent") == ["coding_agent"]

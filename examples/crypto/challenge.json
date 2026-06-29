@@ -1,0 +1,14 @@
+{
+  "id": "golden_crypto",
+  "name": "Golden Crypto",
+  "category": "crypto",
+  "description": "Decode the decimal ASCII values 72 84 66 123 103 111 108 100 101 110 125.",
+  "files": [],
+  "expected": {
+    "command": "python3 ask.py 'Crypto challenge: decode 72 84 66 123 103 111 108 100 101 110 125'",
+    "category": "crypto",
+    "agent": "crypto_agent",
+    "status": "solved",
+    "flag": "HTB{golden}"
+  }
+}

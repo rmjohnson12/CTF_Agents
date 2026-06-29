@@ -1,0 +1,14 @@
+{
+  "id": "golden_reverse",
+  "name": "Golden Reverse",
+  "category": "reverse",
+  "description": "Analyze the supplied verifier source and recover its accepted input.",
+  "files": ["verifier.py"],
+  "expected": {
+    "command": "python3 main.py examples/reverse/challenge.json",
+    "category": "reverse",
+    "agent": "reverse_agent",
+    "status": "solved",
+    "flag": "HTB{golden_reverse}"
+  }
+}

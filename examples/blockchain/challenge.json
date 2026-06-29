@@ -1,0 +1,14 @@
+{
+  "id": "golden_blockchain",
+  "name": "Golden Blockchain",
+  "category": "blockchain",
+  "description": "Inspect the local Solidity setup and plan the deterministic balance-drain route.",
+  "files": ["Setup.sol"],
+  "expected": {
+    "command": "python3 main.py examples/blockchain/challenge.json --plan",
+    "category": "blockchain",
+    "agent": "blockchain_agent",
+    "status": "planned",
+    "flag": "HTB{golden_blockchain}"
+  }
+}

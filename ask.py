@@ -716,6 +716,22 @@ Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) i
         # Step 2: Solve
         result = coordinator.solve_challenge(challenge, resume=resume)
 
+        routing_summary = result.get("routing_summary") or {}
+        if routing_summary:
+            evidence = ", ".join(routing_summary.get("evidence") or []) or "none"
+            fallbacks = " -> ".join(routing_summary.get("fallback_chain") or []) or "none"
+            print("\n--- Routing Summary ---")
+            print(
+                f"Category: {routing_summary.get('category')} "
+                f"({float(routing_summary.get('confidence') or 0) * 100:.0f}% confidence)"
+            )
+            print(f"Evidence: {evidence}")
+            print(
+                f"Selected: {routing_summary.get('selected_action')} -> "
+                f"{routing_summary.get('selected_target')}"
+            )
+            print(f"Fallbacks: {fallbacks}")
+
         print("\n--- Step Result ---")
         print(f"Status: {result.get('status')}")
         print(f"Flag: {result.get('flag')}")

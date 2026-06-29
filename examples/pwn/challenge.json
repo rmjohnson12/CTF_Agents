@@ -1,0 +1,14 @@
+{
+  "id": "golden_pwn",
+  "name": "Golden Pwn",
+  "category": "pwn",
+  "description": "Inspect the local vulnerable source and identify the ret2win objective.",
+  "files": ["vuln.c"],
+  "expected": {
+    "command": "python3 main.py examples/pwn/challenge.json --plan",
+    "category": "pwn",
+    "agent": "pwn_agent",
+    "status": "planned",
+    "flag": "HTB{golden_pwn}"
+  }
+}

@@ -1,7 +1,9 @@
 import pytest
 import json
 import base64
+import io
 import struct
+import zipfile
 from tools.web.browser_snapshot_tool import BrowserSnapshotResult
 from tools.web.http_fetch import HttpFetchResult
 from tools.web.http_fetch import HttpContentResult
@@ -131,7 +133,7 @@ def test_web_agent_jwt_playbook_uses_challenge_description():
         "url": "http://127.0.0.1:30433",
     })
 
-    assert result["status"] == "solved"
+    assert result["status"] == "solved", result["steps"]
     assert result["flag"] == "HTB{jwt_secret_leak}"
     assert any("Executing JWT Playbook" in step for step in result["steps"])
 
@@ -567,6 +569,154 @@ def test_web_agent_solves_leaked_jwt_comment_chat_api():
     assert "cl1ppy123!!!" not in json.dumps(result["artifacts"])
     assert not any("cl1ppy123!!!" in step for step in result["steps"])
     assert http.posts
+
+
+def test_web_agent_solves_mongoose_socket_prototype_pollution_from_source(tmp_path):
+    source_dir = tmp_path / "secure_notes"
+    source_dir.mkdir()
+    (source_dir / "package.json").write_text(
+        json.dumps({"dependencies": {"express": "^4.18.2", "mongoose": "^7.2.4"}}),
+        encoding="utf-8",
+    )
+    (source_dir / "app.js").write_text(
+        '''
+const express = require('express');
+const app = express();
+app.get('/flag', (req, res) => {
+  if (req.connection.remoteAddress === '127.0.0.1') res.send(process.env.FLAG);
+  else res.status(403).send('denied');
+});
+app.post('/create', async (req, res) => res.json(await Note.create(req.body)));
+app.post('/update', async (req, res) => {
+  await Note.findByIdAndUpdate(req.body.noteId, req.body);
+  res.json({ok: true});
+});
+app.get('/get/:noteId', async (req, res) => res.json(await Note.findOne({_id: req.params.noteId})));
+''',
+        encoding="utf-8",
+    )
+
+    class SecureNotesHttpTool:
+        def __init__(self):
+            self.calls = []
+
+        def fetch(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            path = url.replace("https://notes.test", "")
+            if path == "/create":
+                assert kwargs["json_data"]["title"] == "127.0.0.1"
+                body = '{"_id":"507f1f77bcf86cd799439011"}'
+            elif path == "/update":
+                assert kwargs["json_data"]["$rename"] == {
+                    "title": "__proto__._peername.address"
+                }
+                body = '{"ok":true}'
+            elif path == "/get/507f1f77bcf86cd799439011":
+                body = '{"content":"probe"}'
+            elif path == "/flag":
+                body = 'HTB{mongoose_internal_socket}'
+            else:
+                raise AssertionError(f"unexpected request: {url}")
+            return HttpFetchResult(url, url, kwargs.get("method", "GET"), 200, {}, body, 0.1)
+
+        def fetch_content(self, url, **kwargs):
+            return HttpContentResult(url, url, "GET", 404, {}, b"", 0.1)
+
+    class FailingBrowserTool(MockBrowserTool):
+        def snapshot(self, url, cookies=None):
+            raise AssertionError("source-guided Mongoose playbook should run before browser recon")
+
+    http = SecureNotesHttpTool()
+    agent = WebExploitationAgent(
+        browser_tool=FailingBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+    result = agent.solve_challenge({
+        "id": "secure_notes",
+        "category": "web",
+        "description": "Only those who knock from inside may enter.",
+        "url": "https://notes.test",
+        "files": [str(source_dir)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{mongoose_internal_socket}"
+    assert any("prototype-pollution playbook SUCCESS" in step for step in result["steps"])
+    assert result["artifacts"]["mongoose_prototype_pollution_attempt"]["captured_sensitive_values"] is False
+
+
+def test_web_agent_solves_predictable_file_session_archive_chain():
+    base = "https://desires.test"
+
+    class DesiresHttpTool:
+        def __init__(self):
+            self.upload_members = []
+            self.failed_victim_login = False
+
+        def fetch(self, url, **kwargs):
+            path = url.replace(base, "") or "/"
+            method = kwargs.get("method", "GET")
+            if path == "/" and method == "GET":
+                body = '''
+                <title>Login | Desires</title>
+                <form action="/login" method="POST"></form>
+                <a href="/register">Register here</a>
+                '''
+                return HttpFetchResult(url, url, method, 200, {"Date": "Thu, 01 Jan 1970 00:00:01 GMT"}, body, 0.1)
+            if path == "/register" and method == "POST":
+                return HttpFetchResult(url, url, method, 302, {"Location": "/"}, "", 0.1)
+            if path == "/login" and method == "POST":
+                password = kwargs["json_data"]["password"]
+                if password == "intentionally-wrong":
+                    self.failed_victim_login = True
+                    return HttpFetchResult(url, url, method, 400, {}, '{"error":"invalid"}', 0.1)
+                return HttpFetchResult(
+                    url, url, method, 302, {"Location": "/user/upload"}, "", 0.1,
+                    {"session": "attacker-session", "username": kwargs["json_data"]["username"]},
+                )
+            if path == "/user/upload" and method == "GET":
+                assert kwargs["cookies"]["session"] == "attacker-session"
+                body = '<form enctype="multipart/form-data"><input name="archive" type="file"></form>'
+                return HttpFetchResult(url, url, method, 200, {}, body, 0.1)
+            if path == "/user/upload" and method == "POST":
+                archive_bytes = kwargs["files"]["archive"][1]
+                with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+                    self.upload_members = archive.namelist()
+                    assert archive.read("sessions") == b"/tmp/sessions"
+                return HttpFetchResult(url, url, method, 202, {}, '{"message":"ok"}', 0.1)
+            if path == "/user/admin":
+                assert self.failed_victim_login
+                assert kwargs["cookies"]["session"]
+                return HttpFetchResult(url, url, method, 200, {}, "HTB{desires_session_chain}", 0.1)
+            if method == "GET":
+                return HttpFetchResult(url, url, method, 404, {}, "not found", 0.1)
+            raise AssertionError(f"unexpected request: {method} {url}")
+
+        def fetch_content(self, url, **kwargs):
+            return HttpContentResult(url, url, "GET", 404, {}, b"", 0.1)
+
+    class FailingBrowserTool(MockBrowserTool):
+        def snapshot(self, url, cookies=None):
+            raise AssertionError("predictable-session playbook should run before browser recon")
+
+    http = DesiresHttpTool()
+    result = WebExploitationAgent(
+        browser_tool=FailingBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    ).solve_challenge({
+        "id": "desires",
+        "category": "web",
+        "description": "Survivors face the vault as toxic gas fuels greed.",
+        "url": base,
+    })
+
+    assert result["status"] == "solved", result["steps"]
+    assert result["flag"] == "HTB{desires_session_chain}"
+    assert any(name.startswith("sessions/ctf_victim_") for name in http.upload_members)
+    assert any("Predictable-session archive playbook SUCCESS" in step for step in result["steps"])
+    assert result["artifacts"]["predictable_session_archive"]["captured_sensitive_values"] is False
 
 
 def test_web_agent_solves_client_side_hash_auth_impersonation():
