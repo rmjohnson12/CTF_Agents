@@ -62,6 +62,13 @@ class SecureCodingAgent(BaseAgent):
 
         steps.append(f"Target URL: {target_url}")
 
+        coding_flag = self._try_pin_enumeration_runner(target_url, steps)
+        if coding_flag:
+            return self._result(
+                challenge, "solved", coding_flag, steps,
+                {"coding_runner": "pin_enumeration", "patch_applied": False},
+            )
+
         flag, verify_body = self._verify(target_url, steps)
         if flag:
             steps.append("Verification endpoint already returned a flag.")
@@ -186,6 +193,66 @@ class SecureCodingAgent(BaseAgent):
                     if flag:
                         return flag, body
         return None, body
+
+    def _try_pin_enumeration_runner(self, target_url: str, steps: List[str]) -> Optional[str]:
+        """Recognize and solve PIN-template enumeration code-runner tasks."""
+        try:
+            page = self.http_tool.fetch(target_url, timeout_s=10)
+        except Exception as exc:
+            steps.append(f"Coding-runner inspection failed: {exc}")
+            return None
+
+        body = page.body_preview
+        if not (
+            "unknown positions are represented" in body.lower()
+            and "no two adjacent digits" in body.lower()
+            and ("pinsmith" in body.lower() or 'fetch("/run"' in body)
+        ):
+            return None
+
+        steps.append("Detected PIN-template enumeration runner from challenge-page evidence.")
+        code = '''import sys
+
+def main():
+    pattern = sys.stdin.readline().strip()
+    current = []
+    output = []
+
+    def generate(index):
+        if index == len(pattern):
+            output.append("".join(current))
+            return
+        choices = "0123456789" if pattern[index] == "*" else pattern[index]
+        for digit in choices:
+            if current and current[-1] == digit:
+                continue
+            current.append(digit)
+            generate(index + 1)
+            current.pop()
+
+    generate(0)
+    sys.stdout.write("\\n".join(output))
+    if output:
+        sys.stdout.write("\\n")
+
+if __name__ == "__main__":
+    main()
+'''
+        try:
+            result = self.http_tool.fetch(
+                urljoin(target_url, "/run"), method="POST", timeout_s=30,
+                json_data={"code": code, "language": "python"},
+            )
+        except Exception as exc:
+            steps.append(f"PIN enumeration submission failed: {exc}")
+            return None
+
+        flag = find_first_flag(result.body_preview)
+        if flag:
+            steps.append("PIN enumeration program passed all runner tests and returned a flag.")
+        else:
+            steps.append(f"PIN enumeration runner returned HTTP {result.status_code} without a flag.")
+        return flag
 
     def _load_source(self, target_url: str, steps: List[str]) -> Tuple[Optional[str], str]:
         for source_path in ("utils/db.js",):

@@ -13,6 +13,8 @@ class FakeHttpTool:
 
     def fetch(self, url, *, method="GET", params=None, json_data=None, **kwargs):
         self.calls.append((method, url, params, json_data))
+        if url.rstrip("/").endswith("31337"):
+            return SimpleNamespace(status_code=200, body_preview="not a coding runner")
         if url.endswith("/api/verify"):
             body = self.verify_bodies.pop(0)
             return SimpleNamespace(status_code=200, body_preview=body)
@@ -68,3 +70,36 @@ def test_secure_coding_agent_patches_legacy_flat_file_add_user():
     assert "username.includes('\\n')" in saved["content"]
     assert "username.includes('\\r')" in saved["content"]
     assert "username.includes('|')" in saved["content"]
+
+
+def test_secure_coding_agent_solves_pin_enumeration_runner():
+    class PinRunnerHttpTool:
+        def __init__(self):
+            self.submission = None
+
+        def fetch(self, url, *, method="GET", json_data=None, **kwargs):
+            if url.rstrip("/") == "http://127.0.0.1:30514":
+                return SimpleNamespace(status_code=200, body_preview='''
+                    Unknown positions are represented by "*".
+                    No two adjacent digits can be the same.
+                    <script>fetch("/run", {method: "POST"})</script>
+                ''')
+            if url.endswith("/run"):
+                self.submission = json_data
+                return SimpleNamespace(
+                    status_code=200,
+                    body_preview='{"challengeCompleted":true,"flag":"HTB{pin_runner_1234}"}',
+                )
+            raise AssertionError(f"Unexpected URL: {url}")
+
+    http_tool = PinRunnerHttpTool()
+    result = SecureCodingAgent(http_tool=http_tool).solve_challenge({
+        "id": "pinsmith", "category": "secure_coding",
+        "url": "http://127.0.0.1:30514",
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{pin_runner_1234}"
+    assert http_tool.submission["language"] == "python"
+    assert "current[-1] == digit" in http_tool.submission["code"]
+    assert result["artifacts"]["coding_runner"] == "pin_enumeration"

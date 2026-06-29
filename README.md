@@ -36,11 +36,14 @@ the solving loop.
   endpoints, header-disclosed backup/artifact paths, certutil/PEM-style
   encoded artifacts, Krita/SVG text layers, binary STL/OpenSCAD projections,
   leaked JWT signing-key/source-comment hints with debug/admin claim forging,
-  and XXE-style CTF patterns.
+  Mongoose prototype-pollution chains that reach localhost-only routes through
+  internal Node socket state, and XXE-style CTF patterns.
 - Secure-coding challenges where a spawned target exposes editable source and a
   verification endpoint. The secure-coding agent can inspect source through
   editor-style APIs, apply targeted remediation for recognized vulnerable
-  patterns, save the patch, and verify the fix for the flag.
+  patterns, save the patch, and verify the fix for the flag. It also recognizes
+  PIN-template code runners and submits an ordered, constraint-aware
+  backtracking solution without falling into generic recovery loops.
 - Binary exploitation (pwn) against Linux ELF challenges with local binaries
   and remote `host:port` targets. The pwn agent can inspect mitigations, run
   source-guided shellcode playbooks, discover ret2win symbols, calculate
@@ -60,7 +63,9 @@ the solving loop.
   targets to `127.0.0.1` before handing them to the web/recon agents.
 - Hardware logic challenges involving schematic images, gate/transistor
   descriptions, CSV input tables, and Saleae logic-analyzer captures that need
-  Boolean derivation, serial decoding, or output bitstream recovery.
+  Boolean derivation, serial decoding, or output bitstream recovery. Raw ESP32
+  flash dumps are parsed through their partition table and app-image segments,
+  with constrained runtime-string recovery for lightly obfuscated flags.
 - Forensics tasks involving PDFs, PCAPs, metadata, embedded files, strings,
   recovered artifacts, and live SSH triage for userland-rootkit/library-loader
   anomalies in authorized lab targets.
@@ -216,6 +221,10 @@ No API key is required for the default local Ollama setup.
   valid session token is present, the web agent can forge focused debug/admin
   claim variants and probe discovered chat/API endpoints without persisting raw
   secrets or forged tokens in artifacts.
+- **Source-Guided Mongoose Prototype Pollution**: When local source proves a
+  vulnerable Mongoose version, unrestricted update flow, and localhost-only
+  route, the web agent can exercise the document-initialization pollution chain
+  and verify the internal Node socket result directly.
 - **Fast Live-Web Dispatch**: If `ask.py` has already classified a prompt as a
   live web challenge with an explicit URL, the coordinator dispatches the first
   attempt directly to `web_agent` instead of waiting on LLM classification or
@@ -237,6 +246,9 @@ No API key is required for the default local Ollama setup.
   specialist that combines challenge text, local files, images, and CSV tables
   to derive logic and decode output streams. Saleae `.sal` archives are
   inspected for analyzer metadata and decoded as UART 8N1 where applicable.
+- **ESP32 Firmware Analysis**: Full flash dumps with a valid ESP32 partition
+  table are recognized, app images are bounded by their segment headers, and
+  canonical flags encoded with a runtime single-byte XOR can be recovered.
 - **Godot Loader Reversing**: Game-loader challenges can extract Godot PCK AES
   keys from Windows launchers, recover/decompile scripts with GDRE Tools, model
   GDScript obfuscation, and replay loader network requests to retrieve split
@@ -250,7 +262,9 @@ No API key is required for the default local Ollama setup.
   to a dedicated agent that uses editor-style APIs to inspect source, generate
   focused patches for recognized vulnerability patterns, save the updated file,
   and call the target's verification endpoint. The current playbook covers
-  legacy flat-file user databases vulnerable to newline/pipe row injection.
+  legacy flat-file user databases vulnerable to newline/pipe row injection and
+  PIN-template runners requiring lexicographically ordered enumeration without
+  adjacent repeated digits.
 - **Explicit Target Allowlisting**: Remote challenge URLs, IP:port pairs, and
   connection-info endpoints must be approved through `config/system_config.yaml`
   or `CTF_AGENTS_ALLOWED_NETWORKS`; pasted challenge metadata cannot approve
@@ -349,6 +363,11 @@ No API key is required for the default local Ollama setup.
    python3 ask.py "Solve Primed for Action at TARGET:PORT. The answer is the product of the two prime numbers."
    ```
 
+   Secure Coding PIN-template runners are detected from their challenge page:
+   ```bash
+   CTF_AGENTS_ALLOWED_NETWORKS=TARGET python3 ask.py "Secure Coding challenge: enumerate the partial PIN at TARGET:PORT"
+   ```
+
    Hardware logic challenge folders can point at local images and CSV files:
    ```bash
    python3 ask.py "Solve this hardware chip challenge. The files are in ~/Downloads/hw_lowlogic"
@@ -357,6 +376,11 @@ No API key is required for the default local Ollama setup.
    Saleae captures can be passed directly for serial-debugging hardware tasks:
    ```bash
    python3 ask.py "Decode this asynchronous serial debugging capture. Files are in ~/Downloads/debugging_interface_signal.sal"
+   ```
+
+   Full ESP32 flash dumps can be supplied as hardware firmware artifacts:
+   ```bash
+   python3 ask.py "Hardware challenge: inspect the firmware in ~/Downloads/device_firmware"
    ```
 
    Godot game-loader reversing challenges can include a target service and a
@@ -378,6 +402,27 @@ No API key is required for the default local Ollama setup.
    ```bash
    python3 ask.py "Secure coding challenge, ip and port are TARGET:PORT"
    ```
+
+### Run a local challenge campaign
+
+`campaign.py` runs a bounded queue and writes a detailed attempt ledger to
+`logs/attempts.db`. It accepts a directory of challenge JSON files, one
+challenge JSON file, or the benchmark manifest. Previously solved challenges
+and challenges at their lifetime attempt cap are skipped by default.
+
+```bash
+python3 campaign.py challenges/active --category crypto --limit 3
+python3 campaign.py challenges/benchmarks/manifest.json --max-attempts 2
+```
+
+Each challenge run records its status, duration, failure reason, and individual
+agent/tool attempts. Technique records include observations and artifact names,
+so future platform adapters can avoid repeating an equivalent failed approach.
+Flags are represented only by a SHA-256 digest in this ledger.
+
+This initial provider is local-only. It does not log into HTB, start instances,
+or submit flags. Those account-changing actions belong in a separate provider
+adapter and will require an authenticated, explicitly authorized session.
 
    Live SSH forensics prompts can include credentials and a target:
    ```bash

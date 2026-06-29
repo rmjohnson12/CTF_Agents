@@ -154,3 +154,36 @@ def test_hardware_agent_decodes_generic_saleae_uart_export(tmp_path):
     assert result["status"] == "solved"
     assert result["flag"] == "HTB{uart_ok}"
     assert any("19200 baud" in step for step in result["steps"])
+
+
+def test_hardware_agent_decodes_single_byte_xor_flag_from_esp32_firmware(tmp_path):
+    firmware_path = tmp_path / "firmware.bin"
+    flash = bytearray(b"\xff" * 0x20000)
+    app_offset = 0x10000
+    app_payload = b"normal firmware data\0" + bytes(
+        byte ^ 0x42 for byte in b"HTB{generic_firmware_path}"
+    )
+
+    # ESP32 partition entry: magic, app type, factory subtype, offset, size,
+    # label, flags. The app itself has one loadable segment.
+    struct.pack_into(
+        "<HBBII16sI", flash, 0x8000, 0x50AA, 0, 0, app_offset, 0x10000,
+        b"factory\0".ljust(16, b"\0"), 0,
+    )
+    struct.pack_into("<HBBII16sI", flash, 0x8020, 0xFFFF, 0, 0, 0, 0, b"\0" * 16, 0)
+    flash[app_offset : app_offset + 24] = bytes([0xE9, 1]) + b"\0" * 22
+    struct.pack_into("<II", flash, app_offset + 24, 0x3F400020, len(app_payload))
+    flash[app_offset + 32 : app_offset + 32 + len(app_payload)] = app_payload
+    firmware_path.write_bytes(flash)
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "esp32_firmware",
+        "category": "hardware",
+        "description": "Figure out what this leaked firmware does.",
+        "files": [str(firmware_path)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{generic_firmware_path}"
+    assert any("ESP32 flash dump" in step for step in result["steps"])
+    assert any("XOR key 0x42" in step for step in result["steps"])

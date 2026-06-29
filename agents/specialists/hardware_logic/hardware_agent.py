@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agents.base_agent import AgentType, BaseAgent
-from core.utils.flag_utils import find_first_flag
+from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
 
 
 class HardwareLogicAgent(BaseAgent):
@@ -53,6 +53,8 @@ class HardwareLogicAgent(BaseAgent):
             indicators.append("schematic_image")
         if any(f.endswith(".sal") for f in files):
             indicators.append("saleae_capture")
+        if any(f.endswith(".bin") for f in files):
+            indicators.append("firmware_image")
 
         can_handle = challenge.get("category") == "hardware" or bool(indicators)
         return {
@@ -69,6 +71,7 @@ class HardwareLogicAgent(BaseAgent):
         csv_path = self._find_file(files, ".csv")
         image_path = self._find_file(files, (".jpg", ".jpeg", ".png"))
         saleae_path = self._find_file(files, ".sal")
+        firmware_path = self._find_file(files, ".bin")
 
         steps.append("Analyzed hardware logic challenge inputs.")
         if image_path:
@@ -95,6 +98,11 @@ class HardwareLogicAgent(BaseAgent):
             output_text = self._bits_to_ascii(bits)
             steps.append(f"Decoded output bitstream as ASCII: {output_text}")
             flag = find_first_flag(output_text)
+        elif firmware_path:
+            firmware_result = self._decode_esp32_firmware(firmware_path)
+            steps.extend(firmware_result["steps"])
+            flag = firmware_result.get("flag")
+            output_text = firmware_result.get("decoded_text")
 
         return {
             "challenge_id": challenge.get("id"),
@@ -104,6 +112,100 @@ class HardwareLogicAgent(BaseAgent):
             "steps": steps,
             "artifacts": {"decoded_text": output_text} if output_text and not flag else {},
         }
+
+    @staticmethod
+    def _decode_esp32_firmware(firmware_path: str) -> Dict[str, Any]:
+        """Inspect an ESP32 flash dump and recover lightly-obfuscated flags.
+
+        ESP-IDF flash dumps contain a partition table at 0x8000.  CTF firmware
+        commonly keeps a flag in an application segment and decodes it with a
+        single-byte XOR at runtime.  Restricting the scan to validated ESP app
+        images keeps this fallback both fast and resistant to arbitrary .bin
+        false positives.
+        """
+        steps: List[str] = []
+        try:
+            data = Path(firmware_path).read_bytes()
+        except OSError as exc:
+            return {"steps": [f"Could not read firmware image: {exc}"]}
+
+        if len(data) < 0x9000:
+            return {"steps": ["Raw .bin input is too small to be an ESP32 flash dump."]}
+
+        app_offsets: List[Tuple[str, int, int]] = []
+        for entry_offset in range(0x8000, min(0x9000, len(data) - 32), 32):
+            magic, part_type, _subtype, offset, size, raw_label, _flags = struct.unpack_from(
+                "<HBBII16sI", data, entry_offset
+            )
+            if magic == 0xFFFF:
+                break
+            if magic != 0x50AA:
+                if entry_offset == 0x8000:
+                    return {"steps": ["Raw .bin input does not contain an ESP32 partition table."]}
+                break
+            label = raw_label.split(b"\0", 1)[0].decode("ascii", errors="replace") or "unnamed"
+            if part_type == 0 and offset < len(data) and data[offset] == 0xE9:
+                app_offsets.append((label, offset, min(size, len(data) - offset)))
+
+        if not app_offsets:
+            return {"steps": ["ESP32 partition table found, but it contains no readable app image."]}
+
+        steps.append(
+            "Detected ESP32 flash dump; app partition(s): "
+            + ", ".join(f"{label}@0x{offset:x}" for label, offset, _size in app_offsets)
+            + "."
+        )
+        for label, offset, partition_size in app_offsets:
+            image_size = HardwareLogicAgent._esp_image_size(data, offset, partition_size)
+            image = data[offset : offset + image_size]
+            direct_flag = find_first_flag(image.decode("latin-1", errors="ignore"))
+            if direct_flag:
+                steps.append(f"Found plaintext flag in ESP32 app partition {label}.")
+                return {"steps": steps, "flag": direct_flag, "decoded_text": direct_flag}
+
+            for key in range(1, 256):
+                decoded = bytes(byte ^ key for byte in image)
+                decoded_text = decoded.decode("latin-1", errors="ignore")
+                flag = HardwareLogicAgent._find_known_prefix_flag(decoded_text)
+                if flag:
+                    steps.append(
+                        f"Recovered runtime string from ESP32 app partition {label} "
+                        f"using single-byte XOR key 0x{key:02x}: {flag}"
+                    )
+                    return {"steps": steps, "flag": flag, "decoded_text": flag}
+
+        steps.append("Parsed ESP32 app image(s), but no plaintext or single-byte-XOR flag was found.")
+        return {"steps": steps}
+
+    @staticmethod
+    def _find_known_prefix_flag(text: str) -> Optional[str]:
+        """Find a flag beginning at a canonical prefix, avoiding XOR noise hits."""
+        for prefix in KNOWN_FLAG_PREFIXES:
+            start = text.find(prefix)
+            while start != -1:
+                candidate = find_first_flag(text[start:])
+                if candidate and candidate.startswith(prefix):
+                    return candidate
+                start = text.find(prefix, start + 1)
+        return None
+
+    @staticmethod
+    def _esp_image_size(data: bytes, offset: int, partition_size: int) -> int:
+        """Return the validated segment extent of an ESP image within a partition."""
+        if offset + 24 > len(data) or data[offset] != 0xE9:
+            return partition_size
+        segment_count = data[offset + 1]
+        cursor = offset + 24
+        limit = min(offset + partition_size, len(data))
+        for _ in range(segment_count):
+            if cursor + 8 > limit:
+                return partition_size
+            _load_address, segment_size = struct.unpack_from("<II", data, cursor)
+            cursor += 8
+            if segment_size > limit - cursor:
+                return partition_size
+            cursor += segment_size
+        return max(0, cursor - offset)
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities

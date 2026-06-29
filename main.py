@@ -60,6 +60,36 @@ def _print_plan_main(
     print("No agents or tools were invoked. Remove --plan to execute.")
 
 
+def build_coordinator(max_iterations: int = 5) -> CoordinatorAgent:
+    """Build the standard coordinator and register every shipped agent."""
+    from tools.web.browser_snapshot_tool import BrowserSnapshotTool
+    from tools.crypto.john import JohnTool
+    from tools.crypto.hashcat import HashcatTool
+
+    browser_tool = BrowserSnapshotTool()
+    john_tool = JohnTool()
+    hashcat_tool = HashcatTool()
+    coordinator = CoordinatorAgent(
+        browser_snapshot_tool=browser_tool,
+        max_iterations=max_iterations,
+    )
+    coordinator.register_agent(CryptographyAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
+    coordinator.register_agent(WebExploitationAgent(agent_id="web_agent", browser_tool=browser_tool))
+    coordinator.register_agent(CodingAgent(agent_id="coding_agent"))
+    coordinator.register_agent(ForensicsAgent(agent_id="forensics_agent", john_tool=john_tool, hashcat_tool=hashcat_tool))
+    coordinator.register_agent(ReverseEngineeringAgent(agent_id="reverse_agent"))
+    coordinator.register_agent(OSINTAgent(agent_id="osint_agent", browser_tool=browser_tool))
+    coordinator.register_agent(LogAnalysisAgent(agent_id="log_agent"))
+    coordinator.register_agent(NetworkingAgent(agent_id="networking_agent"))
+    coordinator.register_agent(HardwareLogicAgent(agent_id="hardware_agent"))
+    coordinator.register_agent(DockerChallengeAgent(agent_id="docker_agent"))
+    coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
+    coordinator.register_agent(PwnAgent(agent_id="pwn_agent"))
+    coordinator.register_agent(BlockchainAgent(agent_id="blockchain_agent"))
+    coordinator.register_agent(SecureCodingAgent(agent_id="secure_coding_agent"))
+    return coordinator
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description="Run the CTF multi-agent coordinator.")
     parser.add_argument("challenge_json_path", help="Path to a challenge JSON file.")
@@ -87,34 +117,7 @@ def main(argv: List[str]) -> int:
         print(f"Error loading challenge: {exc}", file=sys.stderr)
         return 1
 
-    from tools.web.browser_snapshot_tool import BrowserSnapshotTool
-    browser_tool = BrowserSnapshotTool()
-
-    coordinator = CoordinatorAgent(
-        browser_snapshot_tool=browser_tool,
-        max_iterations=args.max_iterations,
-    )
-
-    # Register agents with IDs that match the reasoner/coordinator routing targets
-    from tools.crypto.john import JohnTool
-    from tools.crypto.hashcat import HashcatTool
-    john_tool = JohnTool()
-    hashcat_tool = HashcatTool()
-
-    coordinator.register_agent(CryptographyAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))  # agent_id defaults to "crypto_agent"
-    coordinator.register_agent(WebExploitationAgent(agent_id="web_agent", browser_tool=browser_tool))
-    coordinator.register_agent(CodingAgent(agent_id="coding_agent"))
-    coordinator.register_agent(ForensicsAgent(agent_id="forensics_agent", john_tool=john_tool, hashcat_tool=hashcat_tool))
-    coordinator.register_agent(ReverseEngineeringAgent(agent_id="reverse_agent"))
-    coordinator.register_agent(OSINTAgent(agent_id="osint_agent", browser_tool=browser_tool))
-    coordinator.register_agent(LogAnalysisAgent(agent_id="log_agent"))
-    coordinator.register_agent(NetworkingAgent(agent_id="networking_agent"))
-    coordinator.register_agent(HardwareLogicAgent(agent_id="hardware_agent"))
-    coordinator.register_agent(DockerChallengeAgent(agent_id="docker_agent"))
-    coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
-    coordinator.register_agent(PwnAgent(agent_id="pwn_agent"))
-    coordinator.register_agent(BlockchainAgent(agent_id="blockchain_agent"))
-    coordinator.register_agent(SecureCodingAgent(agent_id="secure_coding_agent"))
+    coordinator = build_coordinator(max_iterations=args.max_iterations)
 
     if args.plan:
         raw_analysis = coordinator.reasoner.analyze_challenge(challenge)

