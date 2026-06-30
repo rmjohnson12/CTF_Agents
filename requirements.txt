@@ -36,6 +36,7 @@ cysignals>=1.12.6  # Runtime dependency for fpylll
 # Data processing
 pandas>=2.1.0
 numpy>=1.26.0
+gensim>=4.3.0  # Word-vector analogy challenges; models require explicit download opt-in
 
 # Logging and monitoring
 structlog>=23.2.0

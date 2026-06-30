@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from config.defaults import COMMON_WEB_PATHS, DEFAULT_AUTH_HEADERS, SQLI_PAYLOADS
 from agents.base_agent import BaseAgent, AgentType
 from tools.common.python_tool import PythonTool
+from tools.common.embedding_analogy import EmbeddingAnalogySolver
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag, KNOWN_FLAG_PREFIXES
 import re
@@ -29,10 +30,17 @@ class CodingAgent(BaseAgent):
     - Code debugging and fixing
     """
     
-    def __init__(self, agent_id: str = "coding_agent", reasoner: Optional[LLMReasoner] = None, python_tool: Optional[PythonTool] = None):
+    def __init__(
+        self,
+        agent_id: str = "coding_agent",
+        reasoner: Optional[LLMReasoner] = None,
+        python_tool: Optional[PythonTool] = None,
+        embedding_solver: Optional[EmbeddingAnalogySolver] = None,
+    ):
         super().__init__(agent_id, AgentType.SPECIALIST)
         self.reasoner = reasoner or LLMReasoner()
         self.python_tool = python_tool or PythonTool()
+        self.embedding_solver = embedding_solver or EmbeddingAnalogySolver()
         self.capabilities = [
             'programming',
             'scripting',
@@ -41,6 +49,7 @@ class CodingAgent(BaseAgent):
             'automation',
             'algorithm',
             'debugging',
+            'embedding_analogies',
             'misc'
         ]
     
@@ -78,6 +87,48 @@ class CodingAgent(BaseAgent):
         max_retries = 3
         
         steps.append(f"Analyzed task requirements: {task_desc}")
+
+        embedding_result = None
+        embedding_handled = False
+        for artifact in challenge.get("files", []):
+            if not str(artifact).lower().endswith((".txt", ".csv")):
+                continue
+            try:
+                candidate = self.embedding_solver.solve_file(
+                    str(artifact),
+                    description=task_desc,
+                )
+            except Exception as exc:
+                embedding_handled = True
+                steps.append(f"Embedding analogy solver could not complete: {exc}")
+                break
+            if candidate is not None:
+                embedding_handled = True
+                embedding_result = candidate
+                break
+
+        if embedding_result is not None:
+            flag = find_first_flag(embedding_result.text)
+            steps.append(
+                f"Solved {len(embedding_result.answers)} embedding analogies with "
+                f"{embedding_result.model_name} using raw vector offsets and ASCII/NFKC filtering."
+            )
+            if flag:
+                steps.append(f"Recovered flag from concatenated nearest neighbors: {flag}")
+                return {
+                    'challenge_id': challenge.get('id'),
+                    'agent_id': self.agent_id,
+                    'status': 'solved',
+                    'flag': flag,
+                    'steps': steps,
+                    'artifacts': {
+                        'embedding_model': embedding_result.model_name,
+                        'analogy_count': len(embedding_result.answers),
+                    },
+                }
+            steps.append("Embedding answers did not form a recognized flag; continuing with AI generation.")
+        elif embedding_handled:
+            steps.append("Continuing with AI generation after the deterministic embedding attempt.")
         
         script_content = ""
         if not self.reasoner.is_available:

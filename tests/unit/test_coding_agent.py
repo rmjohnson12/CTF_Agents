@@ -2,6 +2,7 @@ import pytest
 from agents.specialists.misc.coding_agent import CodingAgent
 from core.decision_engine.llm_reasoner import LLMReasoner
 from tools.common.result import ToolResult
+from tools.common.embedding_analogy import EmbeddingAnalogyResult
 from typing import Dict, Any
 
 class MockReasoner:
@@ -24,6 +25,15 @@ class MockPythonTool:
 
 class MockUnavailableReasoner:
     is_available = False
+
+
+class MockEmbeddingSolver:
+    def solve_file(self, path, *, description=""):
+        return EmbeddingAnalogyResult(
+            text="htb{vectors_not_vibes}",
+            answers=("htb{", "vectors", "_not_", "vibes}"),
+            model_name="glove-twitter-25",
+        )
 
 def test_coding_agent_solve_success():
     reasoner = MockReasoner()
@@ -106,6 +116,29 @@ def test_coding_agent_solves_prime_sum_without_llm():
 
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{1060}"
+
+
+def test_coding_agent_solves_embedding_analogies_before_llm(tmp_path):
+    artifact = tmp_path / "chal.txt"
+    artifact.write_text("placeholder")
+    agent = CodingAgent(
+        reasoner=MockUnavailableReasoner(),
+        embedding_solver=MockEmbeddingSolver(),
+    )
+
+    result = agent.solve_challenge({
+        "id": "like_a_glove",
+        "category": "misc",
+        "description": "The embedding model is glove-twitter-25.",
+        "files": [str(artifact)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "htb{vectors_not_vibes}"
+    assert result["artifacts"] == {
+        "embedding_model": "glove-twitter-25",
+        "analogy_count": 4,
+    }
 
 
 def test_coding_agent_runs_xor_fallback_after_llm_scripts_fail(tmp_path):

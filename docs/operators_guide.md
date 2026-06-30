@@ -40,6 +40,20 @@ python3 campaign.py challenges/benchmarks/manifest.json \
 Campaigns are local and bounded. The default provider does not authenticate to
 CTF platforms, start remote instances, or submit flags.
 
+## Word-embedding models
+
+The coding specialist can solve complete `Like A is to B, C is to?` text
+artifacts with supported Gensim GloVe Twitter models. Existing cached models are
+used automatically. To explicitly permit the first model download, run:
+
+```bash
+CTF_AGENTS_ALLOW_MODEL_DOWNLOAD=1 \
+  python3 ask.py "Solve chal.txt with glove-twitter-25"
+```
+
+Model names are restricted to the supported GloVe Twitter variants; arbitrary
+challenge text cannot select another download.
+
 ## Troubleshooting
 
 1. Run `python3 check_setup.py`.

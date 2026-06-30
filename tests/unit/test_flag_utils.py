@@ -8,6 +8,11 @@ def test_extract_flags_htb():
     text = "The flag is HTB{htb_style_flag_01}"
     assert extract_flags(text) == ["HTB{htb_style_flag_01}"]
 
+
+def test_extract_flags_lowercase_htb_when_challenge_requires_it():
+    text = "answer: htb{lowercase_is_significant}"
+    assert extract_flags(text) == ["htb{lowercase_is_significant}"]
+
 def test_extract_flags_multiple():
     text = "First CTF{flag_one} and then HTB{flag_two} and maybe flag{three_is_long} and NCL SKY-ABCD-1234"
     assert extract_flags(text) == ["CTF{flag_one}", "HTB{flag_two}", "flag{three_is_long}", "SKY-ABCD-1234"]

@@ -13,6 +13,7 @@ KNOWN_FLAG_PREFIXES: List[str] = [
     "SVBRG{",    # US Cyber Games
     "picoCTF{",
     "HTB{",
+    "htb{",
     "CTF{",
     "flag{",
     "FLAG{",
@@ -27,7 +28,7 @@ KNOWN_FLAG_PREFIXES: List[str] = [
 # the known mixed-case platforms (picoCTF, nahamCon, …). This prevents false
 # positives from binary noise like "xyz{rrrr|}" matching the broad pattern.
 FLAG_REGEX_BRaces = re.compile(
-    r"(flag|picoCTF|nahamCon|[A-Z][A-Z0-9_-]+)"
+    r"(flag|htb|picoCTF|nahamCon|[A-Z][A-Z0-9_-]+)"
     r"\{[a-zA-Z0-9_\-\.!@#$%^&*()+=|?><\/]{4,}\}"
 )
 # Pattern 2: SKY-XXXX-#### or NCL-XXXX-#### (NCL Style)

@@ -243,6 +243,35 @@ def test_coordinator_direct_initial_category_bypasses_planner():
     assert any("maps directly to pwn_agent" in step for step in result["steps"])
 
 
+def test_embedding_artifact_routes_directly_to_coding_agent(tmp_path):
+    artifact = tmp_path / "chal.txt"
+    artifact.write_text(
+        "Like a is to b, c is to?\nLike d is to e, f is to?\n",
+        encoding="utf-8",
+    )
+    reasoner = ExplodingPlannerReasoner()
+    coordinator = CoordinatorAgent()
+    coordinator.reasoner = reasoner
+    coding_agent = MockAgent(
+        "coding_agent",
+        status_on_solve="solved",
+        flag="htb{direct_embedding_route}",
+    )
+    coordinator.register_agent(coding_agent)
+
+    result = coordinator.solve_challenge({
+        "id": "embedding_route",
+        "category": "crypto",
+        "description": "Semantic vector challenge",
+        "files": [str(artifact)],
+    })
+
+    assert result["flag"] == "htb{direct_embedding_route}"
+    assert result["routing_summary"]["selected_target"] == "coding_agent"
+    assert "embedding_analogy_artifact" in result["routing_summary"]["evidence"]
+    assert coding_agent.solve_called == 1
+
+
 def test_coordinator_runs_direct_pwn_on_main_thread():
     reasoner = ExplodingPlannerReasoner()
     coordinator = CoordinatorAgent()

@@ -31,6 +31,7 @@ tests.
 - Web authentication, source-guided API, upload, session, and dependency paths
 - Reverse-engineering and binary-exploitation strategies
 - Cryptographic decoding and constraint recovery
+- Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
 - Smart-contract interaction and authorized remote challenge workflows
 

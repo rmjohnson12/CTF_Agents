@@ -29,6 +29,7 @@ from core.task_manager.task import Task, TaskPriority
 from core.knowledge_base.knowledge_store import KnowledgeStore
 from core.knowledge_base.solve_trace_store import SolveTraceStore
 from core.utils.security import redact_sensitive_data, safe_checkpoint_path, safe_slug
+from tools.common.embedding_analogy import is_embedding_analogy_file
 import concurrent.futures
 
 logger = logging.getLogger(__name__)
@@ -132,10 +133,13 @@ class CoordinatorAgent(BaseAgent):
             or initial_analysis["strategy"].get("target")
             or "none"
         )
+        routing_evidence = list(initial_analysis["strategy"].get("detected_indicators") or [])
+        if self._has_embedding_analogy_artifact(challenge):
+            routing_evidence.append("embedding_analogy_artifact")
         routing_summary = {
             "category": initial_analysis["category"],
             "confidence": initial_analysis["confidence"],
-            "evidence": list(initial_analysis["strategy"].get("detected_indicators") or []),
+            "evidence": routing_evidence,
             "selected_action": "run_agent" if initial_target in self._all_agent_ids() else initial_analysis["strategy"].get("action", "stop"),
             "selected_target": initial_target,
             "reasoning": initial_analysis["strategy"].get("reasoning", ""),
@@ -254,13 +258,20 @@ class CoordinatorAgent(BaseAgent):
 
                 direct_target = self._direct_initial_agent(challenge_with_knowledge, initial_analysis_obj)
                 if not history and not futures and direct_target:
+                    if self._has_embedding_analogy_artifact(challenge_with_knowledge):
+                        direct_reason = (
+                            "Embedding-analogy artifact evidence maps directly to "
+                            f"{direct_target}; dispatching before LLM planning."
+                        )
+                    else:
+                        direct_reason = (
+                            f"Parsed category '{challenge.get('category')}' maps directly to "
+                            f"{direct_target}; dispatching before LLM planning."
+                        )
                     decision = {
                         "next_action": "run_agent",
                         "target": direct_target,
-                        "reasoning": (
-                            f"Parsed category '{challenge.get('category')}' maps directly to "
-                            f"{direct_target}; dispatching before LLM planning."
-                        ),
+                        "reasoning": direct_reason,
                         "inputs": {},
                     }
                 else:
@@ -1046,6 +1057,12 @@ class CoordinatorAgent(BaseAgent):
         challenge: Dict[str, Any],
         analysis: Optional[ChallengeAnalysis] = None,
     ) -> Optional[str]:
+        if (
+            "coding_agent" in self.specialist_agents
+            and self._has_embedding_analogy_artifact(challenge)
+        ):
+            return "coding_agent"
+
         category = str(challenge.get("category") or "").lower()
         direct_routes = {
             "web": "web_agent",
@@ -1082,6 +1099,14 @@ class CoordinatorAgent(BaseAgent):
         if target in self.specialist_agents or target in self.support_agents:
             return target
         return None
+
+    @staticmethod
+    def _has_embedding_analogy_artifact(challenge: Dict[str, Any]) -> bool:
+        return any(
+            str(path).lower().endswith((".txt", ".csv"))
+            and is_embedding_analogy_file(str(path))
+            for path in challenge.get("files", [])
+        )
 
     @staticmethod
     def _hydrate_challenge_from_facts(challenge: Dict[str, Any], facts: List[Dict[str, Any]]) -> None:
