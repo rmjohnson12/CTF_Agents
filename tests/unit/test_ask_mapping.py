@@ -212,6 +212,24 @@ def test_downloads_root_is_not_expanded_as_challenge_directory(tmp_path, monkeyp
     assert _expand_challenge_artifacts([str(downloads)]) == []
 
 
+def test_small_pwn_directory_includes_versioned_libc_and_loader(tmp_path):
+    challenge_dir = tmp_path / "bird"
+    glibc_dir = challenge_dir / "glibc"
+    glibc_dir.mkdir(parents=True)
+    binary = challenge_dir / "r0bob1rd"
+    binary.write_bytes(b"\x7fELF" + b"\0" * 60)
+    libc = glibc_dir / "libc.so.6"
+    libc.write_bytes(b"\x7fELF" + b"\0" * 60)
+    loader = glibc_dir / "ld.so.2"
+    loader.write_bytes(b"\x7fELF" + b"\0" * 60)
+
+    expanded = _expand_challenge_artifacts([str(challenge_dir)])
+
+    assert str(binary.resolve()) in expanded
+    assert str(libc.resolve()) in expanded
+    assert str(loader.resolve()) in expanded
+
+
 def test_merge_heuristic_context_drops_llm_invented_local_files(tmp_path):
     stale = tmp_path / "input.csv"
     stale.write_text("in0,in1,in2,in3\n1,1,0,0\n")

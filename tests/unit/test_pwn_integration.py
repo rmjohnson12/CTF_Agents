@@ -1018,6 +1018,63 @@ def test_phase_ret2win_brute_forces_common_offsets(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 11b. Indexed table leak + format string
+# ---------------------------------------------------------------------------
+
+def test_solve_challenge_indexed_fmt_runs_before_ret2libc(tmp_path):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    fake_binary = tmp_path / "bird"
+    fake_binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    agent = PwnAgent()
+
+    with patch.object(agent, "_phase_checksec", return_value=[]):
+        with patch.object(agent, "_phase_source_guided_shellcode", return_value=([], None, False)):
+            with patch.object(
+                agent,
+                "_phase_indexed_leak_fmtstr",
+                return_value=(["indexed-fmt solved"], "HTB{indexed_fmt}", True),
+            ):
+                with patch.object(agent, "_phase_ret2libc") as ret2libc:
+                    result = agent.solve_challenge({
+                        "id": "bird",
+                        "description": "bird pwn at 1.2.3.4:31337",
+                        "files": [str(fake_binary)],
+                        "category": "pwn",
+                    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{indexed_fmt}"
+    ret2libc.assert_not_called()
+
+
+def test_solve_challenge_does_not_select_bundled_runtime_as_primary_binary(tmp_path):
+    from agents.specialists.pwn.pwn_agent import PwnAgent
+
+    loader = tmp_path / "ld.so.2"
+    libc = tmp_path / "libc.so.6"
+    binary = tmp_path / "r0bob1rd"
+    for artifact in (loader, libc, binary):
+        artifact.write_bytes(b"\x7fELF" + b"\x00" * 60)
+    agent = PwnAgent()
+
+    with patch.object(agent, "_phase_checksec", return_value=[]):
+        with patch.object(
+            agent,
+            "_phase_indexed_leak_fmtstr",
+            return_value=(["indexed-fmt solved"], "HTB{right_elf}", True),
+        ) as indexed_fmt:
+            result = agent.solve_challenge({
+                "id": "bird",
+                "files": [str(loader), str(libc), str(binary)],
+                "category": "pwn",
+            })
+
+    assert result["flag"] == "HTB{right_elf}"
+    assert indexed_fmt.call_args.args[0] == str(binary)
+
+
+# ---------------------------------------------------------------------------
 # 11b. _phase_ret2libc
 # ---------------------------------------------------------------------------
 

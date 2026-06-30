@@ -326,6 +326,11 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
                     continue
                 if child.suffix.lower() in useful_exts:
                     expanded.append(str(child.resolve()))
+                elif re.fullmatch(r"(?:libc|ld)[^/]*\.so(?:\.\d+)*", child.name.lower()):
+                    # Bundled dynamic loaders and libc builds are first-class
+                    # pwn artifacts even though pathlib sees `.6` as the
+                    # suffix of names such as libc.so.6.
+                    expanded.append(str(child.resolve()))
                 elif not child.suffix and is_elf_binary(str(child)):
                     expanded.append(str(child.resolve()))
         else:
