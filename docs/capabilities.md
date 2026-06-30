@@ -24,6 +24,7 @@ tests.
 - Source trees, archives, PDFs, PCAPs, images, firmware, executables, and logs
 - Encoded artifact recovery and flag extraction
 - Saleae UART decoding and ESP32 flash-image parsing
+- Bounded raw-TCP Forth diagnostic discovery with dictionary-gated command execution
 - Result redaction and bounded persistence
 
 ## Exploit and solution generation

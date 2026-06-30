@@ -4,6 +4,7 @@ import struct
 import zipfile
 
 from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
+from core.utils.security import SecurityPolicyError
 
 
 def _bits_for_text(text):
@@ -84,6 +85,82 @@ def test_hardware_agent_does_not_return_plain_ascii_as_flag(tmp_path):
     assert result["status"] == "attempted"
     assert result["flag"] is None
     assert result["artifacts"]["decoded_text"] == "not a flag"
+
+
+class _FakeForthSocket:
+    def __init__(self):
+        self.responses = [
+            b"Diagnostic tests\nFourth error code triggered. Use 'diag-complete'.\n",
+            b"read-char diag-complete words system call restart\n",
+            b"HTB{forth_agent_path}\n",
+        ]
+        self.sent = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def settimeout(self, _timeout):
+        pass
+
+    def sendall(self, payload):
+        self.sent.append(payload)
+
+    def recv(self, _size):
+        return self.responses.pop(0) if self.responses else b""
+
+
+def test_hardware_agent_solves_remote_forth_diagnostic(monkeypatch):
+    fake_socket = _FakeForthSocket()
+    allowed = []
+    monkeypatch.setattr(
+        "agents.specialists.hardware_logic.hardware_agent.socket.create_connection",
+        lambda endpoint, timeout: fake_socket,
+    )
+    monkeypatch.setattr(
+        "agents.specialists.hardware_logic.hardware_agent.assert_host_allowed",
+        lambda host, port: allowed.append((host, port)),
+    )
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "forklift",
+        "category": "hardware",
+        "description": "The diagnostic terminal runs a Forth interpreter.",
+        "url": "http://154.57.164.67:32673",
+        "files": [],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{forth_agent_path}"
+    assert allowed == [("154.57.164.67", 32673)]
+    assert fake_socket.sent == [
+        b"3\n",
+        b"words\n",
+        b's" cat flag.txt" system\n',
+    ]
+
+
+def test_hardware_agent_respects_network_policy_for_forth(monkeypatch):
+    monkeypatch.setattr(
+        "agents.specialists.hardware_logic.hardware_agent.assert_host_allowed",
+        lambda host, port: (_ for _ in ()).throw(SecurityPolicyError("not allowed")),
+    )
+    monkeypatch.setattr(
+        "agents.specialists.hardware_logic.hardware_agent.socket.create_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not connect")),
+    )
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "blocked_forklift",
+        "category": "hardware",
+        "description": "Forth diagnostic terminal at 203.0.113.5:31337",
+        "files": [],
+    })
+
+    assert result["status"] == "attempted"
+    assert any("blocked by network policy" in step for step in result["steps"])
 
 
 def test_hardware_agent_recognizes_known_saleae_debugging_interface(monkeypatch, tmp_path):
