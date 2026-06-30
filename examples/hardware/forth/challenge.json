@@ -1,0 +1,20 @@
+{
+  "id": "golden_hardware_forth",
+  "name": "Golden Hardware Forth Diagnostic",
+  "category": "hardware",
+  "description": "A forklift diagnostic terminal runs a Forth interpreter and accepts non-standard words.",
+  "files": ["session.json"],
+  "connection_info": "127.0.0.1:31337",
+  "expected": {
+    "command": "python3 -m pytest -q -p no:cacheprovider tests/e2e/test_hardware_forth_example.py",
+    "category": "hardware",
+    "agent": "hardware_agent",
+    "status": "solved",
+    "flag": "HTB{golden_forth_diagnostic}",
+    "commands": [
+      "3\n",
+      "words\n",
+      "s\" cat flag.txt\" system\n"
+    ]
+  }
+}

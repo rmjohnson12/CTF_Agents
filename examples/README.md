@@ -9,6 +9,10 @@ These small contracts are the stable routing and documentation layer. Deeper
 solver behavior is covered by the corresponding specialist unit fixtures and
 the evaluation suite under `challenges/evaluation/`.
 
+Some categories also contain nested workflow fixtures. For example,
+`examples/hardware/forth/` records a deterministic diagnostic session and is
+validated without opening a network connection.
+
 Run the golden paths with:
 
 ```bash

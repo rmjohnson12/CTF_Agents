@@ -26,6 +26,24 @@ attempted and reported even after failures.
 SSH workflows are limited to explicitly supplied, authorized targets. The
 system does not silently relax host or network policy based on challenge data.
 
+## Raw TCP diagnostic interpreters
+
+The Forth diagnostic workflow is enabled only when the challenge description
+explicitly identifies Forth and supplies a host and port. Before opening the
+socket, the hardware specialist applies the same host allowlist used by other
+remote agents.
+
+The workflow is deliberately constrained:
+
+- it selects the documented diagnostic menu and enumerates `words` first;
+- it requires a standalone `system` dictionary word before execution;
+- it executes only `cat` against three fixed flag paths;
+- socket reads have deadlines and a 128 KiB response limit; and
+- it never turns challenge text into an arbitrary shell command.
+
+Failure at any evidence or policy gate returns an attempted result with the
+reason recorded; it does not fall through to unrestricted command execution.
+
 ## Artifacts and secrets
 
 Reports, messages, knowledge stores, and campaign ledgers redact sensitive

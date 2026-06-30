@@ -1,0 +1,5 @@
+{
+  "3\n": "Diagnostic tests\nForth error code triggered. Use 'diag-complete' to restart.\n",
+  "words\n": "read-char diag-complete words system call restart\n",
+  "s\" cat flag.txt\" system\n": "HTB{golden_forth_diagnostic}\n"
+}

@@ -54,6 +54,26 @@ CTF_AGENTS_ALLOW_MODEL_DOWNLOAD=1 \
 Model names are restricted to the supported GloVe Twitter variants; arbitrary
 challenge text cannot select another download.
 
+## Raw TCP Forth diagnostics
+
+For an authorized hardware target that exposes a Forth diagnostic interpreter,
+provide the host and port in the instruction and allowlist that host explicitly:
+
+```bash
+CTF_AGENTS_ALLOWED_NETWORKS=TARGET_IP/32 \
+  python3 ask.py \
+  "Hardware challenge: the diagnostic terminal runs Forth at TARGET_IP:PORT"
+```
+
+The hardware specialist enters the diagnostic menu, enumerates `words`, and
+continues only if the dictionary exposes `system`. It reports the selected
+agent and each evidence gate in the normal routing and step output.
+
+Keep the connection open while interacting with menu-driven services. Some
+challenge binaries loop rapidly when their input reaches EOF, so one-shot
+pipelines such as `printf ... | nc ...` can produce misleading output or kill
+an ephemeral instance.
+
 ## Troubleshooting
 
 1. Run `python3 check_setup.py`.
