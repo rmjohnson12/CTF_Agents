@@ -16,6 +16,7 @@ tests.
 
 - HTTP/browser discovery, SQL tooling, directory discovery, and React/RSC probes
 - Binary inspection, strings, disassembly helpers, and controlled subprocesses
+- Bounded A32/ARM emulation for remote register-evaluation protocols
 - Hash cracking, packet analysis, metadata extraction, Docker, SSH, and Web3
 - Explicit network and host-execution policy checks
 
@@ -30,7 +31,7 @@ tests.
 ## Exploit and solution generation
 
 - Web authentication, source-guided API, upload, session, and dependency paths
-- Reverse-engineering and binary-exploitation strategies
+- Reverse-engineering strategies for local artifacts and authorized remote machine-code streams
 - Cryptographic decoding and constraint recovery
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions

@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import tempfile
@@ -25,6 +26,7 @@ from typing import Any, Dict, List, Optional
 from agents.base_agent import BaseAgent, AgentType
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
+from core.utils.security import SecurityPolicyError, assert_host_allowed
 from tools.common.elf_utils import is_elf_binary, is_native_binary, is_pe_binary
 from tools.common.python_tool import PythonTool
 
@@ -146,6 +148,7 @@ class ReverseEngineeringAgent(BaseAgent):
             "indexed_xor_phrase",
             "substitution_table_vm",
             "godot_game_loader",
+            "remote_arm_emulation",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -179,6 +182,12 @@ class ReverseEngineeringAgent(BaseAgent):
     def solve_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
         steps: List[str] = []
         files = challenge.get("files", [])
+
+        # Remote reversing services sometimes stream machine code instead of
+        # providing a local artifact. Handle that protocol before the normal
+        # file-required strategies.
+        if self._looks_like_remote_arm_challenge(challenge):
+            return self._solve_remote_arm_register_challenge(challenge, steps)
 
         if not files:
             return {
@@ -294,6 +303,179 @@ class ReverseEngineeringAgent(BaseAgent):
                 steps.append(f"strings error on {file_path}: {exc}")
 
         return self._result(challenge, "attempted", steps)
+
+    # ------------------------------------------------------------------
+    # Remote ARM register emulation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _looks_like_remote_arm_challenge(challenge: Dict[str, Any]) -> bool:
+        text = " ".join(
+            str(challenge.get(key, ""))
+            for key in ("name", "title", "description", "tags", "category")
+        ).lower()
+        arm_signal = bool(re.search(r"\barm(?:32)?\b|arm instructions?|arms race", text))
+        register_signal = bool(re.search(r"\br0\b|register|machine code|instructions?", text))
+        return arm_signal and register_signal and ReverseEngineeringAgent._remote_endpoint(challenge) is not None
+
+    @staticmethod
+    def _remote_endpoint(challenge: Dict[str, Any]) -> Optional[tuple[str, int]]:
+        values: List[str] = []
+        for key in ("url", "connection_info", "remote", "target"):
+            value = challenge.get(key)
+            if isinstance(value, dict):
+                host = value.get("host") or value.get("hostname")
+                port = value.get("port")
+                if host and port:
+                    try:
+                        return str(host), int(port)
+                    except (TypeError, ValueError):
+                        pass
+                values.extend(str(item) for item in value.values() if item)
+            elif value:
+                values.append(str(value))
+        values.append(str(challenge.get("description", "")))
+
+        for value in values:
+            match = re.search(r"(?<![\w.-])([A-Za-z0-9.-]+):(\d{1,5})(?!\d)", value)
+            if match and 0 < int(match.group(2)) <= 65535:
+                return match.group(1), int(match.group(2))
+            if "://" in value:
+                parsed = urlparse(value)
+                try:
+                    if parsed.hostname and parsed.port:
+                        return parsed.hostname, parsed.port
+                except ValueError:
+                    pass
+        return None
+
+    def _solve_remote_arm_register_challenge(
+        self,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Dict[str, Any]:
+        endpoint = self._remote_endpoint(challenge)
+        if endpoint is None:
+            steps.append("Remote ARM challenge detected, but no host and port were found.")
+            return self._result(challenge, "failed", steps)
+        host, port = endpoint
+        try:
+            assert_host_allowed(host, port=port)
+        except SecurityPolicyError as exc:
+            steps.append(f"Remote ARM target blocked by network policy: {exc}")
+            return self._result(challenge, "failed", steps)
+
+        steps.append(f"Detected bounded remote ARM register-emulation protocol at {host}:{port}.")
+        self.emit_progress(
+            status="running",
+            step_title="ARM emulation protocol detected",
+            step_description=f"Connecting to authorized target {host}:{port}",
+            challenge=challenge,
+            confidence=0.95,
+        )
+        prompt_re = re.compile(
+            rb"Level\s+(\d+)/(\d+):\s*([0-9a-fA-F]+).*?Register\s+r0:\s*",
+            re.DOTALL,
+        )
+        buffer = b""
+        total_received = 0
+        completed = 0
+        expected_total: Optional[int] = None
+        max_levels = 100
+        max_blob_bytes = 1024 * 1024
+        max_received = 8 * 1024 * 1024
+
+        try:
+            with socket.create_connection((host, port), timeout=8) as connection:
+                connection.settimeout(8)
+                while completed < max_levels:
+                    match = prompt_re.search(buffer)
+                    if match is None:
+                        chunk = connection.recv(65536)
+                        if not chunk:
+                            break
+                        total_received += len(chunk)
+                        if total_received > max_received:
+                            raise ValueError("remote transcript exceeded the 8 MiB safety limit")
+                        buffer += chunk
+                        continue
+
+                    level, total = int(match.group(1)), int(match.group(2))
+                    code_hex = match.group(3)
+                    buffer = buffer[match.end():]
+                    if total < 1 or total > max_levels or level < 1 or level > total:
+                        raise ValueError(f"invalid level counter {level}/{total}")
+                    if expected_total is None:
+                        expected_total = total
+                        steps.append(f"Service requested {total} ARM emulation levels.")
+                    elif total != expected_total:
+                        raise ValueError("remote level count changed during the run")
+                    if len(code_hex) % 8 != 0 or len(code_hex) // 2 > max_blob_bytes:
+                        raise ValueError("ARM code blob is malformed or exceeds the 1 MiB limit")
+
+                    r0 = self._emulate_arm_r0(bytes.fromhex(code_hex.decode("ascii")))
+                    connection.sendall(f"{r0:#x}\n".encode("ascii"))
+                    completed += 1
+                    if level == 1 or level == total or level % 10 == 0:
+                        steps.append(f"Emulated level {level}/{total}; submitted r0={r0:#x}.")
+                        self.emit_progress(
+                            status="running",
+                            step_title=f"ARM level {level}/{total}",
+                            step_description="Emulated A32 instructions and submitted the final r0 value.",
+                            challenge=challenge,
+                            confidence=0.98,
+                        )
+
+                    if level == total:
+                        while len(buffer) < 65536:
+                            try:
+                                chunk = connection.recv(65536)
+                            except socket.timeout:
+                                break
+                            if not chunk:
+                                break
+                            buffer += chunk
+                        flag = find_first_flag(buffer.decode("utf-8", errors="replace"))
+                        if flag:
+                            steps.append(f"Flag received after completing {completed} levels.")
+                            self.emit_progress(
+                                status="solved",
+                                step_title="Remote ARM challenge solved",
+                                step_description=f"Completed all {completed} emulation levels.",
+                                challenge=challenge,
+                                confidence=1.0,
+                                final_flag=flag,
+                            )
+                            return self._result(challenge, "solved", steps, flag=flag)
+                        raise ValueError("final response did not contain a recognized flag")
+        except ImportError as exc:
+            steps.append(f"Unicorn ARM emulator is unavailable: {exc}")
+        except (OSError, ValueError, RuntimeError) as exc:
+            steps.append(f"Remote ARM emulation failed after {completed} levels: {exc}")
+
+        return self._result(challenge, "attempted", steps)
+
+    @staticmethod
+    def _emulate_arm_r0(code: bytes) -> int:
+        """Execute bounded little-endian A32 code and return unsigned r0."""
+        from unicorn import UC_ARCH_ARM, UC_MODE_ARM, Uc
+        from unicorn.arm_const import UC_ARM_REG_R0
+
+        if not code or len(code) % 4:
+            raise ValueError("A32 code must contain complete 4-byte instructions")
+        base = 0x10000
+        mapped_size = ((len(code) + 0xFFF) // 0x1000) * 0x1000
+        emulator = Uc(UC_ARCH_ARM, UC_MODE_ARM)
+        emulator.mem_map(base, mapped_size)
+        emulator.mem_write(base, code)
+        instruction_count = len(code) // 4
+        emulator.emu_start(
+            base,
+            base + len(code),
+            timeout=1_000_000,
+            count=max(1_000, instruction_count * 4),
+        )
+        return int(emulator.reg_read(UC_ARM_REG_R0)) & 0xFFFFFFFF
 
     # ------------------------------------------------------------------
     # Strategy 0: Godot game loader / encrypted PCK recovery

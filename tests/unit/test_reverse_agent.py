@@ -19,6 +19,7 @@ from agents.specialists.reverse_engineering.reverse_agent import (
     _ror8,
 )
 from core.utils.flag_utils import extract_flags, find_first_flag
+from core.utils.security import SecurityPolicyError
 from tools.common.elf_utils import is_elf_binary, is_native_binary, is_pe_binary
 
 
@@ -99,6 +100,78 @@ class TestGlibcRand:
         assert _ror8(0b10110001, 1) == 0b11011000
         assert _ror8(0xFF, 0) == 0xFF
         assert _ror8(0x01, 1) == 0x80
+
+
+# ---------------------------------------------------------------------------
+# Remote ARM register emulation
+# ---------------------------------------------------------------------------
+
+class TestRemoteArmEmulation:
+    CHALLENGE = {
+        "id": "arms-race",
+        "category": "reverse",
+        "description": (
+            "Calculate register r0 for each set of raw ARM instructions. "
+            "Target 192.0.2.10:31337"
+        ),
+    }
+
+    def test_detects_remote_arm_challenge_without_files(self):
+        assert ReverseEngineeringAgent._looks_like_remote_arm_challenge(self.CHALLENGE)
+        assert ReverseEngineeringAgent._remote_endpoint(self.CHALLENGE) == ("192.0.2.10", 31337)
+
+    def test_remote_arm_protocol_solves_before_no_files_guard(self):
+        transcript = [
+            b"Level 1/2: 01020304\nRegister r0: ",
+            b"Level 2/2: 05060708\nRegister r0: ",
+            b"Excellent! HTB{bounded_arm_emulation}\n",
+            b"",
+        ]
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.recv.side_effect = transcript
+        agent = ReverseEngineeringAgent()
+
+        with (
+            patch(
+                "agents.specialists.reverse_engineering.reverse_agent.assert_host_allowed"
+            ),
+            patch(
+                "agents.specialists.reverse_engineering.reverse_agent.socket.create_connection",
+                return_value=connection,
+            ),
+            patch.object(agent, "_emulate_arm_r0", side_effect=[0x11111111, 0x22222222]),
+        ):
+            result = agent.solve_challenge(self.CHALLENGE)
+
+        assert result["status"] == "solved"
+        assert result["flag"] == "HTB{bounded_arm_emulation}"
+        assert connection.sendall.call_args_list == [
+            ((b"0x11111111\n",),),
+            ((b"0x22222222\n",),),
+        ]
+        assert any("2 ARM emulation levels" in step for step in result["steps"])
+
+    def test_remote_arm_target_obeys_network_policy(self):
+        agent = ReverseEngineeringAgent()
+        with patch(
+            "agents.specialists.reverse_engineering.reverse_agent.assert_host_allowed",
+            side_effect=SecurityPolicyError("blocked for test"),
+        ):
+            result = agent.solve_challenge(self.CHALLENGE)
+
+        assert result["status"] == "failed"
+        assert "blocked for test" in result["steps"][-1]
+
+    def test_emulates_a32_mov_immediate(self):
+        pytest.importorskip("unicorn")
+        # mov r0, #0x2a in little-endian A32 encoding.
+        assert ReverseEngineeringAgent._emulate_arm_r0(bytes.fromhex("2a00a0e3")) == 42
+
+    def test_rejects_incomplete_a32_instruction(self):
+        pytest.importorskip("unicorn")
+        with pytest.raises(ValueError, match="complete 4-byte"):
+            ReverseEngineeringAgent._emulate_arm_r0(b"\x00\x01")
 
 
 # ---------------------------------------------------------------------------

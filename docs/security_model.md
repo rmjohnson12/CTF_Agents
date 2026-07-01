@@ -6,7 +6,9 @@ CTF_Agents treats challenge metadata and artifacts as untrusted input.
 
 Remote hosts must be approved through `CTF_AGENTS_ALLOWED_NETWORKS` or trusted
 configuration. URLs embedded in challenge JSON cannot authorize themselves.
-Hostnames are resolved and checked against the allowlist before use.
+Hostnames are resolved and checked against the allowlist before use. Remote ARM
+instruction streams are also allowlist-gated and execute only inside a fresh,
+instruction-limited Unicorn emulator rather than as host code.
 
 ## Process and environment isolation
 

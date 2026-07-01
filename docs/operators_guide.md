@@ -74,6 +74,22 @@ challenge binaries loop rapidly when their input reaches EOF, so one-shot
 pipelines such as `printf ... | nc ...` can produce misleading output or kill
 an ephemeral instance.
 
+## Remote ARM instruction challenges
+
+The reverse specialist recognizes evidence-gated challenges that stream raw
+A32 instructions and request the final value of register `r0`. A local file is
+not required. Provide and explicitly allowlist the authorized target:
+
+```bash
+CTF_AGENTS_ALLOWED_NETWORKS=TARGET_IP/32 \
+  python3 ask.py \
+  "Reversing challenge: emulate raw ARM instructions and return r0 at TARGET_IP:PORT"
+```
+
+Each level runs in a fresh Unicorn emulator. Level counts, transcript size,
+machine-code size, instruction count, connection time, and target access are
+bounded. Progress events are emitted at useful intervals for live reporting.
+
 ## Troubleshooting
 
 1. Run `python3 check_setup.py`.
