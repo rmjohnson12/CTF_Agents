@@ -51,6 +51,17 @@ keys. Raw browser cookies and storage are excluded unless
 `CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS=1` is explicitly enabled. Raw flags are
 hashed where retained for learning or campaign history.
 
+## Live reporting
+
+Live reporting is disabled unless `CTF_AGENTS_REPORTING_URL` is configured.
+Outbound events redact secret-bearing artifact keys and flags embedded in text.
+The reporting service stores final flags only when both sender and server opt in.
+
+Ingestion and read credentials are separate. Static frontend code must never
+contain the write token. Cross-origin browser access is denied unless the exact
+origin is configured, public timeline reads are opt-in, and non-loopback server
+binds require an ingestion token. See [live_reporting.md](live_reporting.md).
+
 ## Specialized opt-ins
 
 - Remote React/RSC execution: `CTF_AGENTS_ALLOW_REMOTE_R2S=1`

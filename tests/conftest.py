@@ -32,5 +32,15 @@ def disable_live_llm_keys(monkeypatch):
         "GOOGLE_PROJECT_ID",
         "GOOGLE_CLOUD_LOCATION",
         "GOOGLE_LOCATION",
+        "CTF_AGENTS_REPORTING_URL",
+        "CTF_AGENTS_REPORTING_TOKEN",
+        "CTF_AGENTS_REPORTING_TIMEOUT",
+        "CTF_AGENTS_REPORT_FINAL_FLAG",
+        "CTF_AGENTS_REPORTING_API_TOKEN",
+        "CTF_AGENTS_REPORTING_WRITE_TOKEN",
+        "CTF_AGENTS_REPORTING_READ_TOKEN",
+        "CTF_AGENTS_REPORTING_PUBLIC_READ",
+        "CTF_AGENTS_REPORTING_ALLOWED_ORIGINS",
+        "CTF_AGENTS_REPORTING_STORE_FLAGS",
     ):
         monkeypatch.delenv(key, raising=False)

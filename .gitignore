@@ -209,6 +209,9 @@ logs/knowledge.db
 logs/performance.db
 logs/solve_traces.db
 logs/attempts.db
+logs/reporting.db
+logs/reporting.db-shm
+logs/reporting.db-wal
 
 # Local CTF scratch and challenge extraction artifacts
 .scratch/

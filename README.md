@@ -70,6 +70,16 @@ CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
 
 See [examples/README.md](examples/README.md) for deterministic golden paths.
 
+## Optional Live Reporting
+
+Agents can send validated progress events to a configurable HTTP endpoint for
+durable timelines and SSE dashboards. Start the local service with
+`python3 reporting_server.py`, then set `CTF_AGENTS_REPORTING_URL` and a write
+token before running a challenge. Reporting is opt-in and never changes a solve
+outcome.
+See [Live solve reporting](docs/live_reporting.md) for routes, payloads,
+security defaults, and frontend integration guidance.
+
 ## Repository Layout
 
 ```text
@@ -89,6 +99,7 @@ config/       Runtime and tool configuration
 - [Architecture](docs/architecture.md)
 - [Capabilities](docs/capabilities.md)
 - [Security model](docs/security_model.md)
+- [Live solve reporting](docs/live_reporting.md)
 - [Operator's guide](docs/operators_guide.md)
 - [Development](docs/development.md)
 - [Contributing](docs/contributing.md)

@@ -58,6 +58,7 @@ class CoordinatorAgent(BaseAgent):
         knowledge_store: Optional[KnowledgeStore] = None,
         solve_trace_store: Optional[SolveTraceStore] = None,
         performance_tracker: Optional[Any] = None,
+        reporter: Optional[Any] = None,
     ):
         ks = knowledge_store or KnowledgeStore()
         super().__init__(agent_id, AgentType.COORDINATOR, knowledge_store=ks)
@@ -75,11 +76,17 @@ class CoordinatorAgent(BaseAgent):
         self.solve_trace_store = solve_trace_store or self._create_solve_trace_store()
         self.broker = broker or MessageBroker()
         self.task_queue = TaskQueue()
+        if reporter is None:
+            from core.reporting.client import HttpProgressReporter
+            reporter = HttpProgressReporter.from_env()
+        self.reporter = reporter
+        self.progress_reporter = reporter
 
     def register_agent(self, agent: BaseAgent):
         """Register a specialist or support agent with the coordinator."""
         # Share knowledge store with the specialist
         agent.knowledge_store = self.knowledge_store
+        agent.progress_reporter = self.reporter
         
         if agent.agent_type == AgentType.SPECIALIST:
             self.specialist_agents[agent.agent_id] = agent
@@ -123,6 +130,14 @@ class CoordinatorAgent(BaseAgent):
         """
         challenge_id = safe_slug(challenge.get("id", "unknown_challenge"))
         challenge["id"] = challenge_id
+        challenge["run_id"] = str(challenge.get("run_id") or uuid.uuid4())
+        challenge["_reporting_started_monotonic"] = time.monotonic()
+        self.emit_progress(
+            status="running",
+            step_title="Run started",
+            step_description="Coordinator accepted the challenge and began analysis.",
+            challenge=challenge,
+        )
         self.active_challenges[challenge_id] = challenge
         checkpoint_dir = Path("logs/checkpoints")
 
@@ -145,6 +160,17 @@ class CoordinatorAgent(BaseAgent):
             "reasoning": initial_analysis["strategy"].get("reasoning", ""),
             "fallback_chain": self._fallback_chain_for(initial_analysis["category"], initial_target),
         }
+        self.emit_progress(
+            status="progress",
+            step_title="Initial route selected",
+            step_description=(
+                f"{routing_summary['selected_action']} -> {routing_summary['selected_target']}; "
+                f"evidence={', '.join(routing_summary['evidence']) or 'none'}"
+            ),
+            challenge=challenge,
+            confidence=initial_analysis["confidence"],
+            artifacts={"routing_summary": routing_summary},
+        )
         checkpoint = self._load_checkpoint(checkpoint_dir, challenge_id) if resume else None
         history: List[Dict[str, Any]] = checkpoint.get("history", []) if checkpoint else []
         trace_hints = self._get_solve_trace_hints_best_effort(challenge)
@@ -178,6 +204,7 @@ class CoordinatorAgent(BaseAgent):
 
         final_result = {
             "challenge_id": challenge_id,
+            "run_id": challenge["run_id"],
             "agent_id": self.agent_id,
             "status": "attempted",
             "flag": None,
@@ -211,6 +238,13 @@ class CoordinatorAgent(BaseAgent):
                 final_result["status"] = "solved"
                 final_result["flag"] = result.get("flag")
                 all_steps.append(f"Challenge solved by task {task_id}!")
+                self.emit_progress(
+                    status="solved",
+                    step_title="Run completed",
+                    step_description=f"Challenge solved by {result.get('agent_id', task_info.get('target'))}.",
+                    challenge=challenge,
+                    final_flag=result.get("flag"),
+                )
                 self._cleanup_run_artifacts(history, all_steps)
                 return final_result
 
@@ -532,6 +566,18 @@ class CoordinatorAgent(BaseAgent):
             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
             self._record_solve_trace_best_effort(challenge, final_result)
             self._save_run_result_best_effort(final_result)
+            final_status = str(final_result.get("status") or "attempted")
+            self.emit_progress(
+                status=(
+                    "solved" if final_status == "solved"
+                    else "failed" if final_status == "failed"
+                    else "completed"
+                ),
+                step_title="Run finished",
+                step_description=f"Final status: {final_result.get('status')}",
+                challenge=challenge,
+                final_flag=final_result.get("flag"),
+            )
             return final_result
 
         except Exception as exc:
@@ -541,9 +587,19 @@ class CoordinatorAgent(BaseAgent):
             self._cleanup_run_artifacts(history, final_result["steps"])
             self._checkpoint_progress(checkpoint_dir, challenge_id, history, all_steps)
             self.active_challenges.pop(challenge_id, None)
+            self.emit_progress(
+                status="failed",
+                step_title="Coordinator error",
+                step_description="The coordinator stopped after an exception.",
+                challenge=challenge,
+                error_message=str(exc),
+            )
             return final_result
         finally:
             executor.shutdown(wait=False)
+            flush_reporting = getattr(self.reporter, "flush", None)
+            if callable(flush_reporting):
+                flush_reporting(timeout_seconds=1.0)
             if self.get_status() == AgentStatus.ERROR:
                 self.update_status(AgentStatus.IDLE)
 
@@ -604,9 +660,16 @@ class CoordinatorAgent(BaseAgent):
         agent.assign_task(challenge)
         t0 = time.monotonic()
         try:
+            agent.emit_progress(
+                status="running",
+                step_title="Agent started",
+                step_description=f"{target_agent_id} accepted the routed challenge.",
+                challenge=challenge,
+            )
             result = agent.solve_challenge(challenge)
 
             result.setdefault("steps", [])
+            result.setdefault("run_id", challenge.get("run_id"))
             result["steps"] = routing_steps + result["steps"]
             result["routing"] = {
                 "selected_target": target_agent_id,
@@ -618,6 +681,27 @@ class CoordinatorAgent(BaseAgent):
                 challenge_id=challenge.get("id", "unknown"),
                 status=result.get("status", "attempted"),
                 duration_sec=time.monotonic() - t0,
+            )
+            for index, step in enumerate(result.get("steps") or [], start=1):
+                agent.emit_progress(
+                    status="progress",
+                    step_title=f"Step {index}",
+                    step_description=str(step),
+                    challenge=challenge,
+                )
+            result_status = str(result.get("status") or "attempted")
+            report_status = result_status if result_status in {
+                "attempted", "solved", "failed", "blocked", "stalled"
+            } else "completed"
+            agent.emit_progress(
+                status=report_status,
+                step_title="Agent finished",
+                step_description=f"{target_agent_id} returned status={result_status}.",
+                challenge=challenge,
+                confidence=result.get("confidence"),
+                artifacts=result.get("artifacts") or {},
+                final_flag=result.get("flag"),
+                error_message=(str(result.get("error")) if result.get("error") is not None else None),
             )
             return result
         finally:
@@ -745,24 +829,49 @@ class CoordinatorAgent(BaseAgent):
         Run a tool or adapter selected by the reasoner.
         """
         t0 = time.monotonic()
+        self.emit_progress(
+            status="running",
+            step_title="Tool started",
+            step_description=f"Coordinator invoked tool {target_tool}.",
+            challenge=challenge,
+            artifacts={"tool": target_tool},
+        )
         if target_tool == "browser_snapshot":
             result = self._run_browser_snapshot(challenge, routing_steps)
         elif target_tool == "tony_htb_sql":
             result = self._run_tony_sql(challenge, routing_steps)
         else:
-            return {
+            result = {
                 "challenge_id": challenge.get("id"),
+                "run_id": challenge.get("run_id"),
                 "agent_id": self.agent_id,
                 "status": "failed",
                 "flag": None,
                 "steps": routing_steps + [f"Unknown tool target '{target_tool}'."],
             }
+            self.emit_progress(
+                status="failed",
+                step_title="Tool unavailable",
+                step_description=f"Unknown tool target: {target_tool}.",
+                challenge=challenge,
+                error_message=f"Unknown tool target '{target_tool}'.",
+            )
+            return result
         self._record_performance_outcome_best_effort(
             agent_id=target_tool,
             category=challenge.get("category", "misc"),
             challenge_id=challenge.get("id", "unknown"),
             status=result.get("status", "attempted"),
             duration_sec=time.monotonic() - t0,
+        )
+        self.emit_progress(
+            status="completed" if result.get("status") != "failed" else "failed",
+            step_title="Tool finished",
+            step_description=f"Tool {target_tool} returned status={result.get('status')}.",
+            challenge=challenge,
+            artifacts=result.get("artifacts") or {},
+            final_flag=result.get("flag"),
+            error_message=(str(result.get("error")) if result.get("error") is not None else None),
         )
         return result
 

@@ -54,6 +54,8 @@ class BaseAgent(ABC):
         self.current_task = None
         self.capabilities = []
         self.knowledge_store = knowledge_store or KnowledgeStore()
+        self.progress_reporter = None
+        self._task_started_monotonic: Optional[float] = None
         
     @abstractmethod
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -103,11 +105,61 @@ class BaseAgent(ABC):
         """Assign a task to this agent"""
         self.current_task = task
         self.status = AgentStatus.BUSY
+        self._task_started_monotonic = time.monotonic()
         
     def complete_task(self):
         """Mark current task as complete"""
         self.current_task = None
         self.status = AgentStatus.IDLE
+        self._task_started_monotonic = None
+
+    def emit_progress(
+        self,
+        *,
+        status: str,
+        step_title: str,
+        step_description: str = "",
+        challenge: Optional[Dict[str, Any]] = None,
+        confidence: Optional[float] = None,
+        artifacts: Optional[Dict[str, Any]] = None,
+        final_flag: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        """Emit an optional structured update without affecting solve behavior.
+
+        Specialists can call this during long-running work. The coordinator also
+        emits lifecycle events around every specialist, so existing agents gain
+        useful reporting without needing immediate rewrites.
+        """
+        if self.progress_reporter is None:
+            return False
+        task = challenge or self.current_task or {}
+        run_id = task.get("run_id")
+        challenge_id = task.get("id") or task.get("challenge_id")
+        if not run_id or not challenge_id:
+            return False
+        started = task.get("_reporting_started_monotonic") or self._task_started_monotonic
+        elapsed = max(0.0, time.monotonic() - float(started)) if started else None
+        try:
+            from core.reporting.models import ProgressUpdate
+
+            return bool(self.progress_reporter.emit(ProgressUpdate(
+                challenge_id=str(challenge_id),
+                run_id=str(run_id),
+                agent_name=self.agent_id,
+                agent_type=self.agent_type.value,
+                status=status,
+                step_title=step_title,
+                step_description=step_description,
+                confidence=confidence,
+                elapsed_seconds=elapsed,
+                artifacts=artifacts or {},
+                final_flag=final_flag,
+                error_message=error_message,
+            )))
+        except Exception as exc:
+            logging.getLogger(self.agent_id).warning("Progress reporting failed: %s", exc)
+            return False
 
     def _plan_approach(self, indicators: List[str]) -> str:
         """

@@ -68,6 +68,7 @@ Each document should include:
 - `agents/development_guide.md`: Creating new agents
 - `api/communication_protocol.md`: Inter-agent communication
 - `guides/contributing.md`: Contribution guidelines
+- `live_reporting.md`: Progress-event schema, REST routes, SSE, and deployment
 
 ### For Researchers
 - `architecture/decision_engine.md`: AI decision-making
