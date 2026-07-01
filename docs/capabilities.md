@@ -16,7 +16,7 @@ tests.
 
 - HTTP/browser discovery, SQL tooling, directory discovery, and React/RSC probes
 - Binary inspection, strings, disassembly helpers, and controlled subprocesses
-- Bounded A32/ARM emulation for remote register-evaluation protocols
+- ARM-architecture wordplay detection and bounded A32 emulation for remote register protocols
 - Hash cracking, packet analysis, metadata extraction, Docker, SSH, and Web3
 - Explicit network and host-execution policy checks
 

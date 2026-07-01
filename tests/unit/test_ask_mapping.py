@@ -506,6 +506,17 @@ def test_heuristic_mapping_routes_explicit_reversing_with_missing_file_to_revers
     assert _heuristic_mapping_is_actionable(challenge) is True
 
 
+def test_heuristic_mapping_routes_arms_race_wordplay_to_reverse_before_web():
+    challenge = _heuristic_challenge_from_instruction(
+        "A server sends mysterious data in a multi-level challenge. "
+        "Everyone is in an ARMs race. Target 192.0.2.10:31337",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "reverse"
+    assert challenge["url"] == "http://192.0.2.10:31337"
+
+
 def test_reversing_prompt_with_downloads_typo_recovers_file_and_category(tmp_path, monkeypatch):
     home = tmp_path / "home"
     buddy = home / "Downloads" / "buddy"

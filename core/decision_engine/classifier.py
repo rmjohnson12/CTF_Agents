@@ -204,6 +204,7 @@ class ChallengeClassifier:
         if (
             has_elf
             or any(f.endswith((".py", ".exe", ".bin", ".pck", ".gd", ".gdc")) for f in files)
+            or re.search(r"\barms?\s+race\b", text)
             or self._kw(
                 text,
                 "reverse", "reversing", "source code", "analyze program",
@@ -215,7 +216,7 @@ class ChallengeClassifier:
             return ChallengeAnalysis(
                 category_guess="reverse",
                 confidence=0.95,
-                reasoning="Detected reverse engineering indicators or executable files.",
+                reasoning="Detected reverse engineering or architecture-wordplay indicators.",
                 recommended_target="reverse_agent",
                 recommended_action="run_agent",
                 detected_indicators=indicators,

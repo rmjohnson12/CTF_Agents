@@ -316,7 +316,12 @@ class ReverseEngineeringAgent(BaseAgent):
         ).lower()
         arm_signal = bool(re.search(r"\barm(?:32)?\b|arm instructions?|arms race", text))
         register_signal = bool(re.search(r"\br0\b|register|machine code|instructions?", text))
-        return arm_signal and register_signal and ReverseEngineeringAgent._remote_endpoint(challenge) is not None
+        wordplay_signal = bool(re.search(r"\barms?\s+race\b", text))
+        return (
+            arm_signal
+            and (register_signal or wordplay_signal)
+            and ReverseEngineeringAgent._remote_endpoint(challenge) is not None
+        )
 
     @staticmethod
     def _remote_endpoint(challenge: Dict[str, Any]) -> Optional[tuple[str, int]]:

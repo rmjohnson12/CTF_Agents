@@ -30,6 +30,25 @@ def test_reasoner_routes_crypto():
     assert analysis.recommended_action == "run_agent"
 
 
+def test_reasoner_routes_arms_race_wordplay_to_reverse_before_generic_host():
+    reasoner = LLMReasoner(client=None)
+    challenge = {
+        "id": "mystery_remote",
+        "name": "Script K. Iddie",
+        "description": (
+            "A server sends mysterious data for a multi-level challenge. "
+            "Everyone is in an ARMs race. 192.0.2.10:31337"
+        ),
+        "url": "http://192.0.2.10:31337",
+        "files": [],
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+
+    assert analysis.category_guess == "reverse"
+    assert analysis.recommended_target == "reverse_agent"
+
+
 def test_reasoner_routes_sqli():
     reasoner = LLMReasoner(client=None)
 

@@ -469,6 +469,11 @@ def _heuristic_challenge_from_instruction(
     elif any(f.lower().endswith((".exe", ".pck", ".gdc")) for f in challenge_files):
         # PE/Windows binaries are always reversing — never pwn or log
         category = "reverse"
+    elif re.search(r"\barms?\s+race\b", lowered_input):
+        # CTF wording commonly hides an ARM architecture hint in "ARMs race".
+        # Keep this ahead of the generic host/URL rule so a raw TCP reversing
+        # service is not mistaken for a web application.
+        category = "reverse"
     elif has_log_term:
         category = "log"
     elif (

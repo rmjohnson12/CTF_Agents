@@ -120,6 +120,18 @@ class TestRemoteArmEmulation:
         assert ReverseEngineeringAgent._looks_like_remote_arm_challenge(self.CHALLENGE)
         assert ReverseEngineeringAgent._remote_endpoint(self.CHALLENGE) == ("192.0.2.10", 31337)
 
+    def test_detects_arms_race_wordplay_before_protocol_is_known(self):
+        challenge = {
+            "id": "mystery",
+            "category": "reverse",
+            "description": (
+                "A server sends mysterious data for a multi-level challenge. "
+                "Everyone is in an ARMs race. 192.0.2.10:31337"
+            ),
+        }
+
+        assert ReverseEngineeringAgent._looks_like_remote_arm_challenge(challenge)
+
     def test_remote_arm_protocol_solves_before_no_files_guard(self):
         transcript = [
             b"Level 1/2: 01020304\nRegister r0: ",
