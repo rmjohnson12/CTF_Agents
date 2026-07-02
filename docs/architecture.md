@@ -30,8 +30,8 @@ instruction / challenge JSON
   with only the CLI dependencies their constructors explicitly accept.
 - **Artifacts**: local files, fetched content, and generated outputs are passed
   through challenge and result dictionaries with sensitive fields redacted.
-- **Learning**: successful routing signatures and artifact keys are stored
-  without retaining raw flags.
+- **Learning**: successful routing signatures, artifact keys, and reusable
+  runtime technique fingerprints are stored without retaining raw flags.
 - **Reporting**: checkpoints and final JSON reports preserve decisions, steps,
   and bounded artifacts for debugging and resume.
 - **Campaigns**: providers feed local challenge definitions to a retry-bounded

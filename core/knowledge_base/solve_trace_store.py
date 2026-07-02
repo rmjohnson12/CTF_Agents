@@ -50,6 +50,7 @@ class SolveTraceStore:
                     route_signature    TEXT,
                     indicators         TEXT,
                     artifact_keys      TEXT,
+                    techniques         TEXT    NOT NULL DEFAULT '[]',
                     step_count         INTEGER,
                     iterations         INTEGER,
                     recorded_at        REAL    NOT NULL,
@@ -59,6 +60,13 @@ class SolveTraceStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_solve_category ON solve_traces(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_solve_agent ON solve_traces(successful_agent)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_solve_recorded ON solve_traces(recorded_at)")
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(solve_traces)")
+            }
+            if "techniques" not in columns:
+                conn.execute(
+                    "ALTER TABLE solve_traces ADD COLUMN techniques TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def record_solve(self, challenge: Dict[str, Any], result: Dict[str, Any]) -> Optional[int]:
         """Record a solved run and return the row id, or None for unsolved runs."""
@@ -71,6 +79,7 @@ class SolveTraceStore:
         solved_entry = self._solved_history_entry(history, result)
         route_signature = self._route_signature(history)
         artifact_keys = self._artifact_keys(history, result)
+        techniques = self._techniques(history, result)
         indicators = self._challenge_indicators(challenge)
         routing = solved_entry.get("routing") or {}
         successful_agent = solved_entry.get("agent_id") or result.get("agent_id")
@@ -92,11 +101,12 @@ class SolveTraceStore:
                     route_signature,
                     indicators,
                     artifact_keys,
+                    techniques,
                     step_count,
                     iterations,
                     recorded_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(challenge.get("id", result.get("challenge_id", "unknown"))),
@@ -111,6 +121,7 @@ class SolveTraceStore:
                     route_signature,
                     json.dumps(indicators, sort_keys=True),
                     json.dumps(artifact_keys, sort_keys=True),
+                    json.dumps(techniques, sort_keys=True),
                     len(result.get("steps") or []),
                     int(result.get("iterations") or 0),
                     time.time(),
@@ -138,6 +149,7 @@ class SolveTraceStore:
                 route_signature,
                 indicators,
                 artifact_keys,
+                techniques,
                 step_count,
                 iterations,
                 recorded_at
@@ -170,9 +182,36 @@ class SolveTraceStore:
                 "route_signature": row["route_signature"],
                 "indicators": row["indicators"],
                 "artifact_keys": row["artifact_keys"],
+                "techniques": row["techniques"],
             }
             for row in self.get_recent_solves(category=category, limit=limit)
         ]
+
+    def find_by_techniques(
+        self,
+        techniques: List[str],
+        *,
+        category: Optional[str] = None,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve prior solved routes sharing runtime-observed techniques."""
+        wanted = {str(item) for item in techniques if item}
+        if not wanted:
+            return []
+        matches = []
+        for row in self.get_recent_solves(category=category, limit=200):
+            shared = sorted(wanted & set(row.get("techniques") or []))
+            if not shared:
+                continue
+            matches.append({
+                "challenge_id": row["challenge_id"],
+                "successful_target": row["successful_target"],
+                "route_signature": row["route_signature"],
+                "shared_techniques": shared,
+                "techniques": row["techniques"],
+                "recorded_at": row["recorded_at"],
+            })
+        return matches[:limit]
 
     def find_similar_patterns(
         self,
@@ -277,6 +316,24 @@ class SolveTraceStore:
         return sorted(keys)
 
     @staticmethod
+    def _techniques(history: List[Dict[str, Any]], result: Dict[str, Any]) -> List[str]:
+        techniques = set()
+
+        def visit(value: Any, parent_key: str = "") -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    visit(item, str(key).lower())
+            elif isinstance(value, (list, tuple, set)):
+                for item in value:
+                    visit(item, parent_key)
+            elif parent_key in {"technique", "techniques"} and value:
+                techniques.add(str(value))
+
+        for entry in [*history, result]:
+            visit(entry.get("artifacts") or {})
+        return sorted(techniques)
+
+    @staticmethod
     def _challenge_indicators(challenge: Dict[str, Any]) -> List[str]:
         indicators = set()
         category = challenge.get("category")
@@ -341,7 +398,8 @@ class SolveTraceStore:
             "route_signature": row[9],
             "indicators": json.loads(row[10] or "[]"),
             "artifact_keys": json.loads(row[11] or "[]"),
-            "step_count": row[12],
-            "iterations": row[13],
-            "recorded_at": row[14],
+            "techniques": json.loads(row[12] or "[]"),
+            "step_count": row[13],
+            "iterations": row[14],
+            "recorded_at": row[15],
         }

@@ -54,6 +54,7 @@ class BaseAgent(ABC):
         self.current_task = None
         self.capabilities = []
         self.knowledge_store = knowledge_store or KnowledgeStore()
+        self.solve_trace_store = None
         self.progress_reporter = None
         self._task_started_monotonic: Optional[float] = None
         

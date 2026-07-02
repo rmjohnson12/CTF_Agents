@@ -86,6 +86,7 @@ class CoordinatorAgent(BaseAgent):
         """Register a specialist or support agent with the coordinator."""
         # Share knowledge store with the specialist
         agent.knowledge_store = self.knowledge_store
+        agent.solve_trace_store = self.solve_trace_store
         agent.progress_reporter = self.reporter
         
         if agent.agent_type == AgentType.SPECIALIST:

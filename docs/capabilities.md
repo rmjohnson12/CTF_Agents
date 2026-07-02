@@ -31,6 +31,8 @@ tests.
 ## Exploit and solution generation
 
 - Web authentication, source-guided API, upload, session, and dependency paths
+- Evidence-gated URL-to-PDF chains spanning duplicate-parameter parser mismatches,
+  formatted-history disclosure, and JWT authorization
 - Reverse-engineering strategies for local artifacts and authorized remote machine-code streams
 - Cryptographic decoding and constraint recovery
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
@@ -41,6 +43,7 @@ tests.
 
 - Checkpoint resume
 - Successful solve-trace storage without raw flags
+- Runtime technique fingerprints and technique-based prior-solve retrieval
 - JSON run reports and campaign SQLite ledgers
 - Repeatable benchmark summaries
 

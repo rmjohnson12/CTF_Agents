@@ -31,7 +31,10 @@ def test_solve_trace_store_records_compact_success(tmp_path):
                         "selected_target": "web_agent",
                         "execution_type": "agent",
                     },
-                    "artifacts": {"rendered_stl": "/tmp/projection.png"},
+                    "artifacts": {
+                        "rendered_stl": "/tmp/projection.png",
+                        "analysis": {"techniques": ["stl_projection"]},
+                    },
                 }
             ],
         },
@@ -51,6 +54,7 @@ def test_solve_trace_store_records_compact_success(tmp_path):
     assert rows[0]["route_signature"] == "agent:web_agent:solved"
     assert "artifact_keys" in rows[0]
     assert "rendered_stl" in rows[0]["artifact_keys"]
+    assert rows[0]["techniques"] == ["stl_projection"]
     assert "keyword:stl" in rows[0]["indicators"]
     assert "file_ext:.stl" in rows[0]["indicators"]
 
@@ -107,8 +111,39 @@ def test_solve_trace_store_returns_successful_patterns(tmp_path):
             "route_signature": "agent:web_agent:solved",
             "indicators": ["category:web", "keyword:cookie", "keyword:jwt"],
             "artifact_keys": ["jwt_claims"],
+            "techniques": [],
         }
     ]
+
+
+def test_solve_trace_store_retrieves_runtime_technique_matches(tmp_path):
+    store = SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
+    store.record_solve(
+        {"id": "pdf_chain", "category": "web"},
+        {
+            "status": "solved",
+            "flag": "HTB{technique_memory}",
+            "agent_id": "web_agent",
+            "artifacts": {
+                "chain": {
+                    "techniques": [
+                        "url_to_pdf_renderer",
+                        "duplicate_parameter_parser_mismatch",
+                    ]
+                }
+            },
+        },
+    )
+
+    matches = store.find_by_techniques(
+        ["url_to_pdf_renderer"],
+        category="web",
+    )
+
+    assert len(matches) == 1
+    assert matches[0]["successful_target"] == "web_agent"
+    assert matches[0]["shared_techniques"] == ["url_to_pdf_renderer"]
+    assert "HTB{technique_memory}" not in str(matches)
 
 
 def test_solve_trace_store_finds_similar_patterns_without_flag_replay(tmp_path):

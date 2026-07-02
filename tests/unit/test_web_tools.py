@@ -4,6 +4,7 @@ import base64
 import io
 import struct
 import zipfile
+from urllib.parse import parse_qsl, urlsplit
 from tools.web.browser_snapshot_tool import BrowserSnapshotResult
 from tools.web.http_fetch import HttpFetchResult
 from tools.web.http_fetch import HttpContentResult
@@ -12,6 +13,67 @@ from tools.web.dirsearch import DirsearchTool
 from tools.web.react2shell import React2ShellResult, React2ShellTool
 from tools.common.result import ToolResult
 from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
+
+
+def test_url_to_pdf_cross_parser_chain_preserves_duplicates_and_forges_jwt(monkeypatch):
+    class FakeHttp:
+        def __init__(self):
+            self.urls = []
+
+        def fetch_content(self, url, **kwargs):
+            self.urls.append(url)
+            return HttpContentResult(
+                url=url,
+                final_url="http://target/pdfs/result.pdf",
+                method="GET",
+                status_code=200,
+                headers={"Content-Type": "application/pdf"},
+                content=b"%PDF-stage",
+                elapsed_s=0.1,
+            )
+
+    html = """
+      <input id="url-input"><input id="name-input"><input id="secret-input">
+      <script>
+      const params = new URLSearchParams({ url: urlValue, secret: secretValue, name: nameValue });
+      fetch('/bartender.php?' + params).then(res => res.blob());
+      const filename = 'PEEK.pdf';
+      </script>
+    """
+    http = FakeHttp()
+    agent = WebExploitationAgent(http_tool=http)
+    secret = "a" * 64
+    extracted = iter(["seeded", f"history signing key {secret}", "HTB{cross_parser_proof}"])
+    monkeypatch.setattr(agent, "_extract_pdf_text", lambda _content: next(extracted))
+    steps, artifacts = [], {}
+
+    flag = agent._try_url_to_pdf_cross_parser_chain(
+        "http://target/",
+        html,
+        steps,
+        artifacts,
+    )
+
+    assert flag == "HTB{cross_parser_proof}"
+    assert len(http.urls) == 3
+    first_pairs = parse_qsl(urlsplit(http.urls[0]).query)
+    assert first_pairs[0][0] == first_pairs[1][0] == "url"
+    assert first_pairs[0][1].startswith("http://127.0.0.1:5000/")
+    assert first_pairs[1] == ("url", "http://example.com/")
+    final_internal = parse_qsl(urlsplit(http.urls[-1]).query)[0][1]
+    assert final_internal.startswith("http://127.0.0.1:5000/bartender?token=")
+    token = final_internal.split("token=", 1)[1]
+    _header, payload = agent._decode_jwt(token)
+    assert payload == {"username": "admin", "is_admin": True}
+    assert artifacts["cross_parser_pdf_chain"]["captured_sensitive_values"] is False
+
+
+def test_url_to_pdf_chain_requires_complete_runtime_fingerprint():
+    agent = WebExploitationAgent()
+
+    assert agent._try_url_to_pdf_cross_parser_chain(
+        "http://target/", "<input name='url'>", [], {}
+    ) is None
 
 class MockRunner:
     def __init__(self, stdout):
