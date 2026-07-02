@@ -25,6 +25,9 @@ instruction / challenge JSON
   and solve-trace hints choose the next bounded action.
 - **Execution**: agents call typed wrappers rather than constructing arbitrary
   shell commands or network requests.
+- **Agent registration**: decorated specialist and support classes are
+  discovered by `AgentRegistry`, constructed in stable order, and injected
+  with only the CLI dependencies their constructors explicitly accept.
 - **Artifacts**: local files, fetched content, and generated outputs are passed
   through challenge and result dictionaries with sensitive fields redacted.
 - **Learning**: successful routing signatures and artifact keys are stored

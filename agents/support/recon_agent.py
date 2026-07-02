@@ -12,11 +12,13 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from agents.base_agent import AgentType, BaseAgent
+from agents.registry import AgentRegistry
 from tools.network.nmap import NmapTool
 from tools.web.dirsearch import DirsearchTool
 from tools.web.http_fetch import HttpFetchTool
 
 
+@AgentRegistry.register(order=110)
 class ReconAgent(BaseAgent):
     """
     Support agent for lightweight target reconnaissance.

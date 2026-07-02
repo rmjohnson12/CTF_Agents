@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
 from core.utils.security import SecurityPolicyError, assert_host_allowed, minimal_subprocess_env
@@ -49,6 +50,7 @@ def _is_runtime_library(path: str) -> bool:
     return bool(_RUNTIME_LIBRARY_RE.fullmatch(os.path.basename(path)))
 
 
+@AgentRegistry.register(order=120)
 class PwnAgent(BaseAgent):
     """
     Specialist agent for advanced binary exploitation and symbolic reversing.

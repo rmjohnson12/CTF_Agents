@@ -10,11 +10,13 @@ import collections
 from typing import Dict, Any, List, Optional
 
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from core.utils.flag_utils import find_first_flag
 
 logger = logging.getLogger(__name__)
 
 
+@AgentRegistry.register(order=70)
 class LogAnalysisAgent(BaseAgent):
     """
     Specialist agent for log analysis challenges.

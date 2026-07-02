@@ -7,20 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from challenges.challenge_parser import ChallengeParser, ParseError
 from agents.coordinator.coordinator_agent import CoordinatorAgent
-from agents.specialists.cryptography.crypto_agent import CryptographyAgent
-from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
-from agents.specialists.misc.coding_agent import CodingAgent
-from agents.specialists.forensics.forensics_agent import ForensicsAgent
-from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineeringAgent
-from agents.specialists.osint.osint_agent import OSINTAgent
-from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
-from agents.specialists.networking.networking_agent import NetworkingAgent
-from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
-from agents.support.docker_agent import DockerChallengeAgent
-from agents.support.recon_agent import ReconAgent
-from agents.specialists.pwn.pwn_agent import PwnAgent
-from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
-from agents.specialists.secure_coding.secure_coding_agent import SecureCodingAgent
+from agents.registry import AgentRegistry
 
 
 def _print_plan_main(
@@ -73,20 +60,11 @@ def build_coordinator(max_iterations: int = 5) -> CoordinatorAgent:
         browser_snapshot_tool=browser_tool,
         max_iterations=max_iterations,
     )
-    coordinator.register_agent(CryptographyAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
-    coordinator.register_agent(WebExploitationAgent(agent_id="web_agent", browser_tool=browser_tool))
-    coordinator.register_agent(CodingAgent(agent_id="coding_agent"))
-    coordinator.register_agent(ForensicsAgent(agent_id="forensics_agent", john_tool=john_tool, hashcat_tool=hashcat_tool))
-    coordinator.register_agent(ReverseEngineeringAgent(agent_id="reverse_agent"))
-    coordinator.register_agent(OSINTAgent(agent_id="osint_agent", browser_tool=browser_tool))
-    coordinator.register_agent(LogAnalysisAgent(agent_id="log_agent"))
-    coordinator.register_agent(NetworkingAgent(agent_id="networking_agent"))
-    coordinator.register_agent(HardwareLogicAgent(agent_id="hardware_agent"))
-    coordinator.register_agent(DockerChallengeAgent(agent_id="docker_agent"))
-    coordinator.register_agent(ReconAgent(agent_id="recon_agent"))
-    coordinator.register_agent(PwnAgent(agent_id="pwn_agent"))
-    coordinator.register_agent(BlockchainAgent(agent_id="blockchain_agent"))
-    coordinator.register_agent(SecureCodingAgent(agent_id="secure_coding_agent"))
+    AgentRegistry.register_all(coordinator, {
+        "browser_tool": browser_tool,
+        "john_tool": john_tool,
+        "hashcat_tool": hashcat_tool,
+    })
     return coordinator
 
 

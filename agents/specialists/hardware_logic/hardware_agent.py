@@ -22,10 +22,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from agents.base_agent import AgentType, BaseAgent
+from agents.registry import AgentRegistry
 from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
 from core.utils.security import SecurityPolicyError, assert_host_allowed
 
 
+@AgentRegistry.register(order=90)
 class HardwareLogicAgent(BaseAgent):
     """Specialist for lightweight hardware logic challenges."""
 

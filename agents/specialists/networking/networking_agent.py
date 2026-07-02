@@ -7,6 +7,7 @@ Specialized agent for network traffic analysis and protocol reverse engineering.
 from dataclasses import asdict
 from typing import Dict, Any, List, Optional
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from core.decision_engine.llm_reasoner import LLMReasoner
 from tools.network.nmap import NmapTool
 from tools.network.tshark import TsharkTool
@@ -17,6 +18,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
+@AgentRegistry.register(order=80)
 class NetworkingAgent(BaseAgent):
     """
     Specialist agent for networking challenges.

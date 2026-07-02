@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
 from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
@@ -33,6 +34,7 @@ except Exception as exc:
     _FPYLLL_IMPORT_ERROR = exc
 
 
+@AgentRegistry.register(order=10)
 class CryptographyAgent(BaseAgent):
     """
     Specialist agent for cryptography challenges.

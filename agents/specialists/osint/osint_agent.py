@@ -8,6 +8,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from tools.forensics.exiftool import ExiftoolTool
 from tools.web.browser_snapshot_tool import BrowserSnapshotTool
 from core.utils.flag_utils import find_first_flag
@@ -16,6 +17,7 @@ import re
 logger = logging.getLogger(__name__)
 
 
+@AgentRegistry.register(order=60)
 class OSINTAgent(BaseAgent):
     """
     Specialist agent for OSINT challenges.

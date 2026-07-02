@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from tools.forensics.binwalk import BinwalkTool
 from tools.forensics.exiftool import ExiftoolTool
 from tools.forensics.qpdf import QPDFTool
@@ -27,6 +28,7 @@ from core.utils.flag_utils import find_first_flag
 logger = logging.getLogger(__name__)
 
 
+@AgentRegistry.register(order=40)
 class ForensicsAgent(BaseAgent):
     """
     Specialist agent for forensics challenges.

@@ -13,10 +13,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 from agents.base_agent import AgentType, BaseAgent
+from agents.registry import AgentRegistry
 from core.utils.flag_utils import find_first_flag
 from tools.web.http_fetch import HttpFetchTool
 
 
+@AgentRegistry.register(order=140)
 class SecureCodingAgent(BaseAgent):
     """Specialist for secure-coding/source-remediation challenge targets."""
 

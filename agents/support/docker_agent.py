@@ -10,9 +10,11 @@ from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from agents.base_agent import AgentType, BaseAgent
+from agents.registry import AgentRegistry
 from tools.web.docker_challenge import DockerChallengeTool
 
 
+@AgentRegistry.register(order=100)
 class DockerChallengeAgent(BaseAgent):
     """Support agent that turns a local Docker challenge folder into a localhost URL."""
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from tools.common.python_tool import PythonTool
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
@@ -20,6 +21,7 @@ from core.utils.security import assert_url_allowed
 logger = logging.getLogger(__name__)
 
 
+@AgentRegistry.register(order=130)
 class BlockchainAgent(BaseAgent):
     """
     Specialist agent for blockchain and smart contract challenges.

@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional
 
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
 from core.utils.security import SecurityPolicyError, assert_host_allowed
@@ -115,6 +116,7 @@ def _ror8(b: int, n: int) -> int:
 # Agent
 # ---------------------------------------------------------------------------
 
+@AgentRegistry.register(order=50)
 class ReverseEngineeringAgent(BaseAgent):
     """
     Specialist agent for reverse engineering challenges.

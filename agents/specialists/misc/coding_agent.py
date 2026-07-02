@@ -9,6 +9,7 @@ from typing import Dict, Any, List, Optional
 
 from config.defaults import COMMON_WEB_PATHS, DEFAULT_AUTH_HEADERS, SQLI_PAYLOADS
 from agents.base_agent import BaseAgent, AgentType
+from agents.registry import AgentRegistry
 from tools.common.python_tool import PythonTool
 from tools.common.embedding_analogy import EmbeddingAnalogySolver
 from core.decision_engine.llm_reasoner import LLMReasoner
@@ -18,6 +19,7 @@ import re
 logger = logging.getLogger(__name__)
 
 
+@AgentRegistry.register(order=30)
 class CodingAgent(BaseAgent):
     """
     Specialist agent for programming and scripting challenges.

@@ -13,20 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from challenges.challenge_parser import ChallengeParser, ParseError
 from agents.coordinator.coordinator_agent import CoordinatorAgent
-from agents.specialists.cryptography.crypto_agent import CryptographyAgent
-from agents.specialists.web_exploitation.web_agent import WebExploitationAgent
-from agents.specialists.misc.coding_agent import CodingAgent
-from agents.specialists.forensics.forensics_agent import ForensicsAgent
-from agents.specialists.reverse_engineering.reverse_agent import ReverseEngineeringAgent
-from agents.specialists.osint.osint_agent import OSINTAgent
-from agents.specialists.log_analysis.log_agent import LogAnalysisAgent
-from agents.specialists.networking.networking_agent import NetworkingAgent
-from agents.specialists.hardware_logic.hardware_agent import HardwareLogicAgent
-from agents.support.docker_agent import DockerChallengeAgent
-from agents.support.recon_agent import ReconAgent
-from agents.specialists.pwn.pwn_agent import PwnAgent
-from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
-from agents.specialists.secure_coding.secure_coding_agent import SecureCodingAgent
+from agents.registry import AgentRegistry
 from tools.common.elf_utils import is_elf_binary
 
 def _parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -606,20 +593,12 @@ def main(argv: Optional[List[str]] = None):
     hashcat_tool = HashcatTool()
     
     coordinator = CoordinatorAgent(browser_snapshot_tool=browser_tool)
-    coordinator.register_agent(CryptographyAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
-    coordinator.register_agent(WebExploitationAgent(browser_tool=browser_tool))
-    coordinator.register_agent(CodingAgent(reasoner=coordinator.reasoner))
-    coordinator.register_agent(ForensicsAgent(john_tool=john_tool, hashcat_tool=hashcat_tool))
-    coordinator.register_agent(ReverseEngineeringAgent(reasoner=coordinator.reasoner))
-    coordinator.register_agent(OSINTAgent(browser_tool=browser_tool))
-    coordinator.register_agent(LogAnalysisAgent())
-    coordinator.register_agent(NetworkingAgent())
-    coordinator.register_agent(HardwareLogicAgent())
-    coordinator.register_agent(DockerChallengeAgent())
-    coordinator.register_agent(ReconAgent())
-    coordinator.register_agent(PwnAgent(reasoner=coordinator.reasoner))
-    coordinator.register_agent(BlockchainAgent())
-    coordinator.register_agent(SecureCodingAgent())
+    AgentRegistry.register_all(coordinator, {
+        "browser_tool": browser_tool,
+        "john_tool": john_tool,
+        "hashcat_tool": hashcat_tool,
+        "reasoner": coordinator.reasoner,
+    })
 
     if plan_mode:
         if not user_input:
