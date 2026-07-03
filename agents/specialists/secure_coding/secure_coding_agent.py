@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -89,8 +90,8 @@ class SecureCodingAgent(BaseAgent):
                 {"verify_body": verify_body, "patch_applied": False},
             )
 
-        source, source_path = self._load_source(target_url, steps)
-        if not source:
+        sources = self._load_sources(target_url, steps)
+        if not sources:
             return self._result(
                 challenge,
                 "attempted",
@@ -99,16 +100,18 @@ class SecureCodingAgent(BaseAgent):
                 {"verify_body": verify_body},
             )
 
-        patched, changed, reason = self._patch_known_vulnerability(source)
-        steps.append(reason)
-        if not changed:
+        patch = self._select_patch(sources)
+        if patch is None:
             return self._result(
                 challenge,
                 "attempted",
                 None,
-                steps + ["No safe patch was generated, so no source was saved."],
-                {"source_path": source_path},
+                steps + ["No evidence-backed safe patch was generated, so no source was saved."],
+                {"discovered_source_files": sorted(sources)},
             )
+
+        source_path, patched, reason, vulnerability_class = patch
+        steps.append(reason)
 
         if not self._save_source(target_url, source_path, patched, steps):
             return self._result(
@@ -118,6 +121,17 @@ class SecureCodingAgent(BaseAgent):
                 steps + ["Patch save failed."],
                 {"source_path": source_path, "patch_applied": False},
             )
+
+        if not self._source_matches(target_url, source_path, patched, steps):
+            return self._result(
+                challenge,
+                "failed",
+                None,
+                steps + ["Saved source did not match on read-back."],
+                {"source_path": source_path, "patch_applied": False},
+            )
+
+        self._restart(target_url, steps)
 
         flag, verify_body = self._verify(target_url, steps)
         status = "solved" if flag else "attempted"
@@ -134,6 +148,8 @@ class SecureCodingAgent(BaseAgent):
             {
                 "source_path": source_path,
                 "patch_applied": True,
+                "vulnerability_class": vulnerability_class,
+                "discovered_source_files": sorted(sources),
                 "verify_body": verify_body,
             },
         )
@@ -263,8 +279,14 @@ if __name__ == "__main__":
             steps.append(f"PIN enumeration runner returned HTTP {result.status_code} without a flag.")
         return flag
 
-    def _load_source(self, target_url: str, steps: List[str]) -> Tuple[Optional[str], str]:
-        for source_path in ("utils/db.js",):
+    def _load_sources(self, target_url: str, steps: List[str]) -> Dict[str, str]:
+        source_paths = self._discover_source_paths(target_url, steps)
+        # Compatibility with older editor challenges that do not expose a tree.
+        if not source_paths:
+            source_paths = ["utils/db.js"]
+
+        sources: Dict[str, str] = {}
+        for source_path in source_paths[:40]:
             file_url = urljoin(target_url, "/api/file")
             try:
                 result = self.http_tool.fetch(
@@ -279,15 +301,66 @@ if __name__ == "__main__":
             steps.append(f"Loaded {source_path} (HTTP {result.status_code}).")
             content = self._content_from_body(result.body_preview)
             if content is not None:
-                return content, source_path
-        return None, ""
+                sources[source_path] = content
+        return sources
+
+    def _discover_source_paths(self, target_url: str, steps: List[str]) -> List[str]:
+        try:
+            result = self.http_tool.fetch(urljoin(target_url, "/api/directory"), timeout_s=10)
+        except Exception as exc:
+            steps.append(f"Source-tree discovery failed: {exc}")
+            return []
+        steps.append(f"Discovered editable source tree (HTTP {result.status_code}).")
+        if not 200 <= result.status_code < 300:
+            return []
+        try:
+            tree = json.loads(result.body_preview)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(tree, dict):
+            return []
+
+        paths: List[str] = []
+
+        def walk(node: Dict[str, Any], prefix: str = "") -> None:
+            for name, item in node.items():
+                if not isinstance(item, dict):
+                    continue
+                path = f"{prefix}/{name}".strip("/")
+                if item.get("type") == "folder":
+                    walk(item.get("children") or {}, path)
+                elif item.get("type") == "file" and self._is_reviewable_source(path):
+                    paths.append(path)
+
+        walk(tree)
+        # Proof-of-concept and server-side files provide the strongest evidence.
+        paths.sort(key=self._source_priority)
+        return paths
+
+    @staticmethod
+    def _is_reviewable_source(path: str) -> bool:
+        lowered = path.lower()
+        if lowered.endswith(("package-lock.json", ".min.js")):
+            return False
+        return lowered.endswith((".js", ".ts", ".jsx", ".tsx", ".py", ".json"))
+
+    @staticmethod
+    def _source_priority(path: str) -> Tuple[int, str]:
+        lowered = path.lower()
+        if "exploit" in lowered or "poc" in lowered or "solver" in lowered:
+            return (0, lowered)
+        if lowered.startswith(("routes/", "utils/", "src/", "app")):
+            return (1, lowered)
+        if lowered.startswith("static/"):
+            return (3, lowered)
+        return (2, lowered)
 
     @staticmethod
     def _content_from_body(body: str) -> Optional[str]:
         try:
             parsed = json.loads(body)
         except json.JSONDecodeError:
-            return body if "function addUser" in body else None
+            return body if body.strip() else None
         if isinstance(parsed, dict) and isinstance(parsed.get("content"), str):
             return parsed["content"]
         return None
@@ -308,8 +381,96 @@ if __name__ == "__main__":
         steps.append(f"Saved patched {source_path} (HTTP {result.status_code}).")
         return 200 <= result.status_code < 300
 
+    def _source_matches(
+        self,
+        target_url: str,
+        source_path: str,
+        expected: str,
+        steps: List[str],
+    ) -> bool:
+        try:
+            result = self.http_tool.fetch(
+                urljoin(target_url, "/api/file"), timeout_s=10, params={"path": source_path}
+            )
+        except Exception as exc:
+            steps.append(f"Patch read-back failed for {source_path}: {exc}")
+            return False
+        actual = self._content_from_body(result.body_preview)
+        matched = actual == expected
+        steps.append(f"Patch read-back for {source_path}: {'matched' if matched else 'mismatch'}.")
+        return matched
+
+    def _restart(self, target_url: str, steps: List[str]) -> bool:
+        try:
+            result = self.http_tool.fetch(
+                urljoin(target_url, "/api/restart"), method="POST", timeout_s=15, json_data={}
+            )
+        except Exception as exc:
+            steps.append(f"Service restart failed: {exc}")
+            return False
+        steps.append(f"Restarted patched service (HTTP {result.status_code}).")
+        if 200 <= result.status_code < 300:
+            time.sleep(0.5)
+            return True
+        return False
+
+    @classmethod
+    def _select_patch(
+        cls,
+        sources: Dict[str, str],
+    ) -> Optional[Tuple[str, str, str, str]]:
+        evidence = "\n".join(sources.values()).lower()
+        prototype_evidence = (
+            "__proto__" in evidence
+            or "prototype pollution" in evidence
+            or ("constructor" in evidence and "prototype" in evidence)
+        )
+        for source_path, source in sources.items():
+            patched, changed, reason = cls._patch_known_vulnerability(
+                source,
+                allow_prototype_pollution_patch=prototype_evidence,
+            )
+            if changed:
+                vulnerability_class = (
+                    "prototype_pollution" if "prototype-pollution" in reason else "delimiter_injection"
+                )
+                return source_path, patched, reason, vulnerability_class
+        return None
+
     @staticmethod
-    def _patch_known_vulnerability(source: str) -> Tuple[str, bool, str]:
+    def _patch_known_vulnerability(
+        source: str,
+        *,
+        allow_prototype_pollution_patch: bool = True,
+    ) -> Tuple[str, bool, str]:
+        if allow_prototype_pollution_patch:
+            merge_loop = re.compile(
+                r"(?P<head>for\s*\(\s*(?:let|const|var)\s+(?P<key>[A-Za-z_$][\w$]*)\s+in\s+(?P<src>[A-Za-z_$][\w$]*)\s*\)\s*\{)"
+            )
+            merge_match = merge_loop.search(source)
+            recursive_merge = bool(
+                merge_match
+                and re.search(r"\b(?:deepMerge|merge|mergeDeep)\s*\(", source[merge_match.end():])
+            )
+            already_guarded = all(marker in source for marker in ("'__proto__'", "'prototype'", "'constructor'"))
+            if merge_match and recursive_merge and not already_guarded:
+                key = merge_match.group("key")
+                src = merge_match.group("src")
+                indent = SecureCodingAgent._infer_body_indent(source, merge_match.end())
+                guard = (
+                    "\n"
+                    f"{indent}if (!Object.prototype.hasOwnProperty.call({src}, {key}) ||\n"
+                    f"{indent}    {key} === '__proto__' || {key} === 'prototype' || {key} === 'constructor') {{\n"
+                    f"{indent}  continue;\n"
+                    f"{indent}}}\n"
+                )
+                patched = source[:merge_match.end()] + guard + source[merge_match.end():]
+                return (
+                    patched,
+                    True,
+                    "Patched unsafe recursive merge with own-property and prototype-pollution key guards.",
+                )
+
         if all(marker in source for marker in ("username.includes('\\n')", "username.includes('\\r')", "username.includes('|')")):
             return source, False, "Username delimiter guard already appears to be present."
 

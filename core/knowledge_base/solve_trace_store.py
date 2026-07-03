@@ -26,7 +26,10 @@ _FLAG_PREFIX_RE = re.compile(r"^([A-Za-z0-9_-]+)\{")
 class SolveTraceStore:
     """Persist compact solved-challenge traces for later retrieval/training."""
 
-    def __init__(self, db_path: str = _DB_PATH):
+    def __init__(self, db_path: Optional[str] = None):
+        # Env override lets tests (and multi-run operators) isolate persistent
+        # state instead of sharing one repo-relative DB across every run.
+        db_path = db_path or os.getenv("CTF_AGENTS_SOLVE_TRACE_DB") or _DB_PATH
         db_dir = os.path.dirname(db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)

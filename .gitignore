@@ -236,3 +236,15 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .claude/worktrees/
+
+# --- Hack The Box integration (secrets, sessions, artifacts) ---
+# Never commit tokens, cookies, sessions, VPN files, flags, or challenge files.
+.htb_session.json
+.htb.env
+.htb.en
+htb.env
+*.ovpn
+integrations/hackthebox/.htb_session.json
+runs/htb/
+runs/
+reports/

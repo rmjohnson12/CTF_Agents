@@ -14,7 +14,10 @@ class KnowledgeStore:
     Persistent store for facts and intelligence gathered by agents.
     """
 
-    def __init__(self, db_path: str = "logs/knowledge.db"):
+    def __init__(self, db_path: Optional[str] = None):
+        # Env override lets tests (and multi-run operators) isolate persistent
+        # state instead of sharing one repo-relative DB across every run.
+        db_path = db_path or os.getenv("CTF_AGENTS_KNOWLEDGE_DB") or "logs/knowledge.db"
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.db_path = db_path
         self._init_db()

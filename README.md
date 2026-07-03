@@ -80,12 +80,49 @@ outcome.
 See [Live solve reporting](docs/live_reporting.md) for routes, payloads,
 security defaults, and frontend integration guidance.
 
+## Hack The Box integration
+
+Automate the Hack The Box challenge workflow for **your own authenticated
+account**: discover challenges, spawn instances, download files, run the solver,
+and report candidate flags. It never submits a flag unless you explicitly opt in.
+
+```bash
+# 1. Put an App Token (https://app.hackthebox.com/profile/settings) in a
+#    git-ignored file. HTB_EMAIL/HTB_PASSWORD also work; tokens are preferred.
+echo 'HTB_TOKEN=your-app-token' > .htb.env
+
+# 2. Dry-run (default; read-only listing, no downloads/spawns/submits):
+python3 -m integrations.hackthebox.cli --name "The Suspicious Domain" --dry-run
+python3 -m integrations.hackthebox.cli --category web --max 3 --dry-run
+
+# 3. Real run (requires --execute): spawns instances, downloads/extracts files,
+#    runs the solver, writes reports/htb_results_<ts>.md and a .json sidecar.
+python3 -m integrations.hackthebox.cli --category web --max 3 --execute \
+    --output reports/htb_results.md
+
+# 4. Submission is never automatic — it also requires --submit AND --execute.
+```
+
+Candidate flags are written to the report; the run authorizes only the exact
+HTB-provided instance target for the solver and stops instances it started.
+Full setup, filters, endpoint-confidence notes, and limitations are in
+[docs/hackthebox_integration.md](docs/hackthebox_integration.md).
+
+Editor-backed secure-coding targets are discovered through their exposed
+directory and file APIs. The agent reviews a bounded set of source files,
+applies evidence-backed vulnerability-class patches, confirms saved content by
+read-back, restarts the service, and accepts a solve only when the target's
+verification endpoint returns a flag. Current generic remediations include
+unsafe recursive merges vulnerable to prototype pollution and delimiter
+injection in flat-file user records.
+
 ## Repository Layout
 
 ```text
 agents/       Coordinator, specialist, and support agents
 core/         Routing, security, persistence, campaign, and result services
 tools/        Bounded wrappers for external tools and protocols
+integrations/ Third-party platform integrations (e.g. Hack The Box)
 challenges/   Challenge templates, evaluations, and benchmark manifests
 examples/     Deterministic documented regression examples
 tests/        Unit, integration, and end-to-end tests
@@ -101,6 +138,7 @@ config/       Runtime and tool configuration
 - [Security model](docs/security_model.md)
 - [Runtime tool synthesis](docs/runtime_tool_synthesis.md)
 - [Live solve reporting](docs/live_reporting.md)
+- [Hack The Box integration](docs/hackthebox_integration.md)
 - [Operator's guide](docs/operators_guide.md)
 - [Development](docs/development.md)
 - [Contributing](docs/contributing.md)

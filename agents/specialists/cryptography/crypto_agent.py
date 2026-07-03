@@ -1155,7 +1155,12 @@ class CryptographyAgent(BaseAgent):
 
         state = [z3.BitVecVal(byte, 8) for byte in ciphertext]
         solver = z3.Solver()
-        solver.set("timeout", 30_000)
+        # Wall-clock timeout: this solve normally finishes in well under a
+        # second, but on a heavily loaded machine (e.g. the full test suite
+        # running e2e agents/containers in the same process) a 30s cap was tight
+        # enough to occasionally return "unknown" and drop an otherwise-solvable
+        # challenge. Give it generous headroom so the result stays deterministic.
+        solver.set("timeout", int(os.getenv("CTF_AGENTS_Z3_TIMEOUT_MS") or 120_000))
         mask24 = z3.BitVecVal((1 << 24) - 1, 24)
 
         def rol24_const(value, rotation: int):

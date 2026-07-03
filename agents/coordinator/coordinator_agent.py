@@ -24,6 +24,7 @@ from core.communication.message_broker import MessageBroker
 from core.decision_engine.llm_reasoner import LLMReasoner, ChallengeAnalysis
 from core.decision_engine.performance_tracker import PerformanceTracker
 from core.utils.result_manager import ResultManager
+from core.utils.firmware_signatures import category_for_files
 from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
 from core.knowledge_base.knowledge_store import KnowledgeStore
@@ -144,6 +145,8 @@ class CoordinatorAgent(BaseAgent):
         )
         self.active_challenges[challenge_id] = challenge
         checkpoint_dir = Path("logs/checkpoints")
+
+        self._apply_content_based_category(challenge)
 
         initial_analysis_obj = self.reasoner.analyze_challenge(challenge)
         initial_analysis = self._analysis_to_dict(challenge, initial_analysis_obj)
@@ -1188,6 +1191,27 @@ class CoordinatorAgent(BaseAgent):
 
     def _all_agent_ids(self) -> set[str]:
         return set(self.specialist_agents) | set(self.support_agents)
+
+    @staticmethod
+    def _apply_content_based_category(challenge: Dict[str, Any]) -> Optional[str]:
+        """Correct the challenge category from artifact *content* before routing.
+
+        Prose classification is fragile — an ESP32 flash dump described only as
+        "leaked firmware" classifies as ``reverse``, which cannot decode it.
+        When the bytes unambiguously identify an artifact type, set the category
+        from ground truth so every downstream category-based route (initial
+        dispatch, reasoner short-circuit, fallback chain) lands on the specialist
+        that can actually solve it. Returns the applied category, or None.
+        """
+        detected = category_for_files(challenge.get("files"))
+        if not detected:
+            return None
+        current = str(challenge.get("category") or "").lower()
+        if current == detected:
+            return None
+        challenge["category"] = detected
+        challenge.setdefault("_content_category_override", {})[detected] = current or "unset"
+        return detected
 
     def _direct_initial_agent(
         self,

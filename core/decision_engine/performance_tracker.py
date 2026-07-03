@@ -24,7 +24,10 @@ class PerformanceTracker:
     connections.
     """
 
-    def __init__(self, db_path: str = _DB_PATH):
+    def __init__(self, db_path: Optional[str] = None):
+        # Env override lets tests (and multi-run operators) isolate persistent
+        # state instead of sharing one repo-relative DB across every run.
+        db_path = db_path or os.getenv("CTF_AGENTS_PERFORMANCE_DB") or _DB_PATH
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.db_path = db_path
         self._init_db()

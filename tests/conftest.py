@@ -44,3 +44,19 @@ def disable_live_llm_keys(monkeypatch):
         "CTF_AGENTS_REPORTING_STORE_FLAGS",
     ):
         monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def isolate_persistent_state(tmp_path_factory, monkeypatch):
+    """Give every test its own knowledge / solve-trace / performance DBs.
+
+    These default to shared repo-relative paths under ``logs/``. In a full run
+    the heavy e2e tests write real facts and traces there, which then leak into
+    unit tests that construct ``CoordinatorAgent()`` with defaults and change
+    their routing/iteration counts (the "passes alone, fails in the full suite"
+    flakiness). Redirecting them per-test removes that cross-contamination.
+    """
+    state_dir = tmp_path_factory.mktemp("ctf_state")
+    monkeypatch.setenv("CTF_AGENTS_KNOWLEDGE_DB", str(state_dir / "knowledge.db"))
+    monkeypatch.setenv("CTF_AGENTS_SOLVE_TRACE_DB", str(state_dir / "solve_traces.db"))
+    monkeypatch.setenv("CTF_AGENTS_PERFORMANCE_DB", str(state_dir / "performance.db"))
