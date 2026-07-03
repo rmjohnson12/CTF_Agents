@@ -232,6 +232,27 @@ class CryptographyAgent(BaseAgent):
                     "steps": steps
                 }
 
+        repeating_xor_result = self._try_repeating_xor_known_flag_prefix_from_files(
+            challenge.get("files", []), steps
+        )
+        if repeating_xor_result:
+            found = find_first_flag(repeating_xor_result)
+            if found:
+                steps.append("SUCCESS: Found flag via source-backed repeating-XOR known-prefix recovery.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps,
+                    "artifacts": {
+                        "techniques": [
+                            "source_semantic_analysis",
+                            "repeating_xor_known_prefix",
+                        ]
+                    },
+                }
+
         # 1.1 Detection/Decoding: If it looks like hex or base64, decode it
         # Check for "Flag: " prefix and strip it
         if cipher_text.lower().startswith("flag:"):
@@ -417,12 +438,8 @@ class CryptographyAgent(BaseAgent):
         if m_quoted:
             return m_quoted.group(1).strip()
 
-        # Priority 4: unquoted encoded blob in natural-language prompts
-        encoded_token = self._extract_encoded_token(description)
-        if encoded_token:
-            return encoded_token
-
-        # Priority 5: file content — skip source code and wordlists
+        # Priority 4: supplied output artifacts. Inspect these before generic
+        # prompt tokens so UUID directory names are not mistaken for ciphertext.
         files = challenge.get("files", [])
         for file_path in files:
             ext = os.path.splitext(file_path)[1].lower()
@@ -446,6 +463,11 @@ class CryptographyAgent(BaseAgent):
                 except Exception:
                     pass
 
+        # Priority 5: unquoted encoded blob in natural-language prompts
+        encoded_token = self._extract_encoded_token(description)
+        if encoded_token:
+            return encoded_token
+
         # Priority 6: strip preamble from description and return remainder ONLY if it looks like ciphertext
         text = description.strip()
         if not text.startswith("$"):
@@ -454,8 +476,73 @@ class CryptographyAgent(BaseAgent):
         # Don't return long natural language as ciphertext fallback
         if len(text.split()) > 4 or any(w in text.lower() for w in ["challenge", "file", "download"]):
             return ""
-
         return text.strip()
+
+    @staticmethod
+    def _try_repeating_xor_known_flag_prefix_from_files(
+        files: List[str], steps: List[str]
+    ) -> Optional[str]:
+        """Recover a short repeating-XOR key when source and output are supplied.
+
+        This is deliberately evidence-bound: source must show XOR, modulo-key
+        indexing, and a literal ``os.urandom(N)`` key length. The ciphertext
+        must come from a separate supplied artifact, and a known CTF prefix
+        must validate the entire decrypted flag.
+        """
+        source_text = ""
+        for file_path in files:
+            path = Path(file_path)
+            if path.suffix.lower() != ".py" or not path.is_file():
+                continue
+            try:
+                candidate = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "^" in candidate and re.search(r"%\s*len\s*\(", candidate):
+                source_text = candidate
+                break
+
+        key_match = re.search(r"os\.urandom\s*\(\s*(\d{1,2})\s*\)", source_text)
+        if not key_match:
+            return None
+        key_length = int(key_match.group(1))
+        if not 1 <= key_length <= 16:
+            return None
+
+        ciphertext: Optional[bytes] = None
+        for file_path in files:
+            path = Path(file_path)
+            if path.suffix.lower() == ".py" or not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            hex_values = re.findall(r"(?<![0-9A-Fa-f])([0-9A-Fa-f]{12,})(?![0-9A-Fa-f])", text)
+            for value in hex_values:
+                if len(value) % 2 == 0:
+                    ciphertext = bytes.fromhex(value)
+                    break
+            if ciphertext:
+                break
+        if not ciphertext or len(ciphertext) <= key_length:
+            return None
+
+        for prefix in KNOWN_FLAG_PREFIXES:
+            known = f"{prefix}{{".encode("ascii")
+            if len(known) < key_length:
+                continue
+            key = bytes(ciphertext[i] ^ known[i] for i in range(key_length))
+            plaintext = bytes(byte ^ key[i % key_length] for i, byte in enumerate(ciphertext))
+            decoded = plaintext.decode("ascii", errors="ignore")
+            found = find_first_flag(decoded)
+            if found and found == decoded:
+                steps.append(
+                    f"Recovered {key_length}-byte repeating-XOR key from source semantics "
+                    f"and the known {prefix} flag prefix."
+                )
+                return decoded
+        return None
 
     def _extract_encoded_token(self, text: str) -> Optional[str]:
         """Extract likely standalone hex/base64 content from a natural-language prompt."""

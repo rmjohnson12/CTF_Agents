@@ -42,6 +42,36 @@ def test_crypto_agent_extracts_hex_from_natural_language_prompt():
     assert "Extracted ciphertext: 4354467b6865785f726f7574696e675f6f6b7d" in result["steps"]
 
 
+def test_crypto_agent_solves_source_backed_repeating_xor_despite_uuid_path(tmp_path):
+    challenge_dir = tmp_path / "a12c7393-6f23-4166-821e-c31c1ec785fe"
+    challenge_dir.mkdir()
+    source = challenge_dir / "challenge.py"
+    output = challenge_dir / "output.txt"
+    source.write_text(
+        "import os\n"
+        "key = os.urandom(4)\n"
+        "def encrypt(data):\n"
+        "    return bytes(data[i] ^ key[i % len(key)] for i in range(len(data)))\n"
+    )
+    output.write_text("Flag: 134af6e1297bc4a96f6a87fe046684e8047084ee046d84c5282dd7ef292dc9\n")
+
+    result = CryptographyAgent().solve_challenge({
+        "id": "repeating_xor",
+        "category": "crypto",
+        "description": f"Who needs AES when you have XOR? Files are in {challenge_dir}",
+        "files": [str(source), str(output)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{rep34t3d_x0r_n0t_s0_s3cur3}"
+    assert result["steps"][2].startswith("Extracted ciphertext: Flag: 134af6")
+    assert any("repeating-XOR" in step for step in result["steps"])
+    assert result["artifacts"]["techniques"] == [
+        "source_semantic_analysis",
+        "repeating_xor_known_prefix",
+    ]
+
+
 def test_crypto_agent_tries_caesar_for_simple_cipher_prompt():
     agent = CryptographyAgent()
     challenge = {

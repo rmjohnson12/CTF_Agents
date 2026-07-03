@@ -528,7 +528,10 @@ class ForensicsAgent(BaseAgent):
             "ssh_target": f"{host}:{port}",
             "ssh_username": username,
             "live_forensics": [],
+            "techniques": ["live_ssh_forensics"],
         }
+        if os.getenv("CTF_AGENTS_ALLOW_SSH_PRELOAD_BYPASS") == "1":
+            artifacts["techniques"].append("ld_so_preload_rootkit_bypass")
         combined_output = []
 
         client = paramiko.SSHClient()
@@ -624,7 +627,12 @@ class ForensicsAgent(BaseAgent):
         if not creds or not target:
             return None
 
-        return target.group(1), int(target.group(2)), creds.group(1), creds.group(2)
+        password = creds.group(2)
+        # Natural-language prompts commonly terminate ``user:password.`` as a
+        # sentence. Do not send that prose delimiter as part of the credential.
+        if password.endswith((".", "!", "?")):
+            password = password[:-1]
+        return target.group(1), int(target.group(2)), creds.group(1), password
 
     @staticmethod
     def _summarize_rootkit_indicators(output: str) -> List[str]:

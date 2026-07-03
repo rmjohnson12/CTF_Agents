@@ -36,11 +36,14 @@ tests.
 - Evidence-gated URL-to-PDF chains spanning duplicate-parameter parser mismatches,
   formatted-history disclosure, and JWT authorization
 - Reverse-engineering strategies for local artifacts and authorized remote machine-code streams
-- Cryptographic decoding and constraint recovery
+- Cryptographic decoding and constraint recovery, including source-backed
+  repeating-XOR known-prefix recovery
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
 - Smart-contract interaction and authorized remote challenge workflows
 - Interface-gated EVM lifecycle transactions with on-chain `isSolved()` verification
+- Credentialed live-SSH loader/rootkit triage with explicitly gated host trust
+  and backup/restore `/etc/ld.so.preload` bypass
 
 ## Learning and reporting
 

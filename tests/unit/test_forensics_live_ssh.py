@@ -73,6 +73,22 @@ def test_extract_ssh_context_from_rootkit_prompt():
     )
 
 
+def test_extract_ssh_context_strips_sentence_punctuation_from_password():
+    challenge = {
+        "description": (
+            "Investigate userland rootkit. Creds: root:hackthebox. "
+            "Port and IP: 154.57.164.65:30127"
+        )
+    }
+
+    assert ForensicsAgent._extract_ssh_context(challenge) == (
+        "154.57.164.65",
+        30127,
+        "root",
+        "hackthebox",
+    )
+
+
 def test_forensics_agent_solves_live_ssh_rootkit_when_flag_seen(monkeypatch):
     _install_fake_paramiko(monkeypatch)
     challenge = {
@@ -123,6 +139,10 @@ def test_live_ssh_preload_bypass_is_env_gated(monkeypatch):
 
     assert result["status"] == "solved"
     assert result["flag"] == "HTB{preload_bypass_found}"
+    assert result["artifacts"]["techniques"] == [
+        "live_ssh_forensics",
+        "ld_so_preload_rootkit_bypass",
+    ]
     assert any("preload bypass search" in command for command in _FakeSSHClient.instances[0].commands)
 
 

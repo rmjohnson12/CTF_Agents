@@ -442,6 +442,20 @@ def _heuristic_challenge_from_instruction(
             r"\bfailed password\b",
         )
     )
+    has_live_ssh_forensics_term = (
+        bool(re.search(r"\bssh\b", lowered_input))
+        and any(
+            term in lowered_input
+            for term in (
+                "rootkit",
+                "ld.so.preload",
+                "ld_preload",
+                "library linking",
+                "filesystem manipulation",
+                "folders seem to be missing",
+            )
+        )
+    )
     declared_category = _declared_category_from_instruction(user_input)
 
     if declared_category:
@@ -469,6 +483,10 @@ def _heuristic_challenge_from_instruction(
         # Keep this ahead of the generic host/URL rule so a raw TCP reversing
         # service is not mistaken for a web application.
         category = "reverse"
+    elif has_live_ssh_forensics_term:
+        # A credentialed live host with loader/filesystem manipulation is a
+        # forensic investigation, not static authentication-log analysis.
+        category = "forensics"
     elif has_log_term:
         category = "log"
     elif (
