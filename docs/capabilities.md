@@ -40,12 +40,14 @@ tests.
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
 - Smart-contract interaction and authorized remote challenge workflows
+- Interface-gated EVM lifecycle transactions with on-chain `isSolved()` verification
 
 ## Learning and reporting
 
 - Checkpoint resume
 - Successful solve-trace storage without raw flags
 - Runtime technique fingerprints and technique-based prior-solve retrieval
+- Technique-bearing solve hints delivered back to specialists on later runs
 - JSON run reports and campaign SQLite ledgers
 - Repeatable benchmark summaries
 

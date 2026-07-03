@@ -40,6 +40,14 @@ python3 campaign.py challenges/benchmarks/manifest.json \
 Campaigns are local and bounded. The default provider does not authenticate to
 CTF platforms, start remote instances, or submit flags.
 
+## Solve-trace memory
+
+Successful runs persist compact routing, artifact, and technique metadata in
+`logs/solve_traces.db`; raw flags and private keys are not stored. Similar
+future challenges receive the matched route and technique names directly in
+their specialist context. Aggregate success rates in `logs/performance.db` are
+telemetry only and cannot reconstruct a prior exploit by themselves.
+
 ## Word-embedding models
 
 The coding specialist can solve complete `Like A is to B, C is to?` text

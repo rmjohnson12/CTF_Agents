@@ -1,4 +1,5 @@
-from unittest.mock import MagicMock
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 from agents.specialists.blockchain.blockchain_agent import BlockchainAgent
 from core.utils.security import SecurityPolicyError
@@ -80,6 +81,7 @@ def test_blockchain_agent_solve_fallback(monkeypatch, tmp_path):
 
 
 def test_blockchain_agent_uses_structured_connection_info_without_host_port(monkeypatch, tmp_path):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "chain.local")
     setup_file = tmp_path / "Setup.sol"
     setup_file.write_text("contract Setup {}")
 
@@ -143,3 +145,49 @@ def test_blockchain_agent_does_not_treat_private_key_prefix_as_address():
 
     assert info["PrivateKey"] == "0x" + "ab" * 32
     assert "Address" not in info
+
+
+def test_blockchain_agent_executes_bounded_creature_lifecycle(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "127.0.0.1/32")
+    creature = MagicMock()
+    creature.functions.lifePoints.return_value.call.side_effect = [20, 0]
+    creature.functions.strongAttack.return_value.build_transaction.return_value = {"attack": True}
+    creature.functions.loot.return_value.build_transaction.return_value = {"loot": True}
+    setup = MagicMock()
+    setup.functions.isSolved.return_value.call.return_value = True
+
+    web3 = MagicMock()
+    web3.is_connected.return_value = True
+    web3.eth.contract.side_effect = [creature, setup]
+    web3.eth.get_balance.return_value = 10
+    web3.eth.get_transaction_count.return_value = 0
+    web3.eth.gas_price = 1
+    web3.eth.chain_id = 31337
+    web3.eth.account.sign_transaction.return_value = SimpleNamespace(raw_transaction=b"signed")
+    web3.eth.send_raw_transaction.return_value = b"hash"
+    web3.eth.wait_for_transaction_receipt.return_value = SimpleNamespace(status=1)
+
+    web3_class = MagicMock(return_value=web3)
+    web3_class.HTTPProvider.return_value = object()
+    web3_class.to_checksum_address.side_effect = lambda value: value
+    module = ModuleType("web3")
+    module.Web3 = web3_class
+    response = SimpleNamespace(status_code=200, text="HTB{bounded_creature_path}")
+    agent = BlockchainAgent()
+    steps = []
+
+    with patch.dict("sys.modules", {"web3": module}), patch("requests.get", return_value=response):
+        flag = agent._try_creature_lifecycle(
+            rpc_url="http://127.0.0.1:31337/rpc",
+            private_key="0x" + "11" * 32,
+            attacker_address="0x" + "22" * 20,
+            target_address="0x" + "33" * 20,
+            setup_address="0x" + "44" * 20,
+            flag_url="http://127.0.0.1:31337/flag",
+            steps=steps,
+            evidence_text="A warrior faces a monster creature.",
+        )
+
+    assert flag == "HTB{bounded_creature_path}"
+    assert web3.eth.send_raw_transaction.call_count == 2
+    assert any("Setup.isSolved() returned true" in step for step in steps)

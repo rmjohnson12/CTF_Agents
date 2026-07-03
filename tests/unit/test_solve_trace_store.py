@@ -169,7 +169,10 @@ def test_solve_trace_store_finds_similar_patterns_without_flag_replay(tmp_path):
                         "selected_target": "coding_agent",
                         "execution_type": "agent",
                     },
-                    "artifacts": {"solver_script": "solve.py"},
+                    "artifacts": {
+                        "solver_script": "solve.py",
+                        "techniques": ["matrix_conjugation"],
+                    },
                 }
             ],
         },
@@ -188,6 +191,7 @@ def test_solve_trace_store_finds_similar_patterns_without_flag_replay(tmp_path):
     assert matches[0]["successful_target"] == "coding_agent"
     assert matches[0]["similarity_score"] >= 6
     assert "keyword:matrix" in matches[0]["shared_indicators"]
+    assert matches[0]["techniques"] == ["matrix_conjugation"]
     assert "SVIBGR{old_matrix_flag}" not in str(matches[0])
 
 

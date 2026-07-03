@@ -452,6 +452,8 @@ class CoordinatorAgent(BaseAgent):
                     if prior_facts:
                         agent_challenge["prior_knowledge"] = prior_facts
                         self._hydrate_challenge_from_facts(agent_challenge, prior_facts)
+                    if trace_hints:
+                        agent_challenge["solve_trace_hints"] = trace_hints
                         
                     if decision.get("inputs", {}).get("task"):
                         agent_challenge['current_task_description'] = decision["inputs"]["task"]
@@ -542,6 +544,8 @@ class CoordinatorAgent(BaseAgent):
                         if prior_facts:
                             recovery_challenge["prior_knowledge"] = prior_facts
                             self._hydrate_challenge_from_facts(recovery_challenge, prior_facts)
+                        if trace_hints:
+                            recovery_challenge["solve_trace_hints"] = trace_hints
                         if recovery.get("inputs", {}).get("task"):
                             recovery_challenge["current_task_description"] = recovery["inputs"]["task"]
                         result = self._run_selected_agent(recovery_challenge, target, [])

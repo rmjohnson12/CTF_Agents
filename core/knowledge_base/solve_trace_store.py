@@ -253,6 +253,7 @@ class SolveTraceStore:
                 "successful_target": row["successful_target"],
                 "route_signature": row["route_signature"],
                 "artifact_keys": row["artifact_keys"],
+                "techniques": row["techniques"],
                 "shared_indicators": shared,
                 "similarity_score": score,
                 "recorded_at": row["recorded_at"],

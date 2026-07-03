@@ -315,7 +315,10 @@ def test_coordinator_routes_from_solve_trace_memory_before_llm(tmp_path):
                         "selected_target": "coding_agent",
                         "execution_type": "agent",
                     },
-                    "artifacts": {"solver_script": "solve.py"},
+                    "artifacts": {
+                        "solver_script": "solve.py",
+                        "techniques": ["matrix_conjugation"],
+                    },
                 }
             ],
         },
@@ -323,7 +326,9 @@ def test_coordinator_routes_from_solve_trace_memory_before_llm(tmp_path):
     reasoner = ExplodingPlannerReasoner()
     coordinator = CoordinatorAgent(solve_trace_store=store)
     coordinator.reasoner = reasoner
-    coding_agent = MockAgent("coding_agent", status_on_solve="solved", flag="SVIBGR{new_matrix_flag}")
+    coding_agent = CapturingMockAgent(
+        "coding_agent", status_on_solve="solved", flag="SVIBGR{new_matrix_flag}"
+    )
     coordinator.register_agent(coding_agent)
 
     result = coordinator.solve_challenge({
@@ -336,6 +341,9 @@ def test_coordinator_routes_from_solve_trace_memory_before_llm(tmp_path):
     assert result["status"] == "solved"
     assert result["flag"] == "SVIBGR{new_matrix_flag}"
     assert coding_agent.solve_called == 1
+    assert coding_agent.last_challenge["solve_trace_hints"][0]["techniques"] == [
+        "matrix_conjugation"
+    ]
     assert any("Trace memory:" in step for step in result["steps"])
     assert any("Trace memory matched a prior solved challenge" in step for step in result["steps"])
 
