@@ -292,7 +292,10 @@ class BlockchainAgent(BaseAgent):
 
             steps.append(f"Executing exploit script (Attempt {attempt + 1})...")
             try:
-                res = self.python_tool.run(script_content)
+                res = self.python_tool.run(
+                    script_content,
+                    artifact_paths=challenge.get("files"),
+                )
                 last_stdout = res.stdout
                 
                 if res.stdout:

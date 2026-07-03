@@ -271,6 +271,16 @@ def test_heuristic_mapping_routes_secure_coding_ip_port_to_secure_coding():
     assert challenge["url"] == "http://154.57.164.65:31327"
 
 
+def test_declared_coding_challenge_is_actionable_misc_not_secure_coding():
+    challenge = _heuristic_challenge_from_instruction(
+        "Coding challenge: write a program that calculates factorial 10",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "misc"
+    assert _heuristic_mapping_is_actionable(challenge) is True
+
+
 def test_heuristic_mapping_routes_partial_pin_runner_before_brute_force_log():
     challenge = _heuristic_challenge_from_instruction(
         "A critical system is locked behind a numeric PIN. Only partial digits are visible. "

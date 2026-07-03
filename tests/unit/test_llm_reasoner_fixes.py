@@ -615,6 +615,7 @@ def test_call_llm_uses_chat_completions():
     mock_client.chat.completions.create.assert_called_once()
     call_kwargs = mock_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "gpt-4o"
+    assert call_kwargs["max_tokens"] == 2000
     assert call_kwargs["messages"] == [{"role": "user", "content": "hello"}]
     assert result == "some response"
     assert reasoner.runtime_summary()["successful_calls"] == 1
@@ -674,6 +675,7 @@ def test_call_llm_uses_google_generate_content():
     mock_client.models.generate_content.assert_called_once_with(
         model="gemini-test-model",
         contents="hello",
+        config={"temperature": 0.0, "max_output_tokens": 2000},
     )
     assert result == "gemini response"
 

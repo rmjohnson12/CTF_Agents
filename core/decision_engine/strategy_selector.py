@@ -17,6 +17,33 @@ from core.decision_engine.classifier import ChallengeAnalysis
 _PERFORMANCE_BIAS_THRESHOLD = 0.60
 
 
+# Every known challenge category has an obvious specialist owner. Used as a
+# last-resort route so a challenge is never abandoned just because the LLM (or
+# heuristic classifier) failed to name a target on a given call — a real
+# failure mode with non-deterministic hosted models and mid-run LLM outages.
+_CATEGORY_DEFAULT_AGENTS = {
+    "crypto": "crypto_agent",
+    "cryptography": "crypto_agent",
+    "web": "web_agent",
+    "reverse": "reverse_agent",
+    "reversing": "reverse_agent",
+    "rev": "reverse_agent",
+    "forensics": "forensics_agent",
+    "pwn": "pwn_agent",
+    "binary": "pwn_agent",
+    "hardware": "hardware_agent",
+    "blockchain": "blockchain_agent",
+    "secure_coding": "secure_coding_agent",
+    "secure-coding": "secure_coding_agent",
+    "log": "log_agent",
+    "networking": "networking_agent",
+    "network": "networking_agent",
+    "osint": "osint_agent",
+    "coding": "coding_agent",
+    "misc": "coding_agent",
+}
+
+
 class StrategySelector:
     """
     Translates a ChallengeAnalysis into a concrete next-action dict.
@@ -188,6 +215,34 @@ class StrategySelector:
                     "url": challenge.get("url")
                     or challenge.get("target", {}).get("url", "")
                 },
+            }
+
+        # Last resort: the classifier named no specialist, but if the challenge
+        # has a recognizable category with an obvious owner that has not been
+        # tried yet, route there instead of abandoning the challenge. The
+        # "already tried" guard keeps this from looping.
+        analysis_category = (analysis.category_guess or "").strip().lower()
+        category = (
+            analysis_category
+            if analysis_category not in {"", "unknown"}
+            else str(challenge.get("category") or "").strip().lower()
+        )
+        fallback_agent = _CATEGORY_DEFAULT_AGENTS.get(category)
+        already_tried = any(
+            h.get("agent_id") == fallback_agent
+            or (h.get("routing") or {}).get("selected_target") == fallback_agent
+            for h in history
+        )
+        if fallback_agent and not already_tried:
+            return {
+                "next_action": "run_agent",
+                "target": fallback_agent,
+                "reasoning": (
+                    f"No explicit specialist was recommended, but '{category}' "
+                    f"challenges are owned by {fallback_agent}; routing there "
+                    "before giving up."
+                ),
+                "inputs": {},
             }
 
         return {

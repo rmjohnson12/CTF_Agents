@@ -481,6 +481,15 @@ class CryptographyAgent(BaseAgent):
         if encoded_token:
             return encoded_token
 
+        # Priority 5b: a run of space/comma separated integers embedded in a
+        # natural-language prompt (decimal or octal ASCII code points), e.g.
+        # "decode the values 72 84 66 123 ...". Priority 6 below bails on any
+        # multi-word description, so without this such sequences are never
+        # decoded in-process and fall through to script generation.
+        numeric_sequence = self._extract_numeric_sequence(description)
+        if numeric_sequence:
+            return numeric_sequence
+
         # Priority 6: strip preamble from description and return remainder ONLY if it looks like ciphertext
         text = description.strip()
         if not text.startswith("$"):
@@ -641,6 +650,23 @@ class CryptographyAgent(BaseAgent):
         except Exception as exc:
             logger.debug("_try_hex failed: %s", exc)
             return None
+
+    @staticmethod
+    def _extract_numeric_sequence(description: str) -> str:
+        """Return the longest run of >=3 space/comma separated integers that all
+        fall in the printable-ASCII code-point range, or "" if none.
+
+        This lets decimal/octal ASCII challenges whose values are embedded in a
+        sentence be decoded directly by _try_decimal / _try_octal.
+        """
+        best: List[str] = []
+        # Separators are only required *between* numbers, so a trailing period
+        # or bracket after the final value does not truncate the run.
+        for match in re.finditer(r"\d{1,3}(?:[\s,]+\d{1,3}){2,}", description):
+            tokens = [t for t in re.split(r"[\s,]+", match.group(0).strip()) if t]
+            if len(tokens) >= 3 and all(0 <= int(t) <= 255 for t in tokens) and len(tokens) > len(best):
+                best = tokens
+        return " ".join(best)
 
     def _looks_like_decimal(self, text: str) -> bool:
         nums = re.split(r"[\s,]+", text.strip())

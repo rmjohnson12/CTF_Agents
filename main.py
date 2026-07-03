@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from challenges.challenge_parser import ChallengeParser, ParseError
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.registry import AgentRegistry
+from core.utils.llm_health import warn_if_llm_degraded
 
 
 def _print_plan_main(
@@ -64,6 +65,7 @@ def build_coordinator(max_iterations: int = 5) -> CoordinatorAgent:
         "browser_tool": browser_tool,
         "john_tool": john_tool,
         "hashcat_tool": hashcat_tool,
+        "reasoner": coordinator.reasoner,
     })
     return coordinator
 
@@ -105,6 +107,7 @@ def main(argv: List[str]) -> int:
         return 0
 
     result = coordinator.solve_challenge(challenge, resume=args.resume)
+    warn_if_llm_degraded(result.get("llm_summary"))
     print(json.dumps(result, indent=2))
     return 0
 

@@ -26,7 +26,8 @@ def _contracts():
 
 
 @pytest.mark.parametrize("contract_path", _contracts(), ids=lambda path: path.parent.name)
-def test_golden_example_contract_and_routing(contract_path):
+def test_golden_example_contract_and_routing(contract_path, monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "none")
     raw = json.loads(contract_path.read_text(encoding="utf-8"))
     expected = raw["expected"]
     challenge = ChallengeParser().parse_file(contract_path)
@@ -47,3 +48,18 @@ def test_golden_example_contract_and_routing(contract_path):
 
 def test_every_major_category_has_a_golden_example():
     assert {path.parent.name for path in _contracts()} == set(AGENT_BY_CATEGORY)
+
+
+def test_main_coordinator_shares_reasoner_with_llm_specialists(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    coordinator = build_coordinator(max_iterations=1)
+
+    for agent_id in (
+        "reverse_agent",
+        "coding_agent",
+        "pwn_agent",
+        "networking_agent",
+        "blockchain_agent",
+    ):
+        agent = coordinator.specialist_agents[agent_id]
+        assert agent.reasoner is coordinator.reasoner

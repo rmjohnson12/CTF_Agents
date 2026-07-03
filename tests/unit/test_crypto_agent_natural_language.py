@@ -336,3 +336,46 @@ def test_crypto_time_capsule_socket_blocks_non_allowlisted_host(monkeypatch):
 
     with pytest.raises(SecurityPolicyError):
         CryptographyAgent._collect_time_capsule_samples("203.0.113.10", 31337, 1)
+
+
+def test_crypto_agent_extracts_decimal_sequence_from_natural_language_prompt():
+    agent = CryptographyAgent()
+    challenge = {
+        "id": "nl_decimal",
+        "category": "crypto",
+        "description": "Decode the decimal ASCII values 72 84 66 123 103 111 108 100 101 110 125.",
+        "hints": [],
+        "tags": ["crypto"],
+        "files": [],
+        "metadata": {},
+    }
+
+    result = agent.solve_challenge(challenge)
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{golden}"
+
+
+def test_crypto_agent_extracts_comma_separated_decimal_sequence():
+    agent = CryptographyAgent()
+    challenge = {
+        "id": "nl_decimal_commas",
+        "category": "crypto",
+        "description": "The values are: 72, 84, 66, 123, 103, 111, 108, 100, 101, 110, 125",
+        "hints": [],
+        "tags": ["crypto"],
+        "files": [],
+        "metadata": {},
+    }
+
+    result = agent.solve_challenge(challenge)
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{golden}"
+
+
+def test_extract_numeric_sequence_ignores_incidental_numbers():
+    # Two non-adjacent small numbers in prose must not be treated as ciphertext.
+    assert CryptographyAgent._extract_numeric_sequence(
+        "There are 3 files and 2 flags to find in this challenge"
+    ) == ""

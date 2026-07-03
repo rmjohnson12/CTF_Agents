@@ -210,6 +210,10 @@ for path in paths:
         else:
             steps.append("Generating solution script via LLM...")
             script_content = self.reasoner.generate_script(challenge, task_desc)
+
+        backend_fn = getattr(self.python_tool, "execution_backend", None)
+        execution_backend = backend_fn() if callable(backend_fn) else "custom"
+        steps.append(f"Generated-script execution backend: {execution_backend}.")
         
         if not script_content:
             steps.append("LLM produced no script (service likely down). Bypassing to deterministic fallback...")
@@ -263,7 +267,10 @@ for path in paths:
             steps.append(f"Executing script (Attempt {attempt + 1})...")
             last_stdout = None
             try:
-                res = self.python_tool.run(script_content)
+                res = self.python_tool.run(
+                    script_content,
+                    artifact_paths=challenge.get("files"),
+                )
                 last_stdout = res.stdout
                 
                 if res.timed_out:
@@ -313,7 +320,8 @@ for path in paths:
             'steps': steps,
             'artifacts': {
                 'generated_script': script_content,
-                'final_attempt': attempt + 1
+                'final_attempt': attempt + 1,
+                'execution_backend': execution_backend,
             }
         }
 

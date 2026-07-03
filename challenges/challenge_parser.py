@@ -112,7 +112,44 @@ class ChallengeParser:
             raise ParseError(f"Invalid JSON in {path}: {exc}") from exc
         if not isinstance(raw, dict):
             raise ParseError(f"Expected a JSON object in {path}, got {type(raw).__name__}")
-        return self.parse_dict(raw)
+        normalized = self.parse_dict(raw)
+        self._resolve_file_paths(normalized, base_dir=path.resolve().parent)
+        return normalized
+
+    @staticmethod
+    def _resolve_file_paths(challenge: Dict[str, Any], base_dir: Path) -> None:
+        """Resolve relative ``files`` entries against the challenge JSON's own
+        directory.
+
+        Challenge files are almost always shipped next to the JSON that
+        references them (e.g. ``examples/web/app.js`` alongside
+        ``examples/web/challenge.json``). Without this, running from the repo
+        root leaves a bare ``app.js`` that no agent can open, and the solve
+        silently fails even though the LLM and agent logic are fine. Only rewrite
+        a relative path only when it exists below the JSON's directory. Relative
+        entries may not escape that directory through ``..`` or symlinks.
+        """
+        files = challenge.get("files")
+        if not isinstance(files, list):
+            return
+        resolved: List[str] = []
+        for entry in files:
+            if not isinstance(entry, str) or not entry:
+                resolved.append(entry)
+                continue
+            candidate = Path(entry)
+            if candidate.is_absolute():
+                resolved.append(entry)
+                continue
+            relocated = (base_dir / candidate).resolve(strict=False)
+            try:
+                relocated.relative_to(base_dir.resolve())
+            except ValueError as exc:
+                raise ParseError(
+                    f"Challenge file path escapes its definition directory: {entry}"
+                ) from exc
+            resolved.append(str(relocated) if relocated.exists() else entry)
+        challenge["files"] = resolved
 
     def parse_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """

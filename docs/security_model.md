@@ -12,10 +12,24 @@ instruction-limited Unicorn emulator rather than as host code.
 
 ## Process and environment isolation
 
-Tool subprocesses receive a reduced environment by default. Generated Python
-is not executed on the host unless
-`CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1` is explicitly set. Prefer static
-analysis or an isolated challenge container.
+Tool subprocesses receive a reduced environment by default. Model-generated
+Python is never executed on the host implicitly. There are two opt-in backends,
+selected by `CTF_AGENTS_SANDBOX`:
+
+- `docker` (recommended): each generated script runs in a throwaway container
+  with no network (`--network none`), a read-only root filesystem plus a small
+  `noexec` tmpfs, challenge artifacts mounted read-only at their original paths,
+  hard memory/CPU/PID limits, all Linux capabilities dropped,
+  `no-new-privileges`, a non-root uid, and a strict wall-clock timeout after
+  which the container is force-removed.
+- host execution: only when `CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1` is
+  explicitly set. This runs arbitrary generated code directly on the machine and
+  should be avoided in favor of the Docker backend.
+
+Sandbox network egress is **fail-closed and currently unsupported**. Requests
+for networked generated-code execution are rejected and the container remains
+on `--network none`. A future sidecar must enforce destination policy at the
+network layer before this can be enabled safely.
 
 ## Runtime tool synthesis
 

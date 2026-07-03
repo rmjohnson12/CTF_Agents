@@ -15,6 +15,7 @@ from challenges.challenge_parser import ChallengeParser, ParseError
 from agents.coordinator.coordinator_agent import CoordinatorAgent
 from agents.registry import AgentRegistry
 from tools.common.elf_utils import is_elf_binary
+from core.utils.llm_health import warn_if_llm_degraded
 
 def _parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -175,10 +176,12 @@ def _looks_like_new_challenge_instruction(user_input: str) -> bool:
 def _heuristic_mapping_is_actionable(heuristic: Dict[str, Any]) -> bool:
     """Return True when local parsing is concrete enough to skip LLM mapping."""
     category = str(heuristic.get("category") or "").lower()
-    if category in {"", "unknown", "misc"}:
+    if category in {"", "unknown"}:
         return False
     if _instruction_declares_category(str(heuristic.get("description") or ""), category):
         return True
+    if category == "misc":
+        return False
     return bool(heuristic.get("files") or heuristic.get("url") or heuristic.get("target"))
 
 
@@ -206,6 +209,7 @@ def _declared_category_from_instruction(text: str) -> Optional[str]:
         "forensics": [r"\bforensics\s+challenge\b"],
         "crypto": [r"\bcrypto\s+challenge\b", r"\bcryptography\s+challenge\b"],
         "log": [r"\blog\s+challenge\b"],
+        "misc": [r"\bcoding\s+challenge\b", r"\bprogramming\s+challenge\b"],
     }
     for category in (
         "secure_coding",
@@ -217,6 +221,7 @@ def _declared_category_from_instruction(text: str) -> Optional[str]:
         "forensics",
         "web",
         "log",
+        "misc",
     ):
         if any(re.search(pattern, lowered) for pattern in declared_patterns.get(category, [])):
             return category
@@ -760,6 +765,10 @@ Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) i
         print("\n--- Step Result ---")
         print(f"Status: {result.get('status')}")
         print(f"Flag: {result.get('flag')}")
+
+        # Surface heuristic-only degradation here too: ask.py is the normal
+        # entrypoint, so a silent LLM outage must be as visible as in main.py.
+        warn_if_llm_degraded(result.get("llm_summary"))
         
         if result.get("steps"):
             print("\nRecent steps:")

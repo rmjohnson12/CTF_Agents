@@ -51,7 +51,11 @@ logger = logging.getLogger(__name__)
 
 _NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434/v1"
-_NVIDIA_DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
+# NOTE: meta/llama-3.3-70b-instruct was retired from NVIDIA NIM's hosted
+# endpoint and now hangs until timeout instead of erroring, which silently
+# disables the whole failover chain. meta/llama-3.1-70b-instruct is verified
+# live and responds in ~1s. Override with NVIDIA_MODEL if you have your own NIM.
+_NVIDIA_DEFAULT_MODEL = "meta/llama-3.1-70b-instruct"
 _ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 _OLLAMA_DEFAULT_MODEL = "llama3.1"
 _GOOGLE_DEFAULT_MODEL = "gemini-2.5-flash"
@@ -96,7 +100,12 @@ class LLMReasoner:
         self._llm_failovers = 0
         self._last_successful_provider: Optional[str] = None
         self._last_successful_model: Optional[str] = None
+        self._disabled_reason: Optional[str] = None
         self.timeout_seconds = self._load_timeout_seconds()
+        # Routing, planning and code generation are deterministic tasks: default
+        # to temperature 0 so the same challenge routes the same way every run
+        # instead of intermittently returning "none"/"stop".
+        self._temperature = self._load_temperature()
         self._classifier = ChallengeClassifier()
         self._strategy_selector = StrategySelector()
 
@@ -177,6 +186,17 @@ class LLMReasoner:
             if key and not key.startswith("your_"):
                 return key
         return None
+
+    @staticmethod
+    def _load_temperature() -> float:
+        raw = os.getenv("LLM_TEMPERATURE", "").strip()
+        if not raw:
+            return 0.0
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            logger.warning("Invalid LLM_TEMPERATURE=%r; using 0.0.", raw)
+            return 0.0
 
     @staticmethod
     def _load_timeout_seconds() -> float:
@@ -319,6 +339,8 @@ class LLMReasoner:
             "failovers": self._llm_failovers,
             "last_successful_provider": self._last_successful_provider,
             "last_successful_model": self._last_successful_model,
+            "degraded": self.client is None,
+            "disabled_reason": self._disabled_reason,
         }
 
     def _record_llm_success(self, text: str) -> str:
@@ -601,6 +623,7 @@ Recent results:
                     response = self.client.messages.create(
                         model=self.model,
                         max_tokens=2000,
+                        temperature=self._temperature,
                         messages=[{"role": "user", "content": prompt}],
                     )
                     return self._record_llm_success(self._extract_anthropic_text(response))
@@ -608,11 +631,14 @@ Recent results:
                     response = self.client.models.generate_content(
                         model=self.model,
                         contents=prompt,
+                        config={"temperature": self._temperature, "max_output_tokens": 2000},
                     )
                     return self._record_llm_success(self._extract_google_text(response))
                 else:
                     response = self.client.chat.completions.create(
                         model=self.model,
+                        max_tokens=2000,
+                        temperature=self._temperature,
                         messages=[{"role": "user", "content": prompt}],
                     )
                     return self._record_llm_success(response.choices[0].message.content or "")
@@ -648,22 +674,28 @@ Recent results:
                         retry_count = 0
                         continue
                     logger.error("LLM service temporarily unavailable (503/429). Fast-failing to heuristic mode.")
-                    self._disable_llm()
+                    self._disable_llm("service unavailable or quota exhausted (HTTP 503/429)")
                     return ""
                 if "403" in str(exc) or "401" in str(exc) or "Unauthorized" in str(exc) or "Forbidden" in str(exc):
                     if self._advance_provider():
                         retry_count = 0
                         continue
                     logger.error("LLM authorization failed. Disabling LLM for this run and falling back to heuristic mode.")
-                    self._disable_llm()
+                    self._disable_llm("authorization failed (HTTP 401/403) — check API keys")
                     return ""
                 logger.error("LLM call failed with non-retryable error: %s", exc)
-                self._disable_llm()
+                self._disable_llm(f"non-retryable error: {type(exc).__name__}")
                 return ""
 
         return ""
 
-    def _disable_llm(self) -> None:
+    def _disable_llm(self, reason: Optional[str] = None) -> None:
+        self._disabled_reason = reason or "all configured LLM providers failed"
+        logger.error(
+            "LLM disabled for the rest of this run (%s). The coordinator will fall "
+            "back to heuristic routing only, which can solve far fewer challenges.",
+            self._disabled_reason,
+        )
         self.client = None
         self.provider = "none"
         self.model = "none"

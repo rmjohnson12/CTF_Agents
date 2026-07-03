@@ -12,7 +12,7 @@ class MockReasoner:
         return "print('CTF{coding_is_fun}')"
 
 class MockPythonTool:
-    def run(self, script_content, args=None, timeout_s=30):
+    def run(self, script_content, args=None, timeout_s=30, **kwargs):
         # Simulate script execution finding a flag
         return ToolResult(
             argv=["python", "tmp.py"],
@@ -49,6 +49,8 @@ def test_coding_agent_solve_success():
     
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{coding_is_fun}"
+    assert result["artifacts"]["execution_backend"] == "custom"
+    assert any("execution backend: custom" in step for step in result["steps"])
     assert "Executing script (Attempt 1)..." in result["steps"]
     assert result["artifacts"]["generated_script"] == "print('CTF{coding_is_fun}')"
 
@@ -82,7 +84,7 @@ def test_coding_agent_self_correction_success():
     class MockFailingPythonTool:
         def __init__(self):
             self.calls = 0
-        def run(self, script_content, args=None, timeout_s=30):
+        def run(self, script_content, args=None, timeout_s=30, **kwargs):
             self.calls += 1
             if "fixed_flag" in script_content:
                 return ToolResult(["python"], "CTF{fixed_flag}", "", 0, False, 0.1)
