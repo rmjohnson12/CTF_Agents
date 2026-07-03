@@ -11,6 +11,7 @@ tests.
 - LLM-assisted planning and failure review
 - Performance and successful-trace routing hints
 - Iterative fallback with duplicate-action suppression
+- Evidence-bound runtime composition for previously unseen HTTP/artifact workflows
 
 ## Tool execution
 
@@ -19,6 +20,7 @@ tests.
 - ARM-architecture wordplay detection and bounded A32 emulation for remote register protocols
 - Hash cracking, packet analysis, metadata extraction, Docker, SSH, and Web3
 - Explicit network and host-execution policy checks
+- Ephemeral HTTP/read/regex/decode/JSON tools synthesized without host code execution
 
 ## Artifact processing
 

@@ -519,6 +519,36 @@ def test_coordinator_asks_llm_for_recovery_after_failed_stop():
     assert any("LLM failure review suggested recovery" in step for step in result["steps"])
 
 
+def test_coordinator_runs_runtime_synthesis_after_normal_recovery_stalls():
+    class SolvingSynthesizer:
+        def __init__(self):
+            self.calls = 0
+
+        def attempt(self, challenge, history, steps):
+            self.calls += 1
+            return {
+                "challenge_id": challenge["id"],
+                "agent_id": "runtime_tool_synthesizer",
+                "status": "solved",
+                "flag": "CTF{runtime_recovery}",
+                "steps": ["Executed an evidence-gated ephemeral tool."],
+                "artifacts": {"runtime_tool_synthesis": {"validated": True}},
+            }
+
+    synthesizer = SolvingSynthesizer()
+    coordinator = CoordinatorAgent(max_iterations=1, runtime_synthesizer=synthesizer)
+    coordinator.reasoner = MockReasoner([
+        {"next_action": "stop", "target": "none", "reasoning": "No predefined playbook applies"}
+    ])
+
+    result = coordinator.solve_challenge({"id": "runtime_recovery", "description": "novel task"})
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "CTF{runtime_recovery}"
+    assert synthesizer.calls == 1
+    assert any("evidence-gated runtime tool" in step for step in result["steps"])
+
+
 def test_coordinator_solves_when_performance_telemetry_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     decisions = [

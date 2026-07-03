@@ -28,6 +28,7 @@ from core.task_manager.task_queue import TaskQueue
 from core.task_manager.task import Task, TaskPriority
 from core.knowledge_base.knowledge_store import KnowledgeStore
 from core.knowledge_base.solve_trace_store import SolveTraceStore
+from core.runtime_synthesis import RuntimeToolSynthesisLoop
 from core.utils.security import redact_sensitive_data, safe_checkpoint_path, safe_slug
 from tools.common.embedding_analogy import is_embedding_analogy_file
 import concurrent.futures
@@ -59,6 +60,7 @@ class CoordinatorAgent(BaseAgent):
         solve_trace_store: Optional[SolveTraceStore] = None,
         performance_tracker: Optional[Any] = None,
         reporter: Optional[Any] = None,
+        runtime_synthesizer: Optional[Any] = None,
     ):
         ks = knowledge_store or KnowledgeStore()
         super().__init__(agent_id, AgentType.COORDINATOR, knowledge_store=ks)
@@ -74,6 +76,7 @@ class CoordinatorAgent(BaseAgent):
         self.max_iterations = max_iterations
         self.result_manager = ResultManager()
         self.solve_trace_store = solve_trace_store or self._create_solve_trace_store()
+        self.runtime_synthesizer = runtime_synthesizer
         self.broker = broker or MessageBroker()
         self.task_queue = TaskQueue()
         if reporter is None:
@@ -558,6 +561,23 @@ class CoordinatorAgent(BaseAgent):
                             final_result["status"] = "solved"
                             final_result["flag"] = result.get("flag")
                             all_steps.append("Challenge solved by LLM failure review recovery!")
+
+            if final_result.get("status") != "solved":
+                synthesizer = self.runtime_synthesizer or RuntimeToolSynthesisLoop(self.reasoner)
+                synthesized = synthesizer.attempt(challenge, history, all_steps)
+                if synthesized:
+                    history.append(synthesized)
+                    all_steps.extend(
+                        f"  [Runtime Synthesis] {step}"
+                        for step in synthesized.get("steps") or []
+                    )
+                    self._publish_result(synthesized)
+                    if synthesized.get("artifacts"):
+                        self._publish_knowledge(challenge_id, synthesized["artifacts"])
+                    if synthesized.get("status") == "solved" and synthesized.get("flag"):
+                        final_result["status"] = "solved"
+                        final_result["flag"] = synthesized["flag"]
+                        all_steps.append("Challenge solved by an evidence-gated runtime tool.")
 
             self.active_challenges.pop(challenge_id, None)
             final_result["steps"] = all_steps

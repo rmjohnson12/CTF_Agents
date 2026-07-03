@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import requests
 
 from core.utils.flag_utils import find_first_flag
+from core.utils.security import SecurityPolicyError, assert_url_allowed
 
 
 @dataclass(frozen=True)
@@ -61,9 +62,21 @@ class React2ShellTool:
             return
         if os.getenv("CTF_AGENTS_ALLOW_REMOTE_R2S") == "1":
             return
+        explicitly_allowed = [
+            item.strip()
+            for item in os.getenv("CTF_AGENTS_ALLOWED_NETWORKS", "").split(",")
+            if item.strip()
+        ]
+        if explicitly_allowed:
+            try:
+                assert_url_allowed(url, allowed_networks=explicitly_allowed)
+                return
+            except SecurityPolicyError:
+                pass
         raise PermissionError(
             "React2ShellTool only runs against localhost targets by default. "
-            "Set CTF_AGENTS_ALLOW_REMOTE_R2S=1 for an authorized remote CTF target."
+            "Explicitly allowlist an authorized target with "
+            "CTF_AGENTS_ALLOWED_NETWORKS or set CTF_AGENTS_ALLOW_REMOTE_R2S=1."
         )
 
     @staticmethod

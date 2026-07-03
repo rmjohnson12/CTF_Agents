@@ -95,6 +95,14 @@ def _normalize_url(url: Optional[str]) -> Optional[str]:
         return "http://" + url
     return url
 
+
+def _contains_any_term(text: str, terms: List[str]) -> bool:
+    """Match classification terms as tokens instead of arbitrary substrings."""
+    return any(
+        re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text)
+        for term in terms
+    )
+
 def _normalize_challenge(challenge: Dict[str, Any]) -> Dict[str, Any]:
     if challenge.get("url"):
         challenge["url"] = _normalize_url(challenge["url"])
@@ -497,7 +505,7 @@ def _heuristic_challenge_from_instruction(
         ]
     ):
         category = "reverse"
-    elif challenge_files and any(term in lowered_input for term in strong_crypto_terms):
+    elif challenge_files and _contains_any_term(lowered_input, strong_crypto_terms):
         category = "crypto"
     elif (
         any(term in lowered_input for term in pwn_terms)
@@ -511,7 +519,7 @@ def _heuristic_challenge_from_instruction(
         category = "web"
     elif (
         any(f.lower().endswith(('.txt', '.doc', '.docx', '.enc')) for f in challenge_files)
-        or any(term in lowered_input for term in strong_crypto_terms)
+        or _contains_any_term(lowered_input, strong_crypto_terms)
     ):
         category = "crypto"
     elif (

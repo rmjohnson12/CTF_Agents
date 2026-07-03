@@ -506,6 +506,21 @@ def test_heuristic_mapping_routes_explicit_reversing_with_missing_file_to_revers
     assert _heuristic_mapping_is_actionable(challenge) is True
 
 
+def test_heuristic_mapping_does_not_find_sha_inside_shaping(tmp_path):
+    source = tmp_path / "web_reactoops"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM node:20-alpine")
+
+    challenge = _heuristic_challenge_from_instruction(
+        f"User input may be shaping the reactive interface. Files are in {source}. "
+        "Target 192.0.2.10:31337",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "web"
+    assert challenge["files"] == [str(source)]
+
+
 def test_heuristic_mapping_routes_arms_race_wordplay_to_reverse_before_web():
     challenge = _heuristic_challenge_from_instruction(
         "A server sends mysterious data in a multi-level challenge. "

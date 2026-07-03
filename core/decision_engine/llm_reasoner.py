@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from openai import OpenAI
 from anthropic import Anthropic
 from dotenv import load_dotenv
+from core.utils.security import redact_sensitive_data
 
 
 def _collect_sdk_retryable_exceptions() -> tuple[type[BaseException], ...]:
@@ -399,6 +400,64 @@ class LLMReasoner:
             "reasoning": data.get("reasoning", "No recovery reasoning provided."),
             "inputs": data.get("inputs") if isinstance(data.get("inputs"), dict) else {},
         }
+
+    def synthesize_runtime_tool(
+        self,
+        challenge: Dict[str, Any],
+        history: List[Dict[str, Any]],
+        steps: List[str],
+        allowed_operations: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Propose one evidence-bound tool using the constrained runtime DSL."""
+        if self.client is None:
+            return None
+        safe_challenge = redact_sensitive_data(challenge)
+        safe_history = redact_sensitive_data(history[-6:])
+        safe_steps = redact_sensitive_data(steps[-60:])
+        prompt = f"""
+You are the tool-building recovery stage for a stalled CTF workflow. Compose one
+small, ephemeral tool from the allowed declarative operations. Do not emit
+Python, shell commands, package installs, credentials, or prose outside JSON.
+
+Allowed operations: {json.dumps(allowed_operations)}
+
+Return exactly this shape:
+{{
+  "name": "short_tool_name",
+  "hypothesis": "what new evidence this tests",
+  "evidence": ["specific observed trace fact"],
+  "operations": [
+    {{"op": "http_request|read_artifact|regex_extract|decode|json_extract", "save_as": "variable", "other_fields": "as needed"}}
+  ]
+}}
+
+Operation fields:
+- http_request: url (same-origin absolute or relative), method GET/POST,
+  optional data object, headers object, timeout_s.
+- read_artifact: path must be one of the supplied artifacts or inside a supplied directory.
+- regex_extract: source variable, pattern, optional integer group.
+- decode: source variable, encoding base64/hex/url.
+- json_extract: source variable, dot-separated path.
+Every source variable must have been produced by an earlier operation. Use at
+most 12 operations. Prefer a narrow experiment grounded in observed evidence.
+
+Challenge:
+{json.dumps(safe_challenge, indent=2, default=str)}
+
+Recent trace:
+{json.dumps(safe_steps, indent=2, default=str)}
+
+Recent results:
+{json.dumps(safe_history, indent=2, default=str)}
+""".strip()
+        try:
+            raw = self._call_llm(prompt)
+            cleaned = raw.strip().replace("```json", "").replace("```", "").strip()
+            proposal = json.loads(cleaned)
+            return proposal if isinstance(proposal, dict) else None
+        except Exception as exc:
+            logger.warning("Runtime tool synthesis proposal failed: %s", exc)
+            return None
 
     @staticmethod
     def _has_sql_recovery_evidence(challenge: Dict[str, Any], steps: List[str]) -> bool:

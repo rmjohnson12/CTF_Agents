@@ -17,6 +17,21 @@ is not executed on the host unless
 `CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1` is explicitly set. Prefer static
 analysis or an isolated challenge container.
 
+## Runtime tool synthesis
+
+Runtime synthesis does not generate or execute Python, shell commands, package
+installers, or persistent plugins. After ordinary specialists and recovery
+stall, the model may propose one ephemeral declarative tool containing at most
+12 operations: same-origin HTTP requests, reads restricted to supplied
+artifacts, bounded regex extraction, base64/hex/URL decoding, and JSON lookup.
+
+The proposal must quote evidence already present in the challenge trace. The
+validator rejects invented evidence, cross-origin requests, redirects, unsafe
+regex constructs, oversized specifications, unknown variables, unsupported
+operations, and artifact path escapes. Sensitive context is redacted before it
+is sent to the model, and synthesized tools are not registered or persisted as
+executable code.
+
 ## Docker
 
 Local Docker challenge execution is opt-in with
@@ -66,7 +81,8 @@ binds require an ingestion token. See [live_reporting.md](live_reporting.md).
 
 ## Specialized opt-ins
 
-- Remote React/RSC execution: `CTF_AGENTS_ALLOW_REMOTE_R2S=1`
+- Remote React/RSC execution: an explicit `CTF_AGENTS_ALLOWED_NETWORKS` match,
+  or the legacy `CTF_AGENTS_ALLOW_REMOTE_R2S=1` override
 - Host Python execution: `CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1`
 - Local Docker challenge runs: `CTF_AGENTS_ALLOW_DOCKER=1`
 - Sensitive browser artifacts: `CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS=1`

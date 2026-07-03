@@ -12,9 +12,11 @@ instruction / challenge JSON
             |
  strategy selector / coordinator
        |          |
- specialist    support agent
+specialist    support agent
        |          |
        bounded tool wrappers
+            |
+ stalled -> runtime tool synthesis DSL
             |
  result manager, checkpoints, knowledge, campaign ledger
 ```
@@ -25,6 +27,11 @@ instruction / challenge JSON
   and solve-trace hints choose the next bounded action.
 - **Execution**: agents call typed wrappers rather than constructing arbitrary
   shell commands or network requests.
+- **Runtime synthesis**: after normal routing and one recovery review stall,
+  the reasoner may compose one ephemeral tool from a constrained operation
+  DSL. The coordinator validates cited evidence, origin and artifact scope,
+  operation count, regex safety, payload size, and timeouts before delegating
+  execution to existing wrappers.
 - **Agent registration**: decorated specialist and support classes are
   discovered by `AgentRegistry`, constructed in stable order, and injected
   with only the CLI dependencies their constructors explicitly accept.

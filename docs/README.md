@@ -69,6 +69,7 @@ Each document should include:
 - `api/communication_protocol.md`: Inter-agent communication
 - `guides/contributing.md`: Contribution guidelines
 - `live_reporting.md`: Progress-event schema, REST routes, SSE, and deployment
+- `runtime_tool_synthesis.md`: Evidence-gated ephemeral tool composition
 
 ### For Researchers
 - `architecture/decision_engine.md`: AI decision-making

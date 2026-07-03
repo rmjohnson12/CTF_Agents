@@ -148,6 +148,29 @@ def test_suggest_recovery_action_parses_valid_json(monkeypatch):
     assert decision["inputs"]["task"].startswith("Parse")
 
 
+def test_synthesize_runtime_tool_parses_declarative_proposal(monkeypatch):
+    mock_client = MagicMock()
+    reasoner = LLMReasoner(client=mock_client)
+    proposal = {
+        "name": "probe_api",
+        "hypothesis": "A discovered endpoint exposes encoded output.",
+        "evidence": ["Trace contains /api/result."],
+        "operations": [
+            {"op": "http_request", "url": "/api/result", "save_as": "response"}
+        ],
+    }
+    monkeypatch.setattr(reasoner, "_call_llm", lambda prompt: json.dumps(proposal))
+
+    result = reasoner.synthesize_runtime_tool(
+        SAMPLE_CHALLENGE,
+        [{"status": "attempted"}],
+        ["Found /api/result"],
+        ["http_request"],
+    )
+
+    assert result == proposal
+
+
 def test_suggest_recovery_action_rejects_sql_without_sql_evidence(monkeypatch):
     mock_client = MagicMock()
     reasoner = LLMReasoner(client=mock_client)

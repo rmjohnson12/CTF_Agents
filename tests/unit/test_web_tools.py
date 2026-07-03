@@ -952,3 +952,20 @@ def test_react2shell_tool_allows_remote_when_explicitly_enabled(monkeypatch):
     assert result.flag == "HTB{remote_flag}"
     assert calls[0][0] == "https://example.com/"
     assert calls[0][1]["headers"]["Next-Action"] == "x"
+
+
+def test_react2shell_tool_allows_explicitly_allowlisted_remote(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 500
+        text = '1:E{"digest":"HTB{allowlisted_remote}"}'
+
+    monkeypatch.delenv("CTF_AGENTS_ALLOW_REMOTE_R2S", raising=False)
+    monkeypatch.setenv("CTF_AGENTS_ALLOWED_NETWORKS", "192.0.2.10/32")
+    monkeypatch.setattr("tools.web.react2shell.requests.post", lambda url, **kwargs: calls.append(url) or FakeResponse())
+
+    result = React2ShellTool().run("http://192.0.2.10:31337")
+
+    assert result.flag == "HTB{allowlisted_remote}"
+    assert calls == ["http://192.0.2.10:31337/"]

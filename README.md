@@ -99,6 +99,7 @@ config/       Runtime and tool configuration
 - [Architecture](docs/architecture.md)
 - [Capabilities](docs/capabilities.md)
 - [Security model](docs/security_model.md)
+- [Runtime tool synthesis](docs/runtime_tool_synthesis.md)
 - [Live solve reporting](docs/live_reporting.md)
 - [Operator's guide](docs/operators_guide.md)
 - [Development](docs/development.md)
