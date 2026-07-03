@@ -622,6 +622,51 @@ def test_call_llm_uses_chat_completions():
     assert reasoner.runtime_summary()["last_successful_provider"] == "openai"
 
 
+def test_shared_reasoner_serializes_concurrent_provider_calls():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    mock_client = MagicMock()
+    first_entered = threading.Event()
+    second_started = threading.Event()
+    release_first = threading.Event()
+    call_count = 0
+    count_lock = threading.Lock()
+
+    def create(**_kwargs):
+        nonlocal call_count
+        with count_lock:
+            call_count += 1
+            current = call_count
+        if current == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+        return MagicMock(choices=[MagicMock(message=MagicMock(content="ok"))])
+
+    mock_client.chat.completions.create.side_effect = create
+    reasoner = LLMReasoner(client=mock_client)
+
+    def invoke(prompt):
+        if prompt == "second":
+            second_started.set()
+        return reasoner._call_llm(prompt)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(invoke, "first")
+        assert first_entered.wait(timeout=1)
+        second = pool.submit(invoke, "second")
+        assert second_started.wait(timeout=1)
+        # The second worker reached the reasoner but cannot dispatch through
+        # the shared mutable client until the first call releases the lock.
+        assert call_count == 1
+        release_first.set()
+        assert first.result(timeout=2) == "ok"
+        assert second.result(timeout=2) == "ok"
+
+    assert call_count == 2
+    assert reasoner.runtime_summary()["successful_calls"] == 2
+
+
 def test_call_llm_falls_back_on_exception():
     mock_client = MagicMock()
     mock_client.chat.completions.create.side_effect = Exception("API down")

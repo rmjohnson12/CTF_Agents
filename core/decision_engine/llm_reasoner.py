@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import importlib
 from dataclasses import asdict
@@ -101,6 +102,11 @@ class LLMReasoner:
         self._last_successful_provider: Optional[str] = None
         self._last_successful_model: Optional[str] = None
         self._disabled_reason: Optional[str] = None
+        # Specialists may share this reasoner while the coordinator has several
+        # futures in flight. Provider failover mutates client/provider/model, so
+        # calls must be serialized to keep one thread from changing dispatch
+        # state underneath another in-flight request.
+        self._call_lock = threading.RLock()
         self.timeout_seconds = self._load_timeout_seconds()
         # Routing, planning and code generation are deterministic tasks: default
         # to temperature 0 so the same challenge routes the same way every run
@@ -330,18 +336,19 @@ class LLMReasoner:
 
     def runtime_summary(self) -> Dict[str, Any]:
         """Return secret-free provider telemetry for reports and debugging."""
-        return {
-            "configured_providers": list(self._provider_candidates),
-            "active_provider": self.provider,
-            "active_model": self.model,
-            "calls": self._llm_calls,
-            "successful_calls": self._llm_successes,
-            "failovers": self._llm_failovers,
-            "last_successful_provider": self._last_successful_provider,
-            "last_successful_model": self._last_successful_model,
-            "degraded": self.client is None,
-            "disabled_reason": self._disabled_reason,
-        }
+        with self._call_lock:
+            return {
+                "configured_providers": list(self._provider_candidates),
+                "active_provider": self.provider,
+                "active_model": self.model,
+                "calls": self._llm_calls,
+                "successful_calls": self._llm_successes,
+                "failovers": self._llm_failovers,
+                "last_successful_provider": self._last_successful_provider,
+                "last_successful_model": self._last_successful_model,
+                "degraded": self.client is None,
+                "disabled_reason": self._disabled_reason,
+            }
 
     def _record_llm_success(self, text: str) -> str:
         if text:
@@ -611,6 +618,10 @@ Recent results:
         )
 
     def _call_llm(self, prompt: str) -> str:
+        with self._call_lock:
+            return self._call_llm_locked(prompt)
+
+    def _call_llm_locked(self, prompt: str) -> str:
         if not self.client:
             return ""
 
