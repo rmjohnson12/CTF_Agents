@@ -245,7 +245,7 @@ def test_nvapi_key_selects_nvidia_nim(monkeypatch):
     call_kwargs = MockOpenAI.call_args.kwargs
     assert call_kwargs["api_key"] == "nvapi-fake-key"
     assert call_kwargs["base_url"] == _NVIDIA_NIM_BASE_URL
-    assert call_kwargs["timeout"] == 60.0
+    assert call_kwargs["timeout"] == 20.0
     assert reasoner.model == _NVIDIA_DEFAULT_MODEL
 
 
@@ -271,8 +271,8 @@ def test_invalid_llm_timeout_seconds_uses_default(monkeypatch):
         reasoner = LLMReasoner()
 
     call_kwargs = MockOpenAI.call_args.kwargs
-    assert call_kwargs["timeout"] == 60.0
-    assert reasoner.timeout_seconds == 60.0
+    assert call_kwargs["timeout"] == 20.0
+    assert reasoner.timeout_seconds == 20.0
 
 
 def test_nvapi_keys_selects_first_nvidia_key(monkeypatch):
@@ -349,7 +349,10 @@ def test_google_api_key_selects_google_genai(monkeypatch):
             patch("core.decision_engine.llm_reasoner.OpenAI") as MockOpenAI:
         reasoner = LLMReasoner()
 
-    fake_genai.Client.assert_called_once_with(api_key="google-fake-key")
+    fake_genai.Client.assert_called_once_with(
+        api_key="google-fake-key",
+        http_options={"timeout": 20000},
+    )
     MockOpenAI.assert_not_called()
     assert reasoner.provider == "google"
     assert reasoner.model == _GOOGLE_DEFAULT_MODEL
@@ -365,7 +368,10 @@ def test_gemini_provider_alias_uses_custom_google_model(monkeypatch):
     with patch("core.decision_engine.llm_reasoner.importlib.import_module", return_value=fake_genai):
         reasoner = LLMReasoner()
 
-    fake_genai.Client.assert_called_once_with(api_key="gemini-fake-key")
+    fake_genai.Client.assert_called_once_with(
+        api_key="gemini-fake-key",
+        http_options={"timeout": 20000},
+    )
     assert reasoner.provider == "google"
     assert reasoner.model == "gemini-test-model"
 
@@ -385,6 +391,7 @@ def test_google_cloud_adc_path_uses_project_and_location(monkeypatch):
         vertexai=True,
         project="ctf-project",
         location="us-central1",
+        http_options={"timeout": 20000},
     )
     assert reasoner.provider == "google"
     assert reasoner.model == _GOOGLE_DEFAULT_MODEL
@@ -402,7 +409,7 @@ def test_ollama_provider_uses_openai_compatible_client(monkeypatch):
     call_kwargs = MockOpenAI.call_args.kwargs
     assert call_kwargs["api_key"] == "ollama"
     assert call_kwargs["base_url"] == "http://localhost:11434/v1"
-    assert call_kwargs["timeout"] == 60.0
+    assert call_kwargs["timeout"] == 20.0
     assert reasoner.provider == "ollama"
     assert reasoner.model == "qwen2.5-coder:7b"
 
@@ -527,6 +534,61 @@ def test_nvidia_key_rotation_on_429(monkeypatch):
     second_client.chat.completions.create.assert_called_once()
 
 
+def test_google_429_fails_over_to_configured_nvidia_provider(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-fake-key")
+    monkeypatch.setenv("NVAPI_KEY", "nvapi-fallback")
+
+    google_client = MagicMock()
+    google_client.models.generate_content.side_effect = Exception("429 quota exhausted")
+    nvidia_client = MagicMock()
+    nvidia_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="recovered through nvidia"))]
+    )
+
+    def configure_google(reasoner, _api_key):
+        reasoner.client = google_client
+
+    with patch.object(LLMReasoner, "_configure_google_client", configure_google), \
+            patch("core.decision_engine.llm_reasoner.OpenAI", return_value=nvidia_client):
+        reasoner = LLMReasoner()
+        result = reasoner._call_llm("hello")
+
+    assert result == "recovered through nvidia"
+    assert reasoner.provider == "nvidia"
+    assert reasoner.model == _NVIDIA_DEFAULT_MODEL
+    assert reasoner.runtime_summary()["failovers"] == 1
+    assert reasoner.runtime_summary()["last_successful_provider"] == "nvidia"
+    google_client.models.generate_content.assert_called_once()
+    nvidia_client.chat.completions.create.assert_called_once()
+
+
+def test_exhausted_provider_chain_does_not_retry_final_provider(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "google")
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-fake-key")
+    monkeypatch.setenv("NVAPI_KEY", "nvapi-fallback")
+
+    google_client = MagicMock()
+    google_client.models.generate_content.side_effect = TimeoutError("google timeout")
+    nvidia_client = MagicMock()
+    nvidia_client.chat.completions.create.side_effect = TimeoutError("nvidia timeout")
+
+    def configure_google(reasoner, _api_key):
+        reasoner.client = google_client
+
+    with patch.object(LLMReasoner, "_configure_google_client", configure_google), \
+            patch("core.decision_engine.llm_reasoner.OpenAI", return_value=nvidia_client), \
+            patch("core.decision_engine.llm_reasoner.time.sleep") as sleep:
+        reasoner = LLMReasoner()
+        result = reasoner._call_llm("hello")
+
+    assert result == ""
+    assert reasoner.runtime_summary()["failovers"] == 1
+    google_client.models.generate_content.assert_called_once()
+    nvidia_client.chat.completions.create.assert_called_once()
+    sleep.assert_not_called()
+
+
 def test_provider_override_selects_custom_anthropic_model(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "claude")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
@@ -555,6 +617,8 @@ def test_call_llm_uses_chat_completions():
     assert call_kwargs["model"] == "gpt-4o"
     assert call_kwargs["messages"] == [{"role": "user", "content": "hello"}]
     assert result == "some response"
+    assert reasoner.runtime_summary()["successful_calls"] == 1
+    assert reasoner.runtime_summary()["last_successful_provider"] == "openai"
 
 
 def test_call_llm_falls_back_on_exception():

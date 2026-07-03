@@ -26,12 +26,12 @@ def _collect_sdk_retryable_exceptions() -> tuple[type[BaseException], ...]:
     the entire run.
     """
     excs: list[type[BaseException]] = []
-    for module_name in ("openai", "anthropic"):
+    for module_name in ("openai", "anthropic", "httpx"):
         try:
             mod = importlib.import_module(module_name)
         except Exception:
             continue
-        for attr in ("APITimeoutError", "APIConnectionError"):
+        for attr in ("APITimeoutError", "APIConnectionError", "TimeoutException", "NetworkError"):
             exc = getattr(mod, attr, None)
             if isinstance(exc, type) and issubclass(exc, BaseException):
                 excs.append(exc)
@@ -59,7 +59,7 @@ _GOOGLE_DEFAULT_MODEL = "gemini-2.5-flash"
 _RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError) + _collect_sdk_retryable_exceptions()
 _MAX_LLM_RETRIES = 3
 _LLM_BACKOFF_BASE = 1.0
-_DEFAULT_LLM_TIMEOUT_SECONDS = 60.0
+_DEFAULT_LLM_TIMEOUT_SECONDS = 20.0
 
 
 class LLMReasoner:
@@ -85,6 +85,17 @@ class LLMReasoner:
         self.provider = (provider or os.getenv("LLM_PROVIDER") or "").strip().lower()
         self._nvidia_keys: List[str] = []
         self._nvidia_key_index = 0
+        self._provider_candidates: List[str] = []
+        self._provider_candidate_index = -1
+        self._provider_model_override = model
+        self._anthropic_key: Optional[str] = None
+        self._openai_key: Optional[str] = None
+        self._google_key: Optional[str] = None
+        self._llm_calls = 0
+        self._llm_successes = 0
+        self._llm_failovers = 0
+        self._last_successful_provider: Optional[str] = None
+        self._last_successful_model: Optional[str] = None
         self.timeout_seconds = self._load_timeout_seconds()
         self._classifier = ChallengeClassifier()
         self._strategy_selector = StrategySelector()
@@ -95,16 +106,20 @@ class LLMReasoner:
             self.model = model or "gpt-4o"
         else:
             self._nvidia_keys = self._load_nvidia_keys()
-            anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-            openai_key = os.getenv("OPENAI_API_KEY")
-            google_key = self._load_google_api_key()
+            anthropic_key = self._anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+            openai_key = self._openai_key = os.getenv("OPENAI_API_KEY")
+            google_key = self._google_key = self._load_google_api_key()
             provider_order = self._provider_order(self.provider)
+            self._provider_candidates = [
+                candidate for candidate in provider_order
+                if self._provider_is_configured(candidate)
+            ]
 
             self.client = None
             self.model = model or "none"
             self.provider = "none"
 
-            for candidate in provider_order:
+            for candidate in self._provider_candidates:
                 if candidate == "ollama":
                     self.provider = "ollama"
                     self._configure_ollama_client()
@@ -134,6 +149,8 @@ class LLMReasoner:
                     self._configure_google_client(google_key)
                     self.model = model or os.getenv("GOOGLE_MODEL") or _GOOGLE_DEFAULT_MODEL
                     break
+            if self.provider in self._provider_candidates:
+                self._provider_candidate_index = self._provider_candidates.index(self.provider)
 
     @property
     def is_available(self) -> bool:
@@ -214,10 +231,18 @@ class LLMReasoner:
         )
 
         if cloud_requested and project and not api_key:
-            self.client = genai.Client(vertexai=True, project=project, location=location)
+            self.client = genai.Client(
+                vertexai=True,
+                project=project,
+                location=location,
+                http_options={"timeout": int(self.timeout_seconds * 1000)},
+            )
             return
 
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(
+            api_key=api_key,
+            http_options={"timeout": int(self.timeout_seconds * 1000)},
+        )
 
     def _rotate_nvidia_key(self) -> bool:
         if self.provider != "nvidia" or len(self._nvidia_keys) <= 1:
@@ -234,6 +259,74 @@ class LLMReasoner:
             len(self._nvidia_keys),
         )
         return True
+
+    def _provider_is_configured(self, provider: str) -> bool:
+        return {
+            "ollama": True,
+            "nvidia": bool(self._nvidia_keys),
+            "anthropic": bool(self._anthropic_key),
+            "openai": bool(self._openai_key),
+            "google": self._google_config_available(self._google_key),
+        }.get(provider, False)
+
+    def _advance_provider(self) -> bool:
+        """Move to the next configured provider after quota/auth/service failure."""
+        for index in range(self._provider_candidate_index + 1, len(self._provider_candidates)):
+            candidate = self._provider_candidates[index]
+            try:
+                if candidate == "ollama":
+                    self._configure_ollama_client()
+                    selected_model = os.getenv("OLLAMA_MODEL") or _OLLAMA_DEFAULT_MODEL
+                elif candidate == "nvidia":
+                    self._configure_nvidia_client(0)
+                    selected_model = os.getenv("NVIDIA_MODEL") or _NVIDIA_DEFAULT_MODEL
+                elif candidate == "anthropic":
+                    self.client = Anthropic(api_key=self._anthropic_key, timeout=self.timeout_seconds)
+                    selected_model = os.getenv("ANTHROPIC_MODEL") or _ANTHROPIC_DEFAULT_MODEL
+                elif candidate == "openai":
+                    self.client = OpenAI(api_key=self._openai_key, timeout=self.timeout_seconds)
+                    selected_model = os.getenv("OPENAI_MODEL") or "gpt-4o"
+                elif candidate == "google":
+                    self._configure_google_client(self._google_key)
+                    selected_model = os.getenv("GOOGLE_MODEL") or _GOOGLE_DEFAULT_MODEL
+                else:
+                    continue
+            except Exception as exc:
+                logger.warning("Could not initialize fallback LLM provider %s: %s", candidate, exc)
+                continue
+
+            previous = self.provider
+            self.provider = candidate
+            self.model = self._provider_model_override or selected_model
+            self._provider_candidate_index = index
+            self._llm_failovers += 1
+            logger.warning(
+                "LLM provider %s failed; continuing this run with configured fallback %s.",
+                previous,
+                candidate,
+            )
+            return True
+        return False
+
+    def runtime_summary(self) -> Dict[str, Any]:
+        """Return secret-free provider telemetry for reports and debugging."""
+        return {
+            "configured_providers": list(self._provider_candidates),
+            "active_provider": self.provider,
+            "active_model": self.model,
+            "calls": self._llm_calls,
+            "successful_calls": self._llm_successes,
+            "failovers": self._llm_failovers,
+            "last_successful_provider": self._last_successful_provider,
+            "last_successful_model": self._last_successful_model,
+        }
+
+    def _record_llm_success(self, text: str) -> str:
+        if text:
+            self._llm_successes += 1
+            self._last_successful_provider = self.provider
+            self._last_successful_model = self.model
+        return text
 
     @staticmethod
     def _provider_order(provider: str) -> List[str]:
@@ -499,8 +592,10 @@ Recent results:
         if not self.client:
             return ""
 
-        max_attempts = max(_MAX_LLM_RETRIES, len(self._nvidia_keys) or 1)
+        max_attempts = _MAX_LLM_RETRIES * max(1, len(self._provider_candidates)) + len(self._nvidia_keys)
+        retry_count = 0
         for attempt in range(1, max_attempts + 1):
+            self._llm_calls += 1
             try:
                 if self.provider == "anthropic":
                     response = self.client.messages.create(
@@ -508,28 +603,38 @@ Recent results:
                         max_tokens=2000,
                         messages=[{"role": "user", "content": prompt}],
                     )
-                    return self._extract_anthropic_text(response)
+                    return self._record_llm_success(self._extract_anthropic_text(response))
                 if self.provider == "google":
                     response = self.client.models.generate_content(
                         model=self.model,
                         contents=prompt,
                     )
-                    return self._extract_google_text(response)
+                    return self._record_llm_success(self._extract_google_text(response))
                 else:
                     response = self.client.chat.completions.create(
                         model=self.model,
                         messages=[{"role": "user", "content": prompt}],
                     )
-                    return response.choices[0].message.content or ""
+                    return self._record_llm_success(response.choices[0].message.content or "")
             except _RETRYABLE_EXCEPTIONS as exc:
-                if attempt == _MAX_LLM_RETRIES:
+                retry_count += 1
+                if self._advance_provider():
+                    retry_count = 0
+                    continue
+                if retry_count >= _MAX_LLM_RETRIES:
                     logger.error(
                         "LLM call exhausted all %d retries after retryable error: %s",
                         _MAX_LLM_RETRIES,
                         exc,
                     )
                     break
-                wait = _LLM_BACKOFF_BASE * (2 ** (attempt - 1))
+                if self._llm_failovers:
+                    logger.error(
+                        "All configured LLM providers failed during this call; "
+                        "returning to deterministic recovery without retrying the final provider."
+                    )
+                    break
+                wait = _LLM_BACKOFF_BASE * (2 ** (retry_count - 1))
                 logger.warning(
                     "LLM call failed (%s), retrying in %.1fs (attempt %d/%d)",
                     exc, wait, attempt, _MAX_LLM_RETRIES,
@@ -539,10 +644,16 @@ Recent results:
                 if "503" in str(exc) or "429" in str(exc):
                     if self._rotate_nvidia_key():
                         continue
+                    if self._advance_provider():
+                        retry_count = 0
+                        continue
                     logger.error("LLM service temporarily unavailable (503/429). Fast-failing to heuristic mode.")
                     self._disable_llm()
                     return ""
                 if "403" in str(exc) or "401" in str(exc) or "Unauthorized" in str(exc) or "Forbidden" in str(exc):
+                    if self._advance_provider():
+                        retry_count = 0
+                        continue
                     logger.error("LLM authorization failed. Disabling LLM for this run and falling back to heuristic mode.")
                     self._disable_llm()
                     return ""

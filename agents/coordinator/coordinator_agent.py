@@ -621,6 +621,9 @@ class CoordinatorAgent(BaseAgent):
             )
             return final_result
         finally:
+            runtime_summary = getattr(self.reasoner, "runtime_summary", None)
+            if callable(runtime_summary):
+                final_result["llm_summary"] = runtime_summary()
             executor.shutdown(wait=False)
             flush_reporting = getattr(self.reporter, "flush", None)
             if callable(flush_reporting):

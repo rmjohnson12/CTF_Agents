@@ -76,6 +76,12 @@ ANTHROPIC_API_KEY=your_claude_key_here
 OPENAI_API_KEY=your_openai_key_here
 ```
 
+`LLM_PROVIDER` selects the first provider. Other configured providers remain
+available as automatic fallbacks when the preferred service times out or
+returns quota, service, or authorization errors. Run results include a
+secret-free `llm_summary` showing calls, successful calls, failovers, and the
+provider/model that actually answered.
+
 For local Ollama:
 
 ```bash

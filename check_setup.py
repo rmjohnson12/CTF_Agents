@@ -109,6 +109,13 @@ def check():
             print("[+] Selected LLM provider: openai")
         elif google_key or google_project:
             print("[+] Selected LLM provider: google")
+        try:
+            from core.decision_engine.llm_reasoner import LLMReasoner
+            runtime_chain = LLMReasoner().runtime_summary()["configured_providers"]
+            if runtime_chain:
+                print(f"[+] Runtime LLM failover chain: {' -> '.join(runtime_chain)}")
+        except Exception as exc:
+            print(f"[!] Could not initialize the LLM failover chain: {exc}")
     else:
         print("[!] Mode: HEURISTIC (Running without LLM; using pattern matching for routing)")
 
