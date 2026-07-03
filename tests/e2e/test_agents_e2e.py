@@ -54,6 +54,8 @@ needs_rockyou  = pytest.mark.skipif(
         Path(p).exists() for p in [
             str(Path.home() / "Downloads" / "rockyou.txt"),
             str(Path.home() / "Downloads" / "rockyou" / "rockyou.txt"),
+            str(Path.home() / "WordLists" / "rockyou.txt"),
+            str(Path.home() / "wordlists" / "rockyou.txt"),
             "/usr/share/wordlists/rockyou.txt",
             "/usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt",
         ]

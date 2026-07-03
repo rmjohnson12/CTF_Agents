@@ -103,3 +103,7 @@ def test_secure_coding_agent_solves_pin_enumeration_runner():
     assert http_tool.submission["language"] == "python"
     assert "current[-1] == digit" in http_tool.submission["code"]
     assert result["artifacts"]["coding_runner"] == "pin_enumeration"
+    assert result["artifacts"]["techniques"] == [
+        "partial_pin_constraint_enumeration",
+        "remote_code_runner_submission",
+    ]

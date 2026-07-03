@@ -77,6 +77,27 @@ def test_solve_trace_store_ignores_unsolved_attempts(tmp_path):
     assert store.get_recent_solves() == []
 
 
+def test_solve_trace_store_does_not_persist_unwrapped_password_prefix(tmp_path):
+    store = SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
+    password = "emilybffl"
+
+    store.record_solve(
+        {"id": "password_crack", "category": "crypto"},
+        {
+            "challenge_id": "password_crack",
+            "agent_id": "crypto_agent",
+            "status": "solved",
+            "flag": password,
+            "history": [],
+        },
+    )
+
+    row = store.get_recent_solves()[0]
+    assert row["flag_prefix"] is None
+    assert row["flag_sha256"] == hashlib.sha256(password.encode()).hexdigest()
+    assert password not in row.values()
+
+
 def test_solve_trace_store_returns_successful_patterns(tmp_path):
     store = SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
     store.record_solve(

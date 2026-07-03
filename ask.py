@@ -456,6 +456,12 @@ def _heuristic_challenge_from_instruction(
             )
         )
     )
+    has_pin_enumeration_runner_terms = (
+        bool(url)
+        and "pin" in lowered_input
+        and any(term in lowered_input for term in ("partial digit", "partial digits", "unknown digit"))
+        and "brute force" in lowered_input
+    )
     declared_category = _declared_category_from_instruction(user_input)
 
     if declared_category:
@@ -483,6 +489,10 @@ def _heuristic_challenge_from_instruction(
         # Keep this ahead of the generic host/URL rule so a raw TCP reversing
         # service is not mistaken for a web application.
         category = "reverse"
+    elif has_pin_enumeration_runner_terms:
+        # A live partial-PIN programming runner is a secure-coding task, not
+        # authentication-log analysis merely because its prose says brute force.
+        category = "secure_coding"
     elif has_live_ssh_forensics_term:
         # A credentialed live host with loader/filesystem manipulation is a
         # forensic investigation, not static authentication-log analysis.

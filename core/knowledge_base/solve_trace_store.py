@@ -378,11 +378,13 @@ class SolveTraceStore:
         return sorted(indicators)
 
     @staticmethod
-    def _flag_prefix(flag: str) -> str:
+    def _flag_prefix(flag: str) -> Optional[str]:
         match = _FLAG_PREFIX_RE.match(flag)
         if match:
             return match.group(1)
-        return flag[: min(len(flag), 12)]
+        # Unwrapped answers are frequently passwords. Storing even a short
+        # plaintext prefix can disclose the complete answer.
+        return None
 
     @staticmethod
     def _row_to_dict(row: Any) -> Dict[str, Any]:

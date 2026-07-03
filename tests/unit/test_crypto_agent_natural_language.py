@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from agents.specialists.cryptography.crypto_agent import CryptographyAgent
 from core.utils.security import SecurityPolicyError
@@ -40,6 +41,38 @@ def test_crypto_agent_extracts_hex_from_natural_language_prompt():
     assert result["status"] == "solved"
     assert result["flag"] == "CTF{hex_routing_ok}"
     assert "Extracted ciphertext: 4354467b6865785f726f7574696e675f6f6b7d" in result["steps"]
+
+
+def test_crypto_agent_treats_password_wordlist_digest_as_md5(monkeypatch, tmp_path):
+    wordlist = tmp_path / "rockyou.txt"
+    wordlist.write_text("password\nemilybffl\n")
+
+    class FakeHashcat:
+        def run(self, hash_str, wordlist=None, mode=0):
+            assert hash_str == "68a96446a5afb4ab69a2d15091771e39"
+            assert wordlist == str(wordlist_path)
+            assert mode == 0
+            return SimpleNamespace(cracked_password="emilybffl")
+
+    wordlist_path = wordlist
+    monkeypatch.setattr(
+        "agents.specialists.cryptography.crypto_agent.DEFAULT_ROCKYOU_PATHS",
+        [str(wordlist)],
+    )
+    result = CryptographyAgent(hashcat_tool=FakeHashcat()).solve_challenge({
+        "id": "ncl_md5",
+        "category": "crypto",
+        "description": (
+            "Decrypt this password 68a96446a5afb4ab69a2d15091771e39 "
+            "using rockyou.txt found in the ~/WordLists directory"
+        ),
+        "files": [],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "emilybffl"
+    assert "hash" in result["steps"][1]
+    assert result["artifacts"]["techniques"] == ["dictionary_hash_cracking", "hashcat"]
 
 
 def test_crypto_agent_solves_source_backed_repeating_xor_despite_uuid_path(tmp_path):

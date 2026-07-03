@@ -103,7 +103,18 @@ class CryptographyAgent(BaseAgent):
         ):
             cipher_types.append("caesar_cipher")
         
-        if cipher_text.startswith("$") or any(k in description for k in ["hash", "md5", "sha"]):
+        digest_like = (
+            len(cipher_text) in {32, 40, 64, 128}
+            and all(char in "0123456789abcdefABCDEF" for char in cipher_text)
+        )
+        wordlist_crack_request = digest_like and any(
+            term in description for term in ("password", "rockyou", "wordlist", "crack")
+        )
+        if (
+            cipher_text.startswith("$")
+            or any(k in description for k in ["hash", "md5", "sha"])
+            or wordlist_crack_request
+        ):
             cipher_types.append("hash")
         
         # Only check for hex/base64 if it's not a clear hash (starting with $)
@@ -336,10 +347,6 @@ class CryptographyAgent(BaseAgent):
             raw = self._try_hex(cipher_text)
             if raw:
                 plaintext = raw.decode("utf-8", errors="ignore")
-                # hex_raw only makes sense when we're NOT dealing with a hash —
-                # returning the hash itself as the flag is never correct
-                if len(cipher_text) == 32 and "hash" not in analysis["detected_types"]:
-                    best_result = self._pick_better(best_result, ("hex_raw", cipher_text, 1.0, "Raw Hex"))
                 best_result = self._pick_better(best_result, ("hex", plaintext, self._score_english(plaintext), "Hex"))
 
         if "decimal" in analysis["detected_types"]:
@@ -395,19 +402,25 @@ class CryptographyAgent(BaseAgent):
             if found:
                 steps.append(f"SUCCESS: Found flag pattern via {method}")
                 flag = found
-            # If the score is decent or it looks like a specific hash answer (32 chars hex)
-            elif score > 10.0 or (method == "hex_raw" and len(plaintext) == 32):
-                steps.append(f"SUCCESS: Decoded via {method} (score {score:.2f})")
+            # Non-flag answers such as cracked passwords still require strong evidence.
+            elif score > 10.0:
+                action = "Cracked password" if method in {"hashcat", "john"} else "Decoded"
+                steps.append(f"SUCCESS: {action} via {method} (score {score:.2f})")
                 flag = plaintext
             else:
                 steps.append(f"Rejected candidate from {method} (score {score:.2f})")
         
+        artifacts = {}
+        if flag and best_result and best_result[0] in {"hashcat", "john"}:
+            artifacts["techniques"] = ["dictionary_hash_cracking", best_result[0]]
+
         return {
             "challenge_id": challenge.get("id"),
             "agent_id": self.agent_id,
             "status": "solved" if flag else "attempted",
             "flag": flag,
-            "steps": steps
+            "steps": steps,
+            "artifacts": artifacts,
         }
 
     def _extract_ciphertext(self, challenge: Dict[str, Any]) -> str:

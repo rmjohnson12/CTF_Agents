@@ -68,7 +68,14 @@ class SecureCodingAgent(BaseAgent):
         if coding_flag:
             return self._result(
                 challenge, "solved", coding_flag, steps,
-                {"coding_runner": "pin_enumeration", "patch_applied": False},
+                {
+                    "coding_runner": "pin_enumeration",
+                    "patch_applied": False,
+                    "techniques": [
+                        "partial_pin_constraint_enumeration",
+                        "remote_code_runner_submission",
+                    ],
+                },
             )
 
         flag, verify_body = self._verify(target_url, steps)

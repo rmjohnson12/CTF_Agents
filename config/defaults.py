@@ -10,6 +10,8 @@ DEFAULT_ROCKYOU_PATHS: List[str] = [
     "/usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt",
     str(Path.home() / "Downloads" / "rockyou.txt"),
     str(Path.home() / "Downloads" / "rockyou" / "rockyou.txt"),
+    str(Path.home() / "WordLists" / "rockyou.txt"),
+    str(Path.home() / "wordlists" / "rockyou.txt"),
 ]
 
 # Web exploitation
