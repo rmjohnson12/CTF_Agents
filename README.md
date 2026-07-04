@@ -116,6 +116,16 @@ verification endpoint returns a flag. Current generic remediations include
 unsafe recursive merges vulnerable to prototype pollution and delimiter
 injection in flat-file user records.
 
+API-driven web challenges are solved by discovering endpoints from the page and
+its JavaScript, enumerating any option/command lists, and submitting candidate
+values (secret/hidden options first) to action endpoints until a flag is
+returned — no specific command or endpoint is hard-coded. Blockchain challenges
+are solved from their published contract source: the agent identifies the win
+condition, compiles and deploys a bespoke attacker contract when the exploit
+requires a contract caller (e.g. a `tx.origin` gate), executes the on-chain
+sequence with signed web3 transactions, and verifies `isSolved()` before
+retrieving the flag.
+
 ## Repository Layout
 
 ```text

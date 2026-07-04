@@ -148,7 +148,9 @@ until they succeed at runtime. `config.py` annotates each endpoint's confidence:
   `/challenge/start` no longer exists and returns 404). Spawning is asynchronous:
   the IP:PORT appears in the challenge's `play_info` a few seconds after start,
   which the client polls for.
-- **Medium:** challenge list/info/download/categories/own.
+- **High (verified live):** flag submission `POST /challenge/own` with body
+  `{challenge_id, flag, difficulty}` — confirmed by a successful owned submission.
+- **Medium:** challenge list/info/download/categories.
 - **Low (verify before trusting):** email/password `login` + 2FA.
 
 If an endpoint has changed, the client raises a clear `HTBEndpointError` ("the

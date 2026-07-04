@@ -15,6 +15,23 @@ from typing import Dict, List, Optional, Tuple
 _DB_PATH = "logs/performance.db"
 
 
+def _wilson_lower_bound(wins: int, total: int, z: float = 1.96) -> float:
+    """Lower bound of the Wilson score interval for a binomial success rate.
+
+    Rewards both a high solve rate and a large sample, so a 500/538 agent
+    outranks a 2/2 one instead of losing on raw rate alone.
+    """
+    if total <= 0:
+        return 0.0
+    import math
+
+    phat = wins / total
+    denom = 1 + z * z / total
+    center = phat + z * z / (2 * total)
+    margin = z * math.sqrt((phat * (1 - phat) + z * z / (4 * total)) / total)
+    return (center - margin) / denom
+
+
 class PerformanceTracker:
     """
     Tracks agent success rates across challenge categories.
@@ -109,12 +126,19 @@ class PerformanceTracker:
 
     def get_best_agent_for(self, category: str, min_runs: int = 2) -> Optional[str]:
         """
-        Return the agent_id with the highest solve rate for *category*.
+        Return the specialist agent with the best solve record for *category*.
 
-        Agents with fewer than *min_runs* total attempts are excluded to
-        avoid recommending an agent based on a single lucky solve.
+        Only true specialist agents (ids ending in ``_agent``) are eligible to be
+        recommended as a *primary* route. This deliberately excludes narrow tool
+        routes such as ``tony_htb_sql`` or ``browser_snapshot`` — which post very
+        high category solve rates only because they are run exclusively on the
+        challenges they suit (selection bias) — and also filters mock/test agents
+        (``agent_1``…) that can leak into a shared DB. Ranking uses the Wilson
+        lower bound so a proven high-volume agent is not beaten by an agent with
+        one or two lucky solves.
 
-        Returns None when no agent meets the threshold.
+        Agents with fewer than *min_runs* attempts are excluded. Returns None
+        when no eligible agent meets the threshold.
         """
         query = """
             SELECT
@@ -125,13 +149,19 @@ class PerformanceTracker:
             WHERE category = ?
             GROUP BY agent_id
             HAVING total >= ?
-            ORDER BY CAST(wins AS REAL) / total DESC
-            LIMIT 1
         """
         with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(query, (category, min_runs)).fetchone()
+            rows = conn.execute(query, (category, min_runs)).fetchall()
 
-        return row[0] if row else None
+        best_agent: Optional[str] = None
+        best_score = -1.0
+        for agent_id, wins, total in rows:
+            if not str(agent_id).endswith("_agent"):
+                continue
+            score = _wilson_lower_bound(int(wins), int(total))
+            if score > best_score:
+                best_agent, best_score = agent_id, score
+        return best_agent
 
     def get_stats(
         self,

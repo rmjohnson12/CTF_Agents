@@ -93,7 +93,8 @@ def _default_endpoints() -> Dict[str, Endpoint]:
         "challenge_start": Endpoint("/container/start", "POST", "high", "Spawn container; body {containerable_id}."),
         "challenge_stop": Endpoint("/container/stop", "POST", "high", "Stop container; body {containerable_id}."),
         # Flag submission ("own"). Never called without explicit --submit.
-        "challenge_own": Endpoint("/challenge/own", "POST", "medium", "Submit flag; body {challenge_id, flag, difficulty}."),
+        # Verified live: a successful submission returns "Congratulations!".
+        "challenge_own": Endpoint("/challenge/own", "POST", "high", "Submit flag; body {challenge_id, flag, difficulty}."),
     }
 
 

@@ -322,6 +322,8 @@ class SolveTraceStore:
     @staticmethod
     def _techniques(history: List[Dict[str, Any]], result: Dict[str, Any]) -> List[str]:
         techniques = set()
+        # Category-agnostic noise that carries no learning value as a technique.
+        noise = {"general_web", "unknown", "none", "", "misc"}
 
         def visit(value: Any, parent_key: str = "") -> None:
             if isinstance(value, dict):
@@ -331,10 +333,20 @@ class SolveTraceStore:
                 for item in value:
                     visit(item, parent_key)
             elif parent_key in {"technique", "techniques"} and value:
-                techniques.add(str(value))
+                if str(value).lower() not in noise:
+                    techniques.add(str(value))
 
         for entry in [*history, result]:
+            # 1) technique/techniques keys nested anywhere in the artifacts tree.
             visit(entry.get("artifacts") or {})
+            # 2) explicit technique / vulnerability-class lists at the entry level,
+            #    so every specialist that reports what it used feeds the learner.
+            for key in ("techniques", "vulnerabilities_found", "detected_vulnerabilities", "vulnerabilities"):
+                value = entry.get(key)
+                if isinstance(value, (list, tuple, set)):
+                    for item in value:
+                        if item and str(item).lower() not in noise:
+                            techniques.add(str(item))
         return sorted(techniques)
 
     @staticmethod

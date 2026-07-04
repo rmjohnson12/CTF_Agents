@@ -66,3 +66,4 @@ pypdf>=5.0.0  # Text extraction from generated PDF challenge artifacts
 # tensorflow>=2.15.0
 # torch>=2.1.0
 scapy
+py-solc-x>=2.0  # compile/deploy attacker contracts for blockchain challenges

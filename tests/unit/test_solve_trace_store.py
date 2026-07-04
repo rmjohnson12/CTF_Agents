@@ -244,3 +244,45 @@ def test_solve_trace_store_does_not_match_on_category_only(tmp_path):
         "category": "misc",
         "description": "unrelated puzzle",
     }) == []
+
+
+def test_records_result_level_techniques_and_vulns(tmp_path):
+    store = SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
+    store.record_solve(
+        {"id": "flagcmd", "category": "web", "url": "http://t:1"},
+        {
+            "challenge_id": "flagcmd",
+            "status": "solved",
+            "flag": "HTB{x}",
+            "history": [{
+                "agent_id": "web_agent",
+                "status": "solved",
+                "flag": "HTB{x}",
+                "vulnerabilities_found": ["api_option_enumeration", "general_web"],
+                "artifacts": {"api_command_enumeration": {"techniques": ["hidden_command_submission"]}},
+            }],
+        },
+    )
+    row = store.get_recent_solves()[0]
+    techniques = row["techniques"]
+    # From artifacts (nested) and from the result-level vulnerabilities list.
+    assert "hidden_command_submission" in techniques
+    assert "api_option_enumeration" in techniques
+    # Noise vuln classes are filtered.
+    assert "general_web" not in techniques
+
+
+def test_find_by_techniques_matches_recorded_technique(tmp_path):
+    store = SolveTraceStore(db_path=str(tmp_path / "solve_traces.db"))
+    store.record_solve(
+        {"id": "dd", "category": "blockchain"},
+        {
+            "challenge_id": "dd", "status": "solved", "flag": "HTB{y}",
+            "history": [{
+                "agent_id": "blockchain_agent", "status": "solved", "flag": "HTB{y}",
+                "artifacts": {"contract_drain": {"techniques": ["attacker_contract_deploy"]}},
+            }],
+        },
+    )
+    matches = store.find_by_techniques(["attacker_contract_deploy"], category="blockchain")
+    assert matches and matches[0]["successful_target"] == "blockchain_agent"

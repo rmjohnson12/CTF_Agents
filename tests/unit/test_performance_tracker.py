@@ -94,14 +94,25 @@ def test_duration_recorded(tracker):
 
 
 def test_multiple_agents_best_selected(tracker):
-    # Agent A: 2/3 solve rate
-    tracker.record_outcome("agent_a", "misc", "m1", "solved")
-    tracker.record_outcome("agent_a", "misc", "m2", "solved")
-    tracker.record_outcome("agent_a", "misc", "m3", "failed")
-    # Agent B: 1/3 solve rate
-    tracker.record_outcome("agent_b", "misc", "m4", "solved")
-    tracker.record_outcome("agent_b", "misc", "m5", "failed")
-    tracker.record_outcome("agent_b", "misc", "m6", "failed")
+    # alpha_agent: 2/3 solve rate
+    tracker.record_outcome("alpha_agent", "misc", "m1", "solved")
+    tracker.record_outcome("alpha_agent", "misc", "m2", "solved")
+    tracker.record_outcome("alpha_agent", "misc", "m3", "failed")
+    # beta_agent: 1/3 solve rate
+    tracker.record_outcome("beta_agent", "misc", "m4", "solved")
+    tracker.record_outcome("beta_agent", "misc", "m5", "failed")
+    tracker.record_outcome("beta_agent", "misc", "m6", "failed")
 
     best = tracker.get_best_agent_for("misc", min_runs=2)
-    assert best == "agent_a"
+    assert best == "alpha_agent"
+
+
+def test_non_specialist_routes_excluded_from_primary_hint(tracker):
+    # A narrow tool route with a perfect record must NOT be recommended as the
+    # primary route (it only ran on the challenges it suits -- selection bias).
+    for i in range(20):
+        tracker.record_outcome("tony_htb_sql", "web", f"s{i}", "solved")
+    tracker.record_outcome("web_agent", "web", "w1", "solved")
+    tracker.record_outcome("web_agent", "web", "w2", "failed")
+
+    assert tracker.get_best_agent_for("web") == "web_agent"
