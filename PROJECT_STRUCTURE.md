@@ -9,18 +9,23 @@ artifacts or optional tools installed on a developer machine.
 ```text
 CTF_Agents/
 ├── agents/                 Agent implementations and specialist solvers
-├── core/                   Coordination, routing, state, and shared models
+├── core/                   Coordination, routing, state, campaign, and reporting
 ├── tools/                  Python wrappers around external CTF/security tools
+├── integrations/           Third-party platform integrations (Hack The Box)
 ├── challenges/             Example, active, benchmark, and evaluation inputs
 ├── config/                 YAML defaults and environment templates
-├── docs/                   Architecture, getting-started, and demo docs
-├── logs/                   Runtime log/checkpoint location; only README tracked
+├── docs/                   Architecture, guides, security, and integration docs
+├── logs/                   Runtime log/checkpoint/DB location; only README tracked
+├── reports/                Runtime report output (HTB runs); git-ignored
+├── runs/                   Runtime per-challenge working dirs (HTB); git-ignored
 ├── results/                Runtime result location; only README tracked
 ├── shared/                 Small shared helper resources
 ├── tests/                  Unit, integration, e2e, and benchmark tests
 ├── ask.py                  Natural-language CLI entrypoint
 ├── main.py                 JSON challenge runner entrypoint
+├── campaign.py             Bounded local campaign runner
 ├── check_setup.py          Local environment and tool diagnostic
+├── reporting_server.py     Standalone live-reporting HTTP service launcher
 ├── simulate.py             Original iterative workflow simulator
 ├── simulate_v2.py          Expanded simulator scenarios
 ├── requirements.txt        Python dependency list
@@ -32,6 +37,7 @@ CTF_Agents/
 ```text
 agents/
 ├── base_agent.py
+├── registry.py             Decorator-based specialist registry
 ├── coordinator/
 │   └── coordinator_agent.py
 ├── specialists/
@@ -46,6 +52,7 @@ agents/
 │   ├── osint/
 │   ├── pwn/
 │   ├── reverse_engineering/
+│   ├── secure_coding/
 │   └── web_exploitation/
 └── support/
     ├── docker_agent.py
@@ -56,37 +63,43 @@ The coordinator owns the iterative solve loop, specialist selection, history,
 checkpointing, and LLM-assisted recovery when normal routing stalls. Specialist
 agents handle domain work such as web exploitation, cryptography, reversing,
 forensics, hardware logic, log analysis, pwn, networking, OSINT, blockchain,
-and generated coding/math tasks. Support agents cover local Docker challenge
-launch and reconnaissance.
+secure coding, and generated coding/math tasks. Support agents cover local
+Docker challenge launch and reconnaissance.
 
 ## Core System
 
 ```text
 core/
 ├── challenge.py
-├── communication/
-│   ├── message.py
-│   └── message_broker.py
+├── runtime_synthesis.py    Evidence-gated ephemeral runtime tool synthesis
+├── campaign/               Bounded multi-challenge campaign runner + stores
+├── communication/          Message + broker primitives
 ├── decision_engine/
 │   ├── classifier.py
 │   ├── llm_reasoner.py
 │   ├── performance_tracker.py
 │   └── strategy_selector.py
 ├── knowledge_base/
-│   └── knowledge_store.py
+│   ├── knowledge_store.py
+│   └── solve_trace_store.py
+├── reporting/              Live solve-reporting client, store, server, redaction
 ├── task_manager/
 │   ├── task.py
 │   └── task_queue.py
 └── utils/
+    ├── firmware_signatures.py   Content-based artifact routing (e.g. ESP32)
     ├── flag_utils.py
+    ├── llm_health.py
     ├── result_manager.py
+    ├── security.py              Network allowlist / redaction / safe paths
     ├── session_manager.py
     └── system_checks.py
 ```
 
 The decision engine combines deterministic routing with optional LLM-backed
-analysis and recovery. Runtime knowledge and performance databases are local
-state and should stay out of version control.
+analysis and recovery. The performance, knowledge, and solve-trace SQLite
+databases are local state (default under `logs/`, overridable via
+`CTF_AGENTS_*_DB`) and stay out of version control.
 
 ## Tool Wrappers
 
@@ -94,38 +107,41 @@ state and should stay out of version control.
 tools/
 ├── base_tool.py
 ├── common/
+│   ├── docker_sandbox.py   Isolated container execution for generated solvers
 │   ├── elf_utils.py
-│   ├── python_tool.py
+│   ├── embedding_analogy.py
+│   ├── python_tool.py      Backend-selected (docker sandbox / host) executor
 │   ├── result.py
 │   ├── runner.py
 │   └── strings.py
-├── crypto/
-│   ├── hashcat.py
-│   └── john.py
-├── forensics/
-│   ├── binwalk.py
-│   ├── exiftool.py
-│   └── qpdf.py
-├── network/
-│   ├── nmap.py
-│   ├── scapy_tool.py
-│   └── tshark.py
-├── pwn/
-│   ├── angr_tool.py
-│   ├── headless_ghidra_tool.py
-│   └── pwntools_wrapper.py
-└── web/
-    ├── browser_snapshot_tool.py
-    ├── dirsearch.py
-    ├── docker_challenge.py
-    ├── http_fetch.py
-    ├── react2shell.py
-    └── sqlmap.py
+├── crypto/                 hashcat, john
+├── forensics/              binwalk, exiftool, qpdf
+├── network/               nmap, scapy_tool, tshark
+├── pwn/                   angr_tool, headless_ghidra_tool, pwntools_wrapper
+└── web/                   browser_snapshot_tool, dirsearch, docker_challenge,
+                          http_fetch, react2shell, sqlmap
 ```
 
-The repository does not contain `tools/reversing/` or `tools/binary/`; reversing
-and pwn helpers currently live under `tools/pwn/`, `tools/common/`, and the
-specialist agents.
+Reversing and pwn helpers live under `tools/pwn/`, `tools/common/`, and the
+specialist agents; there is no `tools/reversing/` or `tools/binary/` tree.
+
+## Integrations
+
+```text
+integrations/
+└── hackthebox/            Hack The Box challenge automation (single account)
+    ├── auth.py            Token / cached-session / login handling
+    ├── client.py          Defensive v4 API client
+    ├── config.py          Endpoint table with confidence notes + env overrides
+    ├── models.py          Typed challenge / spawn / attempt / report models
+    ├── archive.py         Zip-slip-safe artifact extraction
+    ├── challenge_runner.py Discover -> spawn -> download -> solve -> report
+    ├── reporting.py       Markdown + JSON run reports
+    ├── browser.py         Optional Playwright UI fallback (opt-in)
+    └── cli.py             `python -m integrations.hackthebox.cli`
+```
+
+See [docs/hackthebox_integration.md](docs/hackthebox_integration.md).
 
 ## Challenges
 
@@ -138,8 +154,8 @@ challenges/
 └── challenge_parser.py
 ```
 
-There is no tracked `challenges/completed/` directory. Completed challenge
-outputs are written under runtime result/checkpoint locations.
+Completed challenge outputs are written under runtime result/checkpoint
+locations, not a tracked `challenges/completed/` directory.
 
 ## Configuration
 
@@ -152,88 +168,82 @@ config/
 └── tools_config.yaml
 ```
 
-The active local `.env` is loaded from the project root by the reasoner. The
-root `.env.example` is the primary template for local provider keys. NVIDIA
-fallback keys are configured with `NVAPI_KEYS`, while `NVAPI_KEY` and
-`NGC_API_KEY` remain supported.
-
-Tool paths in `config/tools_config.yaml` describe preferred local/system assets.
-Large dictionaries such as `rockyou.txt` are not bundled in this repository.
-
-## Shared Resources
-
-```text
-shared/
-└── scripts/
-    └── DumpAnalysis.java
-```
-
-The repository currently tracks a small shared Ghidra helper script. It does not
-bundle shared payload, exploit, model, or wordlist trees.
+The active local `.env` (and an optional git-ignored `.htb.env` for Hack The Box
+credentials) is loaded from the project root. The root `.env.example` is the
+primary template for local provider keys. NVIDIA fallback keys are configured
+with `NVAPI_KEYS`; `NVAPI_KEY` and `NGC_API_KEY` remain supported. Large
+dictionaries such as `rockyou.txt` are not bundled.
 
 ## Documentation
 
 ```text
 docs/
 ├── README.md
-├── architecture/
-│   └── system_overview.md
-├── guides/
-│   └── getting_started.md
+├── getting_started.md          Setup and first-run guide
+├── guides/getting_started.md   Guided walkthrough (see note below)
+├── architecture.md
+├── architecture/system_overview.md
+├── capabilities.md
+├── security_model.md
+├── hackthebox_integration.md
+├── runtime_tool_synthesis.md
+├── live_reporting.md
+├── operators_guide.md
+├── development.md · testing.md · contributing.md · release_process.md
+├── adding_agent.md · adding_tool.md · adding_playbook.md
 └── interview_demo.md
 ```
-
-There are no tracked `docs/agents/` or `docs/api/` directories at this time.
 
 ## Tests
 
 ```text
 tests/
 ├── benchmarks/
-├── e2e/
+├── e2e/                    Includes fixtures/ (reverse_me.py, verify_me.py, …)
 ├── integration/
-├── unit/
+├── unit/                   Includes unit/hackthebox/ for the HTB integration
 ├── conftest.py
 └── README.md
 ```
 
-The test suite is pytest-based. `tests/conftest.py` disables live LLM keys by
-default so normal test runs stay deterministic even on a developer machine with
-provider credentials configured.
+The test suite is pytest-based. `tests/conftest.py` disables live LLM keys and
+isolates the knowledge/performance/solve-trace databases per test, so runs stay
+deterministic even on a developer machine with credentials configured.
 
 Useful validation commands:
 
 ```bash
 python3 -m pytest -q
-python3 -m pytest -q -p no:cacheprovider tests/unit/
+python3 -m pytest -q tests/unit/
 python3 check_setup.py
 python3 ask.py --help
 ```
 
 ## Runtime State
 
-The following locations are expected to accumulate local generated state:
+The following locations accumulate local generated state and are git-ignored:
 
 ```text
 logs/checkpoints/
 logs/*.db
+reports/
+runs/
 results/
 .scratch/
+.htb.env · .htb_session.json
 __pycache__/
 .pytest_cache/
 ```
-
-These artifacts are not part of the source structure and should generally stay
-ignored unless a test fixture is intentionally added.
 
 ## Current Scale
 
 At the time this document was refreshed, the tracked tree contained:
 
-- 187 tracked files
-- 131 Python files
-- 24 Markdown documentation files
+- 282 tracked files
+- 193 Python files
+- 40 Markdown documentation files
 - 4 YAML configuration or workflow files
 
-Use `git ls-tree -r --name-only HEAD` when refreshing this document so it stays
-aligned with the committed repository rather than local scratch files.
+Use `git ls-files` when refreshing this document so it stays aligned with the
+committed repository rather than local scratch files.
+```

@@ -20,6 +20,8 @@ tests.
 - ARM-architecture wordplay detection and bounded A32 emulation for remote register protocols
 - Hash cracking, packet analysis, metadata extraction, Docker, SSH, and Web3
 - Explicit network and host-execution policy checks
+- Isolated container execution backend for model-generated solver scripts
+  (no network, read-only mounts, resource/time limits) via `CTF_AGENTS_SANDBOX=docker`
 - Ephemeral HTTP/read/regex/decode/JSON tools synthesized without host code execution
 
 ## Artifact processing
@@ -33,15 +35,20 @@ tests.
 ## Exploit and solution generation
 
 - Web authentication, source-guided API, upload, session, and dependency paths
+- General API option/command enumeration (discover endpoints from client JS,
+  enumerate option lists, submit secret/hidden options for a flag)
 - Evidence-gated URL-to-PDF chains spanning duplicate-parameter parser mismatches,
   formatted-history disclosure, and JWT authorization
 - Reverse-engineering strategies for local artifacts and authorized remote machine-code streams
 - Cryptographic decoding and constraint recovery, including source-backed
-  repeating-XOR known-prefix recovery
+  repeating-XOR known-prefix recovery and small-subgroup Diffie-Hellman oracle
+  discrete-log recovery
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
 - Smart-contract interaction and authorized remote challenge workflows
 - Interface-gated EVM lifecycle transactions with on-chain `isSolved()` verification
+- Source-driven attacker-contract compilation and deployment for exploits that
+  require a contract caller (e.g. `tx.origin` access-control gates)
 - Credentialed live-SSH loader/rootkit triage with explicitly gated host trust
   and backup/restore `/etc/ld.so.preload` bypass
 

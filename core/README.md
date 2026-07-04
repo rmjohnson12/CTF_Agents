@@ -1,47 +1,45 @@
 # Core System Components
 
-This directory contains the core infrastructure components that enable the multi-agent system to function.
+Core infrastructure that coordinates agents, routes challenges, persists state,
+and reports results.
 
 ## Components
 
-### Communication
-Handles inter-agent communication and message routing:
-- Message broker/queue system
-- Event bus for system-wide events
-- Protocol definitions for agent messages
-- Communication interfaces and APIs
+### decision_engine/
+Challenge classification and routing: `classifier.py`, `strategy_selector.py`,
+`llm_reasoner.py` (LLM-backed analysis/planning with provider failover), and
+`performance_tracker.py` (per-agent/category solve-rate routing hints).
 
-### Task Manager
-Manages challenge tasks and agent assignments:
-- Task queue and prioritization
-- Task assignment to agents
-- Progress tracking
-- Dependency management
-- Resource allocation
+### knowledge_base/
+SQLite-backed state: `knowledge_store.py` (per-challenge facts) and
+`solve_trace_store.py` (compact successful-solve traces and technique
+fingerprints, no raw flags).
 
-### Knowledge Base
-Centralized storage for shared knowledge:
-- Challenge information and metadata
-- Discovered vulnerabilities
-- Exploit techniques and patterns
-- Historical performance data
-- Agent expertise profiles
-- CTF-specific knowledge graphs
+### task_manager/
+`task.py` and `task_queue.py` — priority task queue for the coordinator loop.
 
-### Decision Engine
-Strategic decision-making system:
-- Challenge classification and routing
-- Strategy selection and planning
-- Risk assessment
-- Success probability estimation
-- Agent performance evaluation
-- Dynamic replanning based on results
+### communication/
+`message.py` and `message_broker.py` — in-process message passing.
 
-## Integration
+### campaign/
+Bounded multi-challenge campaign runner and attempt stores (`runner.py`,
+`attempt_store.py`, `providers.py`).
 
-These components work together to:
-1. Receive and analyze CTF challenges
-2. Coordinate agent activities
-3. Share information across the system
-4. Make intelligent decisions about approach strategies
-5. Learn from past attempts
+### reporting/
+Optional live solve reporting: `client.py`, `server.py`, `store.py`, `models.py`,
+`redaction.py`.
+
+### runtime_synthesis.py
+Evidence-gated composition of small ephemeral declarative tools (no host code
+execution). See [../docs/runtime_tool_synthesis.md](../docs/runtime_tool_synthesis.md).
+
+### utils/
+Shared helpers: `security.py` (network allowlist / redaction / safe paths),
+`flag_utils.py`, `firmware_signatures.py` (content-based routing), `llm_health.py`,
+`result_manager.py`, `session_manager.py`, `system_checks.py`.
+
+## Runtime state
+
+The knowledge, performance, and solve-trace databases default to `logs/` and are
+local, git-ignored state (overridable via `CTF_AGENTS_*_DB`). They must stay out
+of version control.

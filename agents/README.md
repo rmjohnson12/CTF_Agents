@@ -1,49 +1,38 @@
 # Agents Directory
 
-This directory contains all agent implementations for the hierarchical multi-agent CTF system.
+Agent implementations for the hierarchical multi-agent CTF system. Specialists
+are registered via `agents/registry.py` and selected by the coordinator.
 
-## Structure
+## Coordinator
 
-### Coordinator
-The coordinator agent acts as the central decision-maker and orchestrator for the entire system. It:
-- Analyzes incoming CTF challenges
-- Assigns tasks to specialist agents
-- Monitors progress and coordinates inter-agent communication
-- Aggregates results and makes strategic decisions
-- Manages resource allocation
+`coordinator/coordinator_agent.py` orchestrates a solve: it analyzes the
+challenge, routes to a specialist, runs the iterative solve loop with history and
+checkpointing, and performs LLM-assisted recovery when routing stalls.
 
-### Specialists
-Specialized agents focused on specific CTF challenge categories:
+## Specialists
 
-- **web_exploitation**: Web security vulnerabilities (XSS, SQLI, CSRF, etc.)
-- **cryptography**: Encryption, hashing, encoding challenges
-- **reverse_engineering**: Binary analysis and code reverse engineering
-- **forensics**: Memory dumps, disk images, network captures
-- **binary_exploitation**: Buffer overflows, ROP chains, shellcode
-- **osint**: Open-source intelligence gathering
-- **pwn**: Exploitation challenges and exploit development
-- **misc**: Miscellaneous challenges that don't fit other categories
-- **networking**: Network protocols, packet analysis
+Under `specialists/`, one package per category:
 
-### Support
-Support agents that provide auxiliary services:
+- **web_exploitation** — web vulnerabilities, API/JS discovery, auth bypass
+- **cryptography** — encoding/classical ciphers, RSA, DH oracles, hash cracking
+- **reverse_engineering** — binary analysis and constraint recovery
+- **pwn** / **binary_exploitation** — exploitation and exploit development
+- **forensics** — memory/disk/pcap/artifact analysis
+- **hardware_logic** — logic captures, ESP32 firmware, raw-TCP diagnostics
+- **log_analysis** — log triage and event correlation
+- **blockchain** — smart-contract interaction and attacker-contract deployment
+- **secure_coding** — source-patch remediation with verification
+- **networking** — protocol and packet work
+- **osint** — open-source intelligence gathering
+- **misc** — generated coding/math solvers
 
-- **reconnaissance**: Initial information gathering and enumeration
-- **exploit_development**: Creating and testing exploits
-- **vulnerability_scanner**: Automated vulnerability detection
+## Support
 
-## Agent Communication
+`support/` provides auxiliary agents: `docker_agent.py` (local Docker challenge
+launch) and `recon_agent.py` (reconnaissance/enumeration).
 
-Agents communicate through the core communication system using:
-- Message queues for asynchronous communication
-- Shared knowledge base for information exchange
-- Event-driven architecture for real-time updates
+## Agent contract
 
-## Agent Development
-
-Each agent should implement:
-1. Challenge analysis capabilities
-2. Strategy formulation
-3. Tool execution
-4. Result validation
-5. Knowledge sharing
+Each specialist implements challenge analysis, a `solve_challenge()` entry point
+that runs bounded tools/playbooks, flag validation, and result reporting. See
+[docs/adding_agent.md](../docs/adding_agent.md).

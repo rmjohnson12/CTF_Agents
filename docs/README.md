@@ -1,91 +1,42 @@
 # Documentation
 
-Comprehensive documentation for the CTF Multi-Agent System.
+Documentation for the CTF Multi-Agent System. Every file referenced below exists
+in this directory; keep this index in sync when adding or removing docs.
 
-## Structure
+## Getting started
 
-### architecture/
-System architecture documentation:
-- High-level system design
-- Component interactions
-- Data flow diagrams
-- Decision-making processes
-- Scalability considerations
-- Security model
+- [getting_started.md](getting_started.md) — short setup + first-run quickstart
+- [guides/getting_started.md](guides/getting_started.md) — longer install/usage walkthrough
+- [operators_guide.md](operators_guide.md) — running and operating the system
 
-### agents/
-Agent-specific documentation:
-- Individual agent capabilities
-- Agent interaction patterns
-- Agent development guide
-- Agent lifecycle management
-- Performance tuning
+## Architecture & capabilities
 
-### guides/
-User and developer guides:
-- Getting started guide
-- Installation instructions
-- Configuration guide
-- Challenge submission guide
-- Troubleshooting guide
-- Best practices
+- [architecture.md](architecture.md) — component and control-flow overview
+- [architecture/system_overview.md](architecture/system_overview.md) — high-level system design
+- [capabilities.md](capabilities.md) — per-category solver coverage
+- [runtime_tool_synthesis.md](runtime_tool_synthesis.md) — evidence-gated ephemeral tool composition
 
-### api/
-API documentation:
-- REST API endpoints (if applicable)
-- Agent communication protocols
-- Message formats
-- Data schemas
-- Code API references
+## Security & integrations
 
-## Documentation Standards
+- [security_model.md](security_model.md) — network allowlists, sandboxing, redaction, opt-ins
+- [hackthebox_integration.md](hackthebox_integration.md) — Hack The Box challenge automation
+- [live_reporting.md](live_reporting.md) — progress-event schema, REST routes, SSE, deployment
 
-### Format
-- Use Markdown for all documentation
-- Include code examples where applicable
-- Add diagrams for complex concepts
-- Keep documentation up-to-date with code
+## Contributing & process
 
-### Structure
-Each document should include:
-1. Overview/Introduction
-2. Prerequisites
-3. Detailed content
-4. Examples
-5. Related resources
-6. FAQ (if applicable)
+- [development.md](development.md) — local development workflow
+- [testing.md](testing.md) — test layout and how to run the suite
+- [contributing.md](contributing.md) — contribution guidelines
+- [adding_agent.md](adding_agent.md) — add a new specialist agent
+- [adding_tool.md](adding_tool.md) — add a new tool wrapper
+- [adding_playbook.md](adding_playbook.md) — add a solver playbook
+- [release_process.md](release_process.md) — release checklist
+- [interview_demo.md](interview_demo.md) — guided demo script
 
-## Key Documents
+See also [PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md) for the repository map.
 
-### For Users
-- `guides/getting_started.md`: Quick start guide
-- `guides/challenge_submission.md`: How to submit challenges
-- `guides/configuration.md`: System configuration
-- `guides/troubleshooting.md`: Common issues and solutions
+## Documentation standards
 
-### For Developers
-- `architecture/system_overview.md`: System architecture
-- `agents/development_guide.md`: Creating new agents
-- `api/communication_protocol.md`: Inter-agent communication
-- `guides/contributing.md`: Contribution guidelines
-- `live_reporting.md`: Progress-event schema, REST routes, SSE, and deployment
-- `runtime_tool_synthesis.md`: Evidence-gated ephemeral tool composition
-
-### For Researchers
-- `architecture/decision_engine.md`: AI decision-making
-- `architecture/learning_system.md`: Knowledge acquisition
-- `performance_analysis.md`: System performance metrics
-
-## Diagram Tools
-
-Recommended tools for diagrams:
-- Mermaid (for inline diagrams in Markdown)
-- PlantUML (for UML diagrams)
-- Draw.io (for complex diagrams)
-
-## Keeping Documentation Current
-
-- Update docs with code changes
-- Review docs in pull requests
-- Version docs with releases
-- Generate API docs from code comments
+- Markdown for all docs, with runnable code examples where useful.
+- Keep docs in sync with code; review doc changes alongside code in PRs.
+- Every relative link and referenced filename must point at a file that exists.

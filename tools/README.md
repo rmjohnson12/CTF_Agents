@@ -1,79 +1,39 @@
 # Tools Directory
 
-This directory contains specialized tools and utilities used by agents to solve CTF challenges.
+Python wrappers around external CTF/security tools and in-process helpers used by
+the specialist agents. Each wrapper subclasses `tools/base_tool.py` and returns a
+structured `ToolResult`.
 
 ## Categories
 
-### web/
-Tools for web exploitation:
-- Directory bruteforcers
-- SQL injection tools
-- XSS payloads and testers
-- Web scanners and crawlers
-- Session manipulation tools
-- API testing utilities
+### common/
+General-purpose helpers: `python_tool.py` (backend-selected script executor),
+`docker_sandbox.py` (isolated container execution for generated solvers),
+`runner.py` (bounded subprocess runner), `elf_utils.py`, `strings.py`,
+`embedding_analogy.py`, and `result.py`.
 
 ### crypto/
-Cryptography analysis tools:
-- Cipher identification
-- Hash crackers
-- Encoding/decoding utilities
-- RSA attacks
-- Classical cipher breakers
-- Frequency analysis tools
-
-### reversing/
-Reverse engineering tools:
-- Disassemblers and decompilers
-- Debuggers
-- Binary analysis frameworks
-- String extractors
-- Packer/unpacker utilities
+Cryptography tooling: `john.py`, `hashcat.py` (hash cracking).
 
 ### forensics/
-Digital forensics tools:
-- File carvers
-- Memory analysis tools
-- Disk image analyzers
-- Metadata extractors
-- Network traffic analyzers
-- Steganography detectors
-
-### binary/
-Binary exploitation tools:
-- ROP gadget finders
-- Shellcode generators
-- Exploit templates
-- Binary patchers
-- Format string exploiters
+Digital forensics: `binwalk.py`, `exiftool.py`, `qpdf.py`.
 
 ### network/
-Network analysis tools:
-- Packet crafters
-- Protocol analyzers
-- Port scanners
-- Network sniffers
-- Traffic generators
+Network analysis: `nmap.py`, `tshark.py`, `scapy_tool.py`.
 
-### common/
-General-purpose utilities:
-- File type identifiers
-- Data converters
-- Encoding/decoding utilities
-- String manipulators
-- Hash calculators
+### pwn/
+Binary exploitation / reversing helpers: `pwntools_wrapper.py`,
+`angr_tool.py`, `headless_ghidra_tool.py`.
 
-## Tool Integration
+### web/
+Web exploitation: `http_fetch.py`, `browser_snapshot_tool.py`, `dirsearch.py`,
+`sqlmap.py`, `react2shell.py`, `docker_challenge.py`.
 
-Tools can be:
-- Command-line utilities (wrapped in Python)
-- Python libraries
-- API integrations
-- Docker containers
-- Remote services
+There is no `tools/reversing/` or `tools/binary/` directory — reversing and pwn
+helpers live under `tools/pwn/`, `tools/common/`, and the specialist agents.
 
-Each tool should have:
-- Clear input/output specifications
-- Error handling
-- Logging capabilities
-- Configuration options
+## Conventions
+
+Each tool wrapper should have clear input/output types, bounded execution with
+timeouts, error handling that never crashes the caller, and (where it touches the
+network or the host) explicit policy checks via `core/utils/security.py`.

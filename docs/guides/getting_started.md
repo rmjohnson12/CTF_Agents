@@ -3,7 +3,8 @@
 ## Introduction
 
 Welcome to the CTF Multi-Agent System. This guide covers the current install,
-configuration, and challenge-running flow.
+configuration, and challenge-running flow. For a short quickstart see
+[docs/getting_started.md](../getting_started.md); this is the longer walkthrough.
 
 ## Prerequisites
 
@@ -28,8 +29,8 @@ cd CTF_Agents
 It's recommended to use a virtual environment to isolate dependencies:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
 ### 3. Install Dependencies
@@ -166,16 +167,19 @@ Understanding the directory structure will help you navigate the system:
 ```
 CTF_Agents/
 ├── agents/           # Agent implementations
-├── core/            # Core system components
-├── tools/           # Tool wrappers and utilities
-├── config/          # Configuration files
-├── challenges/      # Challenge management
-├── shared/          # Shared resources
-├── logs/            # System logs
-├── results/         # Challenge results
-├── tests/           # Test suite
-└── docs/            # Documentation
+├── core/             # Core system components (routing, campaign, reporting)
+├── tools/            # Tool wrappers and utilities
+├── integrations/     # Third-party platform integrations (Hack The Box)
+├── config/           # Configuration files
+├── challenges/       # Challenge management
+├── shared/           # Shared resources
+├── logs/             # System logs, checkpoints, and local DBs
+├── results/          # Challenge results
+├── tests/            # Test suite
+└── docs/             # Documentation
 ```
+
+See [PROJECT_STRUCTURE.md](../../PROJECT_STRUCTURE.md) for the full source map.
 
 ## Configuration
 
@@ -262,23 +266,34 @@ source venv/bin/activate
 pip install -r requirements.txt --force-reinstall
 ```
 
+## Hack The Box automation (optional)
+
+To automate challenges against your own authorized Hack The Box account:
+
+```bash
+echo 'HTB_TOKEN=your-app-token' > .htb.env          # git-ignored
+python3 -m integrations.hackthebox.cli --name "Flag Command" --dry-run
+```
+
+See [Hack The Box integration](../hackthebox_integration.md) for the full flow
+(dry-run, `--execute`, and opt-in `--submit`).
+
 ## Next Steps
 
 - Read the [Architecture Overview](../architecture/system_overview.md)
-- Learn about [Agent Development](../agents/development_guide.md)
-- Explore [Configuration Options](configuration.md)
-- Check out [Example Challenges](../../challenges/templates/)
+- Review the [Capabilities](../capabilities.md) and [Security model](../security_model.md)
+- Learn about [Adding an agent](../adding_agent.md) or [Adding a tool](../adding_tool.md)
+- Explore the [example challenges](../../challenges/templates/)
 
 ## Getting Help
 
-- Check the [FAQ](faq.md)
-- Read the [Troubleshooting Guide](troubleshooting.md)
+- Read the [Operator's guide](../operators_guide.md) and [Testing guide](../testing.md)
+- Run `python3 check_setup.py` to diagnose environment/tooling issues
 - Open an issue on GitHub
-- Join our community Discord/Slack
 
 ## Contributing
 
-We welcome contributions! See [Contributing Guide](contributing.md) for details.
+Contributions are welcome — see the [Contributing guide](../contributing.md).
 
 ---
 
