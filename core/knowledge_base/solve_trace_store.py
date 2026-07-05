@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from core.utils.category_utils import normalize_category
+
 
 _DB_PATH = "logs/solve_traces.db"
 _FLAG_PREFIX_RE = re.compile(r"^([A-Za-z0-9_-]+)\{")
@@ -113,7 +115,7 @@ class SolveTraceStore:
                 """,
                 (
                     str(challenge.get("id", result.get("challenge_id", "unknown"))),
-                    str(challenge.get("category", "misc")),
+                    normalize_category(challenge.get("category", "misc")),
                     str(result.get("status", "solved")),
                     1,
                     self._flag_prefix(flag_text),
@@ -162,7 +164,7 @@ class SolveTraceStore:
         params: List[Any] = []
         if category:
             query += " AND category = ?"
-            params.append(category)
+            params.append(normalize_category(category))
         query += " ORDER BY recorded_at DESC LIMIT ?"
         params.append(limit)
 
@@ -227,7 +229,7 @@ class SolveTraceStore:
         if not current_indicators:
             return []
 
-        category = str(challenge.get("category") or "")
+        category = normalize_category(challenge.get("category")) if challenge.get("category") else ""
         candidates = self.get_recent_solves(category=category or None, limit=100)
         if len(candidates) < limit:
             seen_ids = {row["challenge_id"] for row in candidates}
@@ -354,7 +356,7 @@ class SolveTraceStore:
         indicators = set()
         category = challenge.get("category")
         if category:
-            indicators.add(f"category:{category}")
+            indicators.add(f"category:{normalize_category(category)}")
 
         url = challenge.get("url") or challenge.get("target", {}).get("url")
         if url:

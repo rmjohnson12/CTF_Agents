@@ -26,6 +26,13 @@ from agents.registry import AgentRegistry
 from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
 from core.utils.security import SecurityPolicyError, assert_host_allowed
 
+# Raw SDR / IQ capture extensions. Each maps to how the interleaved samples are
+# laid out on disk; see ``_IQ_DTYPES`` for the numpy dtype and any DC offset.
+_IQ_SUFFIXES = (
+    ".cf32", ".fc32", ".cfile", ".32fc", ".iq", ".complex",
+    ".cu8", ".cs8", ".c8", ".cs16", ".sc16", ".c16",
+)
+
 
 @AgentRegistry.register(order=90)
 class HardwareLogicAgent(BaseAgent):
@@ -42,6 +49,9 @@ class HardwareLogicAgent(BaseAgent):
             "truth_tables",
             "csv_bitstreams",
             "forth_diagnostic_terminals",
+            "sdr_iq_captures",
+            "ook_ask_demodulation",
+            "manchester_decoding",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -51,7 +61,11 @@ class HardwareLogicAgent(BaseAgent):
 
         if any(
             term in description
-            for term in ["hardware", "chip", "logic", "circuit", "gate", "serial", "uart", "debugging interface"]
+            for term in [
+                "hardware", "chip", "logic", "circuit", "gate", "serial", "uart",
+                "debugging interface", "sdr", "radio", " rf ", "signal", "remote",
+                "modulat", "captured the signal",
+            ]
         ):
             indicators.append("hardware_terms")
         if any(f.endswith(".csv") for f in files):
@@ -60,6 +74,8 @@ class HardwareLogicAgent(BaseAgent):
             indicators.append("schematic_image")
         if any(f.endswith(".sal") for f in files):
             indicators.append("saleae_capture")
+        if any(f.endswith(_IQ_SUFFIXES) for f in files):
+            indicators.append("sdr_iq_capture")
         if any(f.endswith(".bin") for f in files):
             indicators.append("firmware_image")
 
@@ -78,6 +94,7 @@ class HardwareLogicAgent(BaseAgent):
         csv_path = self._find_file(files, ".csv")
         image_path = self._find_file(files, (".jpg", ".jpeg", ".png"))
         saleae_path = self._find_file(files, ".sal")
+        iq_path = self._find_file(files, _IQ_SUFFIXES)
         firmware_path = self._find_file(files, ".bin")
 
         steps.append("Analyzed hardware logic challenge inputs.")
@@ -87,9 +104,14 @@ class HardwareLogicAgent(BaseAgent):
             steps.append(f"Found input table: {csv_path}")
         if saleae_path:
             steps.append(f"Found Saleae logic capture: {saleae_path}")
+        if iq_path:
+            steps.append(f"Found SDR IQ capture: {iq_path}")
 
         flag = None
         output_text = None
+        # Technique tags feed the solve-trace store's technique-reuse learner so
+        # a future capture of the same shape can be routed straight here.
+        techniques: List[str] = []
 
         if self._looks_like_remote_forth(challenge):
             forth_result = self._solve_remote_forth(challenge)
@@ -103,6 +125,7 @@ class HardwareLogicAgent(BaseAgent):
                     "status": "solved",
                     "flag": flag,
                     "steps": steps,
+                    "techniques": ["forth_diagnostic_terminal"],
                     "artifacts": {},
                 }
 
@@ -111,6 +134,13 @@ class HardwareLogicAgent(BaseAgent):
             steps.extend(saleae_result["steps"])
             flag = saleae_result.get("flag")
             output_text = saleae_result.get("decoded_text")
+            techniques.extend(saleae_result.get("techniques") or ["saleae_uart_decoding"])
+        elif iq_path:
+            iq_result = self._decode_iq_capture(iq_path)
+            steps.extend(iq_result["steps"])
+            flag = iq_result.get("flag")
+            output_text = iq_result.get("decoded_text")
+            techniques.extend(iq_result.get("techniques") or ["sdr_iq_ook_demodulation"])
         elif csv_path and image_path:
             steps.append(
                 "Using detected transistor topology: two series input pairs "
@@ -120,9 +150,11 @@ class HardwareLogicAgent(BaseAgent):
             output_text = self._bits_to_ascii(bits)
             steps.append(f"Decoded output bitstream as ASCII: {output_text}")
             flag = find_first_flag(output_text)
+            techniques.append("transistor_logic_truth_table")
         elif firmware_path:
             firmware_result = self._decode_esp32_firmware(firmware_path)
             steps.extend(firmware_result["steps"])
+            techniques.extend(firmware_result.get("techniques") or ["esp32_firmware_analysis"])
             flag = firmware_result.get("flag")
             output_text = firmware_result.get("decoded_text")
 
@@ -132,6 +164,7 @@ class HardwareLogicAgent(BaseAgent):
             "status": "solved" if flag else "attempted",
             "flag": flag,
             "steps": steps,
+            "techniques": sorted(set(techniques)) if flag else [],
             "artifacts": {"decoded_text": output_text} if output_text and not flag else {},
         }
 
@@ -350,6 +383,247 @@ class HardwareLogicAgent(BaseAgent):
                 return partition_size
             cursor += segment_size
         return max(0, cursor - offset)
+
+    # ------------------------------------------------------------ SDR / IQ
+    # numpy dtype and DC bias for each raw IQ layout. ``bias`` is subtracted
+    # from the unsigned formats so the samples are centred on zero before the
+    # I/Q pair is combined into a complex value.
+    _IQ_DTYPES: Dict[str, Tuple[str, float]] = {
+        ".cf32": ("complex64", 0.0), ".fc32": ("complex64", 0.0),
+        ".cfile": ("complex64", 0.0), ".32fc": ("complex64", 0.0),
+        ".iq": ("complex64", 0.0), ".complex": ("complex64", 0.0),
+        ".cu8": ("uint8", 127.5), ".cs8": ("int8", 0.0), ".c8": ("int8", 0.0),
+        ".cs16": ("int16", 0.0), ".sc16": ("int16", 0.0), ".c16": ("int16", 0.0),
+    }
+
+    @classmethod
+    def _load_iq_samples(cls, iq_path: str):
+        """Load an interleaved-IQ capture as a complex numpy array.
+
+        Returns ``None`` (rather than raising) when numpy is unavailable or the
+        file cannot be interpreted, so the caller can degrade gracefully.
+        """
+        try:
+            import numpy as np
+        except Exception:  # pragma: no cover - numpy is a project dependency
+            return None
+
+        suffix = Path(iq_path).suffix.lower()
+        dtype_name, bias = cls._IQ_DTYPES.get(suffix, ("complex64", 0.0))
+        try:
+            raw = np.fromfile(iq_path, dtype=np.dtype(dtype_name))
+        except OSError:
+            return None
+        if raw.size == 0:
+            return None
+
+        if dtype_name == "complex64":
+            samples = raw.astype(np.complex64)
+        else:
+            real = raw.astype(np.float32) - bias
+            if real.size % 2:  # drop a trailing half-sample if the file is odd
+                real = real[:-1]
+            samples = real[0::2] + 1j * real[1::2]
+        # Guard against non-finite values that would poison the magnitude math.
+        samples = samples[np.isfinite(samples.real) & np.isfinite(samples.imag)]
+        return samples if samples.size else None
+
+    def _decode_iq_capture(self, iq_path: str) -> Dict[str, Any]:
+        """Demodulate an SDR IQ capture (OOK/ASK) and recover an ASCII flag.
+
+        Handles the common "captured a remote/key-fob signal" hardware
+        challenge: threshold the complex magnitude into on/off symbols, recover
+        the symbol period from run lengths, then try Manchester and plain
+        NRZ line codes across every bit alignment and inversion.
+        """
+        steps: List[str] = []
+        try:
+            import numpy as np
+        except Exception:  # pragma: no cover
+            return {"steps": ["numpy is unavailable; cannot demodulate the IQ capture."]}
+
+        samples = self._load_iq_samples(iq_path)
+        if samples is None:
+            return {"steps": [f"Could not read IQ capture as complex samples: {iq_path}"]}
+
+        mag = np.abs(samples).astype(np.float64)
+        peak = float(mag.max())
+        if peak <= 0:
+            return {"steps": ["IQ capture contained no signal energy."]}
+        mag /= peak  # normalise to [0, 1] so thresholds are scale-independent
+
+        threshold = self._otsu_threshold(mag)
+        on = mag > threshold
+        low_mean = float(mag[~on].mean()) if (~on).any() else 0.0
+        high_mean = float(mag[on].mean()) if on.any() else 0.0
+        steps.append(
+            f"Loaded {samples.size} IQ samples; amplitude is bimodal "
+            f"(off~{low_mean:.2f}, on~{high_mean:.2f}) — treating as OOK/ASK."
+        )
+        # OOK needs two well-separated amplitude levels. If the high level is not
+        # clearly above the low level this is likely FSK/PSK, not OOK.
+        if high_mean - low_mean < 0.15:
+            steps.append(
+                "Amplitude levels are not clearly separated; the signal may be "
+                "FSK/PSK rather than OOK. No OOK bitstream recovered."
+            )
+            return {"steps": steps}
+
+        symbols = on.astype(np.int8)
+        values, lengths = self._run_lengths(symbols, np)
+        # Ignore the long idle runs at the very start/end when estimating the
+        # symbol period so leading/trailing silence does not skew it.
+        period, residual = self._estimate_symbol_period(lengths, np)
+        if period <= 0:
+            steps.append("Could not estimate a stable symbol period from the capture.")
+            return {"steps": steps}
+        steps.append(
+            f"Estimated symbol period {period:.1f} samples/chip "
+            f"(fit residual {residual:.3f}) across {len(lengths)} pulses."
+        )
+
+        # Pad a trailing idle so the final data byte always completes even when
+        # the capture is cut off right after the last on-pulse (e.g. a flag that
+        # ends on the "}" byte, whose Manchester/NRZ tail needs a following chip).
+        chips = self._chip_stream(values, lengths, period) + "0" * 16
+        flag, method, text = self._decode_ook_chips(chips)
+        if flag:
+            steps.append(f"Recovered flag via {method} decoding of the OOK bitstream.")
+            line_code = "manchester_decoding" if "Manchester" in (method or "") else "nrz_line_decoding"
+            return {
+                "steps": steps,
+                "flag": flag,
+                "decoded_text": text,
+                "techniques": ["sdr_iq_ook_demodulation", line_code],
+            }
+
+        steps.append(
+            "Demodulated the OOK bitstream but no Manchester/NRZ alignment "
+            "produced a flag. Best-effort ASCII: "
+            f"{(text or '')[:120]!r}"
+        )
+        return {"steps": steps, "decoded_text": text}
+
+    @staticmethod
+    def _otsu_threshold(values) -> float:
+        """Otsu's method: the level that best splits a bimodal amplitude set."""
+        import numpy as np
+
+        hist, edges = np.histogram(values, bins=256)
+        hist = hist.astype(np.float64)
+        total = hist.sum()
+        if total == 0:
+            return float(np.mean(values))
+        prob = hist / total
+        omega = np.cumsum(prob)
+        mids = (edges[:-1] + edges[1:]) / 2.0
+        mu = np.cumsum(prob * mids)
+        mu_total = mu[-1]
+        denom = omega * (1.0 - omega)
+        denom[denom == 0] = 1e-12
+        between = (mu_total * omega - mu) ** 2 / denom
+        return float(mids[int(np.nanargmax(between))])
+
+    @staticmethod
+    def _run_lengths(symbols, np):
+        """Run-length encode a 0/1 array into (values, lengths)."""
+        if symbols.size == 0:
+            return symbols, symbols
+        change = np.where(np.diff(symbols) != 0)[0] + 1
+        starts = np.concatenate(([0], change))
+        ends = np.concatenate((change, [symbols.size]))
+        return symbols[starts], (ends - starts)
+
+    @staticmethod
+    def _estimate_symbol_period(lengths, np) -> Tuple[float, float]:
+        """Estimate the chip period as the unit best explaining all run lengths.
+
+        Each run is one or more chips of equal value, so its length is close to
+        an integer multiple of the chip period. Search for the period that
+        minimises the mean rounding residual of ``length / period``.
+        """
+        lengths = np.asarray(lengths, dtype=np.float64)
+        lengths = lengths[lengths > 0]
+        if lengths.size == 0:
+            return 0.0, 1.0
+        # The shortest recurring runs are single chips; seed the search there.
+        base = float(np.percentile(lengths, 5))
+        if base <= 0:
+            base = float(lengths.min())
+        best_u, best_err = base, 1e9
+        for candidate in np.linspace(base * 0.6, base * 1.5, 400):
+            k = np.maximum(np.round(lengths / candidate), 1)
+            err = float(np.mean(np.abs(lengths - k * candidate)) / candidate)
+            if err < best_err:
+                best_err, best_u = err, float(candidate)
+        return best_u, best_err
+
+    @staticmethod
+    def _chip_stream(values, lengths, period: float) -> str:
+        """Expand run-length pulses into a per-chip 0/1 string."""
+        chunks: List[str] = []
+        for value, length in zip(values, lengths):
+            count = max(1, int(round(float(length) / period)))
+            chunks.append(str(int(value)) * count)
+        return "".join(chunks)
+
+    @classmethod
+    def _decode_ook_chips(cls, chips: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Try Manchester then NRZ line codes over an OOK chip string.
+
+        Returns ``(flag, method, decoded_text)``. Manchester is attempted first
+        because plain NRZ over a Manchester-coded stream yields only the
+        alternating preamble, so it never produces a false flag; the converse is
+        just as safe because ``find_first_flag`` requires a real flag prefix.
+        """
+        best_text: Optional[str] = None
+        inverted = chips.translate(str.maketrans("01", "10"))
+
+        for one_symbol in ("10", "01"):
+            for phase in (0, 1):
+                bits = cls._manchester_decode(chips[phase:], one_symbol)
+                for offset in range(8):
+                    text = cls._bitstring_to_ascii(bits[offset:])
+                    best_text = best_text or text
+                    flag = cls._find_known_prefix_flag(text) or find_first_flag(text)
+                    if flag:
+                        return flag, f"Manchester (bit1={one_symbol}, phase {phase})", text
+
+        for label, stream in (("NRZ", chips), ("NRZ-inverted", inverted)):
+            for offset in range(8):
+                text = cls._bitstring_to_ascii(stream[offset:])
+                best_text = best_text or text
+                flag = cls._find_known_prefix_flag(text) or find_first_flag(text)
+                if flag:
+                    return flag, label, text
+
+        return None, None, best_text
+
+    @staticmethod
+    def _manchester_decode(chips: str, one_symbol: str) -> str:
+        """Decode a chip string as Manchester; unknown pairs become '?'."""
+        zero_symbol = "01" if one_symbol == "10" else "10"
+        out: List[str] = []
+        for idx in range(0, len(chips) - 1, 2):
+            pair = chips[idx:idx + 2]
+            if pair == one_symbol:
+                out.append("1")
+            elif pair == zero_symbol:
+                out.append("0")
+            else:
+                out.append("?")
+        return "".join(out)
+
+    @staticmethod
+    def _bitstring_to_ascii(bits: str) -> str:
+        chars: List[str] = []
+        for idx in range(0, len(bits) - 7, 8):
+            byte = bits[idx:idx + 8]
+            if "?" in byte:
+                chars.append(".")
+            else:
+                chars.append(chr(int(byte, 2) & 0xFF))
+        return "".join(chars)
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities

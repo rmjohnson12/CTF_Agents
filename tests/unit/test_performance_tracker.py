@@ -116,3 +116,31 @@ def test_non_specialist_routes_excluded_from_primary_hint(tracker):
     tracker.record_outcome("web_agent", "web", "w2", "failed")
 
     assert tracker.get_best_agent_for("web") == "web_agent"
+
+
+def test_category_casing_and_synonyms_aggregate(tracker):
+    # HTB emits Title-case categories; local runs use lowercase; agents pass
+    # synonyms. All must collapse onto one canonical category so history for a
+    # single logical category is not split across rows.
+    tracker.record_outcome("crypto_agent", "Crypto", "c1", "solved")
+    tracker.record_outcome("crypto_agent", "crypto", "c2", "solved")
+    tracker.record_outcome("crypto_agent", "cryptography", "c3", "solved")
+
+    # Any spelling of the category reads back the full, merged history.
+    assert tracker.get_success_rate("crypto_agent", "Crypto") == 1.0
+    assert tracker.get_success_rate("crypto_agent", "crypto") == 1.0
+    assert tracker.get_success_rate("crypto_agent", "cryptography") == 1.0
+
+    stats = tracker.get_stats(agent_id="crypto_agent")
+    assert len(stats) == 1
+    assert stats[0]["category"] == "crypto"
+    assert stats[0]["total"] == 3
+
+
+def test_best_agent_merges_titlecase_and_spaced_categories(tracker):
+    # "Secure Coding" (HTB, spaced) and "secure_coding" (local) are one category.
+    tracker.record_outcome("secure_coding_agent", "Secure Coding", "s1", "solved")
+    tracker.record_outcome("secure_coding_agent", "secure_coding", "s2", "solved")
+
+    assert tracker.get_best_agent_for("Secure Coding", min_runs=2) == "secure_coding_agent"
+    assert tracker.get_best_agent_for("secure_coding", min_runs=2) == "secure_coding_agent"

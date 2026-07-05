@@ -67,3 +67,4 @@ pypdf>=5.0.0  # Text extraction from generated PDF challenge artifacts
 # torch>=2.1.0
 scapy
 py-solc-x>=2.0  # compile/deploy attacker contracts for blockchain challenges
+sympy>=1.12  # discrete log / factoring for small-subgroup DH crypto challenges

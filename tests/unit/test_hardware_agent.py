@@ -233,6 +233,107 @@ def test_hardware_agent_decodes_generic_saleae_uart_export(tmp_path):
     assert any("19200 baud" in step for step in result["steps"])
 
 
+def _ook_iq_capture(text, *, samples_per_chip=40, manchester=True, preamble=b"\xaa\xaa"):
+    """Build a complex-float32 OOK capture that encodes ``preamble + text``.
+
+    Mirrors the HTB "RFlag" remote-key pattern: on-chips carry a carrier
+    (magnitude 1), off-chips are silent, and each data bit is Manchester-coded
+    into two chips (1 -> "10", 0 -> "01") unless ``manchester`` is False.
+    """
+    import numpy as np
+
+    payload = preamble + text.encode("latin-1")
+    data_bits = []
+    for byte in payload:
+        data_bits.extend((byte >> shift) & 1 for shift in range(7, -1, -1))
+
+    chips = []
+    for bit in data_bits:
+        if manchester:
+            chips.extend((1, 0) if bit else (0, 1))
+        else:
+            chips.append(bit)
+
+    samples = [0.0 + 0.0j] * (samples_per_chip * 4)  # leading idle
+    for chip in chips:
+        value = (1.0 + 0.0j) if chip else (0.0 + 0.0j)
+        samples.extend([value] * samples_per_chip)
+    samples.extend([0.0 + 0.0j] * (samples_per_chip * 4))  # trailing idle
+    return np.asarray(samples, dtype=np.complex64)
+
+
+def test_hardware_agent_decodes_manchester_ook_iq_capture(tmp_path):
+    import numpy as np
+
+    iq_path = tmp_path / "signal.cf32"
+    _ook_iq_capture("HTB{rf_manchester_ok}").tofile(str(iq_path))
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "rflag",
+        "category": "hardware",
+        "description": "Using an SDR device, we captured the signal from a remote key.",
+        "files": [str(iq_path)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{rf_manchester_ok}"
+    assert result["flag"].endswith("}")  # closing brace must survive demodulation
+    assert any("OOK/ASK" in step for step in result["steps"])
+    assert any("Manchester" in step for step in result["steps"])
+
+
+def test_hardware_agent_iq_flag_keeps_closing_brace_on_abrupt_capture(tmp_path):
+    import numpy as np
+
+    # Build a capture that ends the instant the final "}" byte's last on-pulse
+    # finishes, with no trailing idle — the decoder must still recover the brace.
+    iq_path = tmp_path / "abrupt.cf32"
+    full = _ook_iq_capture("HTB{brace_at_the_edge}", samples_per_chip=32)
+    trimmed = np.trim_zeros(full, "b")  # drop the trailing idle samples
+    trimmed.astype(np.complex64).tofile(str(iq_path))
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "rflag_abrupt",
+        "category": "hardware",
+        "description": "Captured RF signal from an SDR.",
+        "files": [str(iq_path)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{brace_at_the_edge}"
+    assert result["flag"].endswith("}")
+
+
+def test_hardware_agent_decodes_plain_nrz_ook_iq_capture(tmp_path):
+    iq_path = tmp_path / "capture.iq"
+    _ook_iq_capture("HTB{rf_nrz_ok}", manchester=False, preamble=b"").tofile(str(iq_path))
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "rflag_nrz",
+        "category": "hardware",
+        "description": "Captured RF signal from an SDR.",
+        "files": [str(iq_path)],
+    })
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{rf_nrz_ok}"
+
+
+def test_hardware_agent_iq_capture_without_flag_stays_attempted(tmp_path):
+    iq_path = tmp_path / "noflag.cf32"
+    _ook_iq_capture("just some telemetry text").tofile(str(iq_path))
+
+    result = HardwareLogicAgent().solve_challenge({
+        "id": "rflag_noflag",
+        "category": "hardware",
+        "description": "Captured RF signal from an SDR.",
+        "files": [str(iq_path)],
+    })
+
+    assert result["status"] == "attempted"
+    assert result["flag"] is None
+
+
 def test_hardware_agent_decodes_single_byte_xor_flag_from_esp32_firmware(tmp_path):
     firmware_path = tmp_path / "firmware.bin"
     flash = bytearray(b"\xff" * 0x20000)

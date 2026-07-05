@@ -161,6 +161,19 @@ class CryptographyAgent(BaseAgent):
         
         steps.append(f"Extracted ciphertext: {cipher_text}")
 
+        dh_subgroup_flag = self._try_dh_small_subgroup_oracle(challenge, steps)
+        if dh_subgroup_flag:
+            found = find_first_flag(dh_subgroup_flag)
+            if found:
+                steps.append("SUCCESS: Found flag via small-subgroup Diffie-Hellman discrete log.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps,
+                }
+
         rsa_low_exponent_result = self._try_rsa_low_exponent_from_files(challenge.get("files", []), steps)
         if rsa_low_exponent_result:
             found = find_first_flag(rsa_low_exponent_result)
@@ -917,6 +930,106 @@ class CryptographyAgent(BaseAgent):
                 return match.group(1), int(match.group(2))
 
         return None
+
+    @staticmethod
+    def _looks_like_dh_small_subgroup(source: str) -> bool:
+        """Recognize the small-subgroup Diffie-Hellman oracle pattern from source."""
+        if not source:
+            return False
+        s = source.lower()
+        has_p_construction = bool(re.search(r"\(\s*2\s*\*[^)]*\*[^)]*\)\s*\+\s*1", source))
+        return (
+            "getprime" in s
+            and "aes" in s
+            and "sha256" in s
+            and "pow(" in s
+            and has_p_construction
+        )
+
+    def _try_dh_small_subgroup_oracle(self, challenge: Dict[str, Any], steps: List[str]) -> Optional[str]:
+        """Solve a small-subgroup Diffie-Hellman oracle challenge.
+
+        Pattern (detected from the provided source): the server builds
+        ``p = 2*q*r + 1`` with a small prime ``q``, publishes ``p, g, A, B`` where
+        ``g`` generates the order-``q`` subgroup, and AES-ECB-encrypts the flag
+        under ``sha256(shared_secret)``. Because ``q`` is small (~40 bits) the
+        shared secret is recoverable with a discrete log in the small subgroup.
+        Nothing about the specific primes or flag is hard-coded.
+        """
+        source = ""
+        for path in [Path(f) for f in challenge.get("files", []) if str(f).lower().endswith(".py")]:
+            try:
+                source += path.read_text(errors="ignore") + "\n"
+            except Exception:
+                continue
+        if not self._looks_like_dh_small_subgroup(source):
+            return None
+        target = self._extract_tcp_target(challenge)
+        if not target:
+            steps.append("Small-subgroup DH source detected, but no TCP target to query.")
+            return None
+        host, port = target
+        from core.utils.security import assert_host_allowed
+        try:
+            assert_host_allowed(host, port=port)
+        except Exception as exc:
+            steps.append(f"DH oracle target not allowed: {exc}")
+            return None
+
+        steps.append("Detected a small-subgroup Diffie-Hellman oracle; querying parameters and ciphertext.")
+        try:
+            params_text, ct_hex = self._query_dh_oracle(host, port)
+        except Exception as exc:
+            steps.append(f"DH oracle interaction failed: {exc}")
+            return None
+
+        def _num(name: str) -> Optional[int]:
+            m = re.search(rf"(?m)^\s*{name}\s*=\s*(\d+)", params_text)
+            return int(m.group(1)) if m else None
+
+        p_val, g_val, A_val, B_val = _num("p"), _num("g"), _num("A"), _num("B")
+        if not all((p_val, g_val, A_val, B_val)) or not ct_hex:
+            steps.append("Could not parse p/g/A/B or the ciphertext from the oracle response.")
+            return None
+
+        try:
+            from hashlib import sha256
+            from sympy import factorint, discrete_log
+            from Crypto.Cipher import AES
+            from Crypto.Util.number import long_to_bytes
+
+            # Small subgroup order q = smallest non-trivial prime factor of (p-1)/2.
+            factors = [f for f in factorint((p_val - 1) // 2) if f > 2 ** 20]
+            if not factors:
+                steps.append("No small subgroup factor found; pattern did not apply.")
+                return None
+            q = min(factors)
+            steps.append(f"Recovered subgroup order q ({q.bit_length()} bits); solving the discrete log.")
+            a = discrete_log(p_val, A_val, g_val, q)
+            shared = pow(B_val, a, p_val)
+            key = sha256(long_to_bytes(shared)).digest()[:16]
+            plaintext = AES.new(key, AES.MODE_ECB).decrypt(bytes.fromhex(ct_hex))
+            flag = find_first_flag(plaintext.decode("latin-1", errors="ignore"))
+            if flag:
+                steps.append("Recovered the shared secret via small-subgroup DLog and AES-decrypted the flag.")
+                return flag
+            steps.append("Decrypted the ciphertext but found no recognizable flag.")
+        except Exception as exc:
+            steps.append(f"Small-subgroup DH solve failed: {exc}")
+        return None
+
+    @staticmethod
+    def _query_dh_oracle(host: str, port: int, prompt: bytes = b"> ") -> Tuple[str, str]:
+        """Drive the menu oracle: option 1 -> parameters, option 3 -> ciphertext."""
+        with socket.create_connection((host, port), timeout=15) as sock:
+            sock.settimeout(15)
+            CryptographyAgent._recv_until(sock, prompt)  # initial menu
+            sock.sendall(b"1\n")
+            params = CryptographyAgent._recv_until(sock, prompt).decode("latin-1", errors="ignore")
+            sock.sendall(b"3\n")
+            encrypted = CryptographyAgent._recv_until(sock, prompt).decode("latin-1", errors="ignore")
+        match = re.search(r"encrypted\s*=\s*([0-9a-fA-F]+)", encrypted)
+        return params, (match.group(1) if match else "")
 
     @staticmethod
     def _collect_time_capsule_samples(host: str, port: int, count: int) -> List[Tuple[int, int]]:
