@@ -4,6 +4,7 @@ Coding Specialist Agent
 Specialized agent for programming, scripting, and automation challenges.
 """
 
+import json
 import logging
 from typing import Dict, Any, List, Optional
 
@@ -17,6 +18,48 @@ from core.utils.flag_utils import find_first_flag, KNOWN_FLAG_PREFIXES
 import re
 
 logger = logging.getLogger(__name__)
+
+
+# Deterministic solver submitted to a coding autograder for the weighted-graph
+# "safest/shortest path" class (e.g. HTB "Pivot Chain"). Reads all whitespace
+# tokens so it is robust to single- vs multi-line input: N, M, start, target,
+# then M directed edges "u v risk"; prints the minimum cumulative risk via
+# Dijkstra. Node labels are arbitrary strings.
+_SHORTEST_PATH_PROGRAM = r'''
+import sys, heapq
+
+def main():
+    data = sys.stdin.read().split()
+    if not data:
+        return
+    i = 0
+    n = int(data[i]); i += 1
+    m = int(data[i]); i += 1
+    start = data[i]; i += 1
+    target = data[i]; i += 1
+    graph = {}
+    for _ in range(m):
+        u, v, w = data[i], data[i + 1], int(data[i + 2]); i += 3
+        graph.setdefault(u, []).append((v, w))
+    dist = {start: 0}
+    pq = [(0, start)]
+    answer = -1
+    while pq:
+        d, node = heapq.heappop(pq)
+        if node == target:
+            answer = d
+            break
+        if d > dist.get(node, float("inf")):
+            continue
+        for v, w in graph.get(node, []):
+            nd = d + w
+            if nd < dist.get(v, float("inf")):
+                dist[v] = nd
+                heapq.heappush(pq, (nd, v))
+    print(answer)
+
+main()
+'''
 
 
 @AgentRegistry.register(order=30)
@@ -52,6 +95,8 @@ class CodingAgent(BaseAgent):
             'algorithm',
             'debugging',
             'embedding_analogies',
+            'interactive_coding_instance',
+            'graph_shortest_path',
             'misc'
         ]
     
@@ -89,6 +134,23 @@ class CodingAgent(BaseAgent):
         max_retries = 3
         
         steps.append(f"Analyzed task requirements: {task_desc}")
+
+        # HTB web-based coding challenges serve the real problem statement on the
+        # spawned instance page and grade submitted code through a /run endpoint.
+        # Neither the statement nor the grader is in the challenge description, so
+        # the generic script path below can never see them — handle them here.
+        web_coding = self._try_web_coding_challenge(challenge, steps)
+        if web_coding:
+            web_flag, web_techniques = web_coding
+            return {
+                'challenge_id': challenge.get('id'),
+                'agent_id': self.agent_id,
+                'status': 'solved',
+                'flag': web_flag,
+                'steps': steps,
+                'techniques': web_techniques,
+                'artifacts': {'coding_challenge': {'technique': 'web_coding_autograder'}},
+            }
 
         embedding_result = None
         embedding_handled = False
@@ -324,6 +386,196 @@ for path in paths:
                 'execution_backend': execution_backend,
             }
         }
+
+    # ------------------------------------------------------- web coding autograder
+    def _try_web_coding_challenge(
+        self, challenge: Dict[str, Any], steps: List[str]
+    ) -> Optional[tuple]:
+        """Solve an interactive HTB coding instance (Monaco editor + /run grader).
+
+        Fetches the instance page, extracts the on-page problem statement, then
+        submits a solving program to the ``/run`` autograder. Recognized problem
+        classes (e.g. weighted-graph shortest path) get a deterministic solver so
+        the challenge is solved even when the LLM backend is degraded; anything
+        else falls back to an LLM program-synthesis loop guided by grader feedback.
+        Returns ``(flag, techniques)`` or ``None``.
+        """
+        url = challenge.get('url')
+        if not url:
+            return None
+        try:
+            import requests  # noqa: F401
+            from core.utils.security import assert_url_allowed, SecurityPolicyError
+        except Exception:  # pragma: no cover - deps are project requirements
+            return None
+
+        base = str(url).rstrip('/')
+        try:
+            assert_url_allowed(base)
+        except SecurityPolicyError as exc:
+            steps.append(f"Coding instance blocked by network policy: {exc}")
+            return None
+        try:
+            page = requests.get(base, timeout=20)
+        except Exception as exc:
+            steps.append(f"Could not fetch coding instance page: {exc}")
+            return None
+
+        html = page.text if page.status_code == 200 else ''
+        run_ep = self._detect_run_endpoint(html)
+        if not run_ep:
+            return None
+        run_url = base + run_ep
+        problem = self._extract_problem_statement(html)
+        steps.append(
+            f"Detected interactive coding instance (grader {run_ep}); "
+            f"extracted a {len(problem)}-char problem statement."
+        )
+
+        base_techniques = [
+            'interactive_coding_instance',
+            'problem_statement_extraction',
+            'autograder_code_submission',
+        ]
+
+        # 1) Deterministic solvers for recognized problem classes.
+        for label, language, code, extra in self._deterministic_coding_solutions(problem):
+            flag, completed, feedback = self._submit_coding_run(run_url, code, language, steps)
+            if flag:
+                steps.append(f"Autograder accepted the deterministic {label} solution.")
+                return flag, base_techniques + extra
+
+        # 2) LLM program synthesis with grader-feedback self-correction.
+        if getattr(self.reasoner, 'is_available', False) and problem:
+            code = self._llm_coding_program(problem, challenge)
+            feedback = ''
+            for attempt in range(3):
+                if not code:
+                    break
+                flag, completed, feedback = self._submit_coding_run(run_url, code, 'python', steps)
+                if flag:
+                    steps.append(f"Autograder accepted the LLM solution (attempt {attempt + 1}).")
+                    return flag, base_techniques + ['llm_program_synthesis']
+                code = self._llm_fix_coding_program(problem, challenge, code, feedback)
+            steps.append("LLM program-synthesis loop did not satisfy the grader.")
+
+        return None
+
+    @staticmethod
+    def _detect_run_endpoint(html: str) -> Optional[str]:
+        """Find the code-submission endpoint the page POSTs code to."""
+        if not html:
+            return None
+        match = re.search(
+            r'fetch\(\s*["\'](/[\w\-/]+)["\'][^)]*?\bcode\b', html, re.S
+        )
+        if match:
+            return match.group(1)
+        if re.search(r'["\']/run["\']', html):
+            return '/run'
+        return None
+
+    @staticmethod
+    def _extract_problem_statement(html: str) -> str:
+        """Return the page's visible text (problem statement + I/O + examples)."""
+        import html as html_lib
+
+        if not html:
+            return ''
+        body = re.sub(r'(?is)<script.*?</script>', ' ', html)
+        body = re.sub(r'(?is)<style.*?</style>', ' ', body)
+        text = re.sub(r'(?is)<[^>]+>', '\n', body)
+        text = html_lib.unescape(text)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return '\n'.join(lines)
+
+    def _deterministic_coding_solutions(self, problem: str):
+        """Yield ``(label, language, code, extra_techniques)`` for known classes."""
+        if self._looks_like_shortest_path(problem):
+            yield (
+                'graph shortest-path (Dijkstra)',
+                'python',
+                _SHORTEST_PATH_PROGRAM,
+                ['graph_shortest_path', 'dijkstra'],
+            )
+
+    @staticmethod
+    def _looks_like_shortest_path(problem: str) -> bool:
+        text = (problem or '').lower()
+        has_path = any(w in text for w in ('path', 'route', 'pivot'))
+        has_weight = any(w in text for w in ('risk', 'cost', 'weight', 'distance', 'time'))
+        wants_min = any(w in text for w in ('lowest', 'minimum', 'safest', 'shortest', 'least', 'cheapest', 'minimal'))
+        has_graph = any(w in text for w in ('host', 'node', 'edge', 'vertex', 'graph', 'network'))
+        return has_path and has_weight and wants_min and has_graph
+
+    def _submit_coding_run(
+        self, run_url: str, code: str, language: str, steps: List[str]
+    ) -> tuple:
+        """POST code to the grader. Returns ``(flag_or_None, completed, feedback)``.
+
+        The grader sandbox cold-starts, so a generous timeout with one retry is
+        used. Only a grader-validated flag is returned (an accepted submission),
+        never an echo of the problem text.
+        """
+        import requests
+        from core.utils.security import assert_url_allowed, SecurityPolicyError
+
+        try:
+            assert_url_allowed(run_url)
+        except SecurityPolicyError:
+            return None, False, ''
+        payload = {"code": code, "language": language}
+        for timeout in (90, 150):
+            try:
+                resp = requests.post(run_url, json=payload, timeout=timeout)
+            except requests.exceptions.ReadTimeout:
+                continue
+            except Exception as exc:  # noqa: BLE001
+                steps.append(f"Grader submission error: {exc}")
+                return None, False, ''
+            text = resp.text or ''
+            completed = False
+            feedback = text[:600]
+            try:
+                data = resp.json()
+                completed = bool(data.get('challengeCompleted') or data.get('success'))
+                if isinstance(data.get('result'), (dict, list)):
+                    feedback = json.dumps(data['result'])[:600]
+                explicit = data.get('flag')
+                if explicit and find_first_flag(str(explicit)):
+                    return find_first_flag(str(explicit)), True, feedback
+            except ValueError:
+                pass
+            flag = find_first_flag(text)
+            if flag and (completed or 'flag' in text.lower()):
+                return flag, True, feedback
+            return None, completed, feedback
+        steps.append("Grader did not respond before timeout.")
+        return None, False, ''
+
+    def _llm_coding_program(self, problem: str, challenge: Dict[str, Any]) -> str:
+        task = (
+            "Write a COMPLETE Python 3 program that reads the problem input from "
+            "standard input and prints ONLY the required answer to standard output. "
+            "Do not hardcode the sample; parse stdin generically. Problem:\n\n" + problem
+        )
+        try:
+            return self.reasoner.generate_script({"description": problem, "url": challenge.get("url")}, task)
+        except Exception:
+            return ""
+
+    def _llm_fix_coding_program(
+        self, problem: str, challenge: Dict[str, Any], code: str, feedback: str
+    ) -> str:
+        try:
+            return self.reasoner.fix_script(
+                {"description": problem, "url": challenge.get("url")},
+                code,
+                f"Autograder rejected the program. Grader feedback: {feedback}",
+                "",
+            )
+        except Exception:
+            return ""
 
     def _fallback_xor_solver(self, challenge: Dict[str, Any], task_desc: str) -> Optional[str]:
         """Deterministic solver for XOR challenges when LLM is unavailable."""

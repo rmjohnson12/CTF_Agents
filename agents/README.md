@@ -20,11 +20,12 @@ Under `specialists/`, one package per category:
 - **forensics** — memory/disk/pcap/artifact analysis
 - **hardware_logic** — logic captures, ESP32 firmware, raw-TCP diagnostics
 - **log_analysis** — log triage and event correlation
-- **blockchain** — smart-contract interaction and attacker-contract deployment
+- **blockchain** — smart-contract interaction, attacker-contract deployment, and
+  source-driven legacy-token transaction playbooks
 - **secure_coding** — source-patch remediation with verification
 - **networking** — protocol and packet work
 - **osint** — open-source intelligence gathering
-- **misc** — generated coding/math solvers
+- **misc** — generated coding/math solvers and interactive coding autograders
 
 ## Support
 

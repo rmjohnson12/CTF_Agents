@@ -62,6 +62,33 @@ CTF_AGENTS_ALLOW_MODEL_DOWNLOAD=1 \
 Model names are restricted to the supported GloVe Twitter variants; arbitrary
 challenge text cannot select another download.
 
+## Interactive coding graders
+
+For an authorized Coding challenge whose real task appears only on its spawned
+web page, provide the instance URL normally through the HTB runner or challenge
+input. The coding specialist verifies the URL against the network policy,
+extracts the visible problem statement, discovers a `/run`-style code grader,
+and submits a complete program.
+
+Recognized problem classes use deterministic implementations and therefore do
+not require an available LLM. Unrecognized tasks may use an optional bounded
+program-synthesis loop, with grader feedback supplied to the next attempt. A
+result is considered solved only when the grader returns a valid flag.
+
+## Legacy ERC20 purchase challenges
+
+The blockchain specialist can recognize a pre-0.8 Solidity token/shop pattern
+from the provided source: unchecked token subtraction, a `transferFrom`-based
+purchase function, and an item ownership condition checked by `isSolved()`. It
+then locates the token from bounded shop storage slots, verifies that an
+over-balance transfer actually inflates the player's balance, approves the shop,
+purchases the source-derived winning item, and confirms the on-chain solved
+state before requesting a flag.
+
+The path declines modern checked-arithmetic contracts, sources that do not match
+the shop pattern, and transactions that do not produce the expected state
+change. RPC and flag URLs remain subject to the normal network policy.
+
 ## Raw TCP Forth diagnostics
 
 For an authorized hardware target that exposes a Forth diagnostic interpreter,

@@ -45,10 +45,15 @@ tests.
   discrete-log recovery
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
+- Interactive coding-instance discovery from page content, `/run`-style grader
+  submission, deterministic weighted-graph shortest-path solving, and optional
+  LLM synthesis corrected by bounded grader feedback
 - Smart-contract interaction and authorized remote challenge workflows
 - Interface-gated EVM lifecycle transactions with on-chain `isSolved()` verification
 - Source-driven attacker-contract compilation and deployment for exploits that
   require a contract caller (e.g. `tx.origin` access-control gates)
+- Source-detected pre-0.8 ERC20 balance underflow, bounded token/shop discovery,
+  signed purchase transactions, and on-chain solve verification
 - Credentialed live-SSH loader/rootkit triage with explicitly gated host trust
   and backup/restore `/etc/ld.so.preload` bypass
 

@@ -82,6 +82,21 @@ This will, per selected challenge: create `runs/htb/<slug>/`, spawn an instance
 if the challenge needs one (unless `--no-start`), download and safely extract
 files, run the solver within HTB-provided scope, and record candidate flags.
 
+### Interactive coding instances
+
+Some Coding challenges expose the full problem only on the spawned instance
+page, commonly alongside a browser editor, and grade submitted programs through
+an HTTP endpoint such as `/run`. For these targets the coding specialist fetches
+the authorized instance page, detects the grader, extracts the visible problem
+statement, and submits a complete program. Recognized classes use reviewed
+deterministic solvers; otherwise the optional LLM path can synthesize a program
+and revise it from bounded grader feedback. A flag is accepted only when it is
+returned by the grader response.
+
+This code-grader interaction is part of solving the spawned challenge. It does
+not submit the recovered flag to Hack The Box; platform submission still
+requires both `--execute` and `--submit`.
+
 ## Selecting challenges
 
 - `--category web|crypto|pwn|reversing|...`

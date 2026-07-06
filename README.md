@@ -119,12 +119,19 @@ injection in flat-file user records.
 API-driven web challenges are solved by discovering endpoints from the page and
 its JavaScript, enumerating any option/command lists, and submitting candidate
 values (secret/hidden options first) to action endpoints until a flag is
-returned — no specific command or endpoint is hard-coded. Blockchain challenges
-are solved from their published contract source: the agent identifies the win
-condition, compiles and deploys a bespoke attacker contract when the exploit
-requires a contract caller (e.g. a `tx.origin` gate), executes the on-chain
-sequence with signed web3 transactions, and verifies `isSolved()` before
-retrieving the flag.
+returned — no specific command or endpoint is hard-coded. Interactive coding
+instances are handled from the spawned page rather than the short platform
+description: the coding agent detects the page's grader endpoint, extracts the
+problem statement, uses deterministic programs for recognized classes such as
+weighted shortest-path problems, and otherwise can iterate with LLM-generated
+code plus grader feedback.
+
+Blockchain challenges are solved from their published contract source: the
+agent identifies the win condition, compiles and deploys a bespoke attacker
+contract when the exploit requires a contract caller (e.g. a `tx.origin` gate),
+or executes source-detected transaction sequences such as pre-0.8 ERC20
+underflow purchases. It signs the required web3 transactions and verifies
+`isSolved()` before retrieving the flag.
 
 ## Repository Layout
 
