@@ -161,6 +161,19 @@ class CryptographyAgent(BaseAgent):
         
         steps.append(f"Extracted ciphertext: {cipher_text}")
 
+        gen_oracle_flag = self._try_chosen_generator_bit_oracle(challenge, steps)
+        if gen_oracle_flag:
+            found = find_first_flag(gen_oracle_flag)
+            if found:
+                steps.append("SUCCESS: Found flag via chosen-generator subgroup bit oracle.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps,
+                }
+
         dh_subgroup_flag = self._try_dh_small_subgroup_oracle(challenge, steps)
         if dh_subgroup_flag:
             found = find_first_flag(dh_subgroup_flag)
@@ -912,22 +925,40 @@ class CryptographyAgent(BaseAgent):
 
     @staticmethod
     def _extract_tcp_target(challenge: Dict[str, Any]) -> Optional[Tuple[str, int]]:
-        candidates = []
+        # 1) Structured host/port keys (e.g. a connection_info/target dict) win —
+        #    they avoid mis-parsing a host out of free-text prose.
+        for key in ("target", "connection_info"):
+            obj = challenge.get(key)
+            if isinstance(obj, dict):
+                host = obj.get("host") or obj.get("hostname") or obj.get("ip")
+                port = obj.get("port")
+                if host and str(port).isdigit():
+                    return str(host), int(port)
+
+        candidates: List[str] = []
         if challenge.get("url"):
             candidates.append(str(challenge["url"]))
         target = challenge.get("target")
-        if isinstance(target, dict):
+        if isinstance(target, str):
+            candidates.append(target)
+        elif isinstance(target, dict):
             candidates.extend(str(v) for v in target.values() if v)
-        candidates.append(challenge.get("description", ""))
+        candidates.append(str(challenge.get("description", "")))
 
+        # An IP, localhost, or dotted hostname immediately followed by :port —
+        # matched first so a host:port embedded in a sentence is found cleanly.
+        host_port = re.compile(
+            r"\b((?:\d{1,3}\.){3}\d{1,3}|localhost|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+):(\d{2,5})\b"
+        )
+        # Also accept the "nc <host> <port>" convention common in CTF prompts.
+        nc_form = re.compile(r"\bnc\s+([A-Za-z0-9.\-]+)\s+(\d{2,5})\b")
         for candidate in candidates:
-            parsed = urlparse(candidate if "://" in candidate else f"tcp://{candidate}")
-            if parsed.hostname and parsed.port:
-                return parsed.hostname, parsed.port
-
-            match = re.search(r"\b((?:\d{1,3}\.){3}\d{1,3}|localhost|127\.0\.0\.1):(\d{2,5})\b", candidate)
+            match = host_port.search(candidate) or nc_form.search(candidate)
             if match:
                 return match.group(1), int(match.group(2))
+            parsed = urlparse(candidate if "://" in candidate else f"tcp://{candidate}")
+            if parsed.hostname and " " not in parsed.hostname and parsed.port:
+                return parsed.hostname, parsed.port
 
         return None
 
@@ -945,6 +976,152 @@ class CryptographyAgent(BaseAgent):
             and "pow(" in s
             and has_p_construction
         )
+
+    def _try_chosen_generator_bit_oracle(self, challenge: Dict[str, Any], steps: List[str]) -> Optional[str]:
+        """Solve a "false witness" oracle that leaks key bits via a chosen generator.
+
+        Pattern (detected from source): the server AES-ECB-encrypts the flag under
+        a random ``KEY``, lets the *player* choose the generator ``G`` used in
+        ``H(m) = pow(G, m, P)``, then exposes an oracle where, for each key-bit
+        index ``i``, it returns a uniformly random integer when ``KEY_BITS[i]==0``
+        but a value of the form ``G**sk mod P`` when ``KEY_BITS[i]==1``.
+
+        Choosing ``G = P-1`` (order 2) makes every ``G**sk`` collapse to ``{1, P-1}``,
+        so a returned value in that set is an unforgeable witness of a 1-bit while a
+        random integer virtually never lands there. One query per index recovers
+        the whole key, which decrypts the flag. Nothing is hard-coded.
+        """
+        source = ""
+        for path in [Path(f) for f in challenge.get("files", []) if str(f).lower().endswith(".py")]:
+            try:
+                source += path.read_text(errors="ignore") + "\n"
+            except Exception:
+                continue
+        if not self._looks_like_chosen_generator_bit_oracle(source):
+            return None
+
+        modulus = self._extract_pow_modulus(source)
+        if not modulus:
+            steps.append("Chosen-generator oracle detected, but could not extract the modulus P.")
+            return None
+        n_bits = self._extract_key_bit_length(source)
+        if n_bits not in {128, 192, 256}:
+            steps.append(
+                f"Chosen-generator oracle requested unsupported AES key size: {n_bits} bits."
+            )
+            return None
+
+        target = self._extract_tcp_target(challenge)
+        if not target:
+            steps.append("Chosen-generator bit oracle source detected, but no TCP target to query.")
+            return None
+        host, port = target
+        from core.utils.security import assert_host_allowed
+        try:
+            assert_host_allowed(host, port=port)
+        except Exception as exc:
+            steps.append(f"Bit-oracle target not allowed: {exc}")
+            return None
+
+        steps.append(
+            f"Detected a chosen-generator subgroup oracle ({n_bits}-bit key); "
+            "sending G = P-1 (order 2) and reading each bit as a {1, P-1} witness."
+        )
+        try:
+            ct_hex, bits = self._query_bit_oracle(host, port, modulus, n_bits)
+        except Exception as exc:
+            steps.append(f"Bit-oracle interaction failed: {exc}")
+            return None
+        if not ct_hex or len(bits) != n_bits or any(b is None for b in bits):
+            steps.append("Did not collect a full ciphertext and bit vector from the oracle.")
+            return None
+
+        try:
+            from Crypto.Cipher import AES
+            from Crypto.Util.Padding import unpad
+
+            key = int("".join(str(b) for b in bits), 2).to_bytes(n_bits // 8, "big")
+            plaintext = AES.new(key, AES.MODE_ECB).decrypt(bytes.fromhex(ct_hex))
+            try:
+                plaintext = unpad(plaintext, 16)
+            except ValueError:
+                pass
+            flag = find_first_flag(plaintext.decode("latin-1", errors="ignore"))
+            if flag:
+                steps.append(f"Recovered {sum(bits)} one-bits; AES-ECB-decrypted the flag.")
+                return flag
+            steps.append("Reconstructed a key and decrypted, but found no recognizable flag.")
+        except Exception as exc:
+            steps.append(f"Chosen-generator oracle solve failed: {exc}")
+        return None
+
+    @staticmethod
+    def _looks_like_chosen_generator_bit_oracle(source: str) -> bool:
+        """Recognize the chosen-generator, per-bit "false witness" oracle pattern."""
+        if not source:
+            return False
+        s = source.lower()
+        generator_vars = set(re.findall(r"(\w+)\s*=\s*int\(\s*input\(", source))
+        pow_bases = set(re.findall(r"pow\(\s*(\w+)\s*,", source))
+        chosen_generator = bool(generator_vars & pow_bases)
+        return (
+            "aes.mode_ecb" in s
+            and "randbelow" in s
+            and "pow(" in s
+            and chosen_generator
+        )
+
+    @staticmethod
+    def _extract_pow_modulus(source: str) -> Optional[int]:
+        """Extract the modulus P from the ``pow(base, exp, P)`` hashing call."""
+        for var in set(re.findall(r"pow\(\s*\w+\s*,\s*\w+\s*,\s*(\w+)\s*\)", source)):
+            match = re.search(rf"(?m)^\s*{re.escape(var)}\s*=\s*(0x[0-9a-fA-F]+|\d+)", source)
+            if match:
+                value = int(match.group(1), 0)
+                if value.bit_length() >= 64:
+                    return value
+        return None
+
+    @staticmethod
+    def _extract_key_bit_length(source: str) -> int:
+        """Infer the key bit length from token_bytes()/format width; default 256."""
+        match = re.search(r"token_bytes\(\s*(\d+)\s*\)", source)
+        if match:
+            return int(match.group(1)) * 8
+        match = re.search(r":0(\d+)b", source)
+        if match:
+            return int(match.group(1))
+        return 256
+
+    def _query_bit_oracle(
+        self, host: str, port: int, modulus: int, n_bits: int
+    ) -> Tuple[Optional[str], List[int]]:
+        """Drive the oracle: read the ciphertext, send G=P-1, read each bit witness."""
+        witnesses = {1, modulus - 1}
+        with socket.create_connection((host, port), timeout=25) as sock:
+            sock.settimeout(25)
+            intro = self._recv_until(sock, b"generator: ").decode("latin-1", errors="ignore")
+            ct_match = re.search(r"for you:\s*\n?\s*([0-9a-fA-F]{32,})", intro) \
+                or re.search(r"\b([0-9a-fA-F]{32,})\b", intro)
+            ct_hex = ct_match.group(1) if ct_match else None
+
+            sock.sendall(str(modulus - 1).encode() + b"\n")
+            self._recv_until(sock, b"> ")
+
+            bits: List[int] = []
+            for index in range(n_bits):
+                sock.sendall(b"1\n")
+                self._recv_until(sock, b"offset: ")
+                sock.sendall(str(index).encode() + b"\n")
+                blob = self._recv_until(sock, b"> ").decode("latin-1", errors="ignore")
+                result = re.search(r"result:\s*(-?\d+)", blob)
+                value = int(result.group(1)) if result else None
+                bits.append(1 if value in witnesses else 0)
+            try:
+                sock.sendall(b"2\n")
+            except Exception:
+                pass
+        return ct_hex, bits
 
     def _try_dh_small_subgroup_oracle(self, challenge: Dict[str, Any], steps: List[str]) -> Optional[str]:
         """Solve a small-subgroup Diffie-Hellman oracle challenge.

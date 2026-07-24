@@ -11,6 +11,7 @@ import hashlib
 import http.client
 import io
 import itertools
+import ast
 import logging
 import os
 import re
@@ -18,10 +19,11 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from agents.base_agent import BaseAgent, AgentType
 from agents.registry import AgentRegistry
@@ -151,6 +153,7 @@ class ReverseEngineeringAgent(BaseAgent):
             "substitution_table_vm",
             "godot_game_loader",
             "remote_arm_emulation",
+            "micropython_mpy_bytecode",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -206,6 +209,12 @@ class ReverseEngineeringAgent(BaseAgent):
         binaries = [f for f in effective_files if is_native_binary(f)]
         enc_files = [f for f in effective_files if f.endswith(".enc") or f.endswith(".encrypted")]
         source_files = [f for f in effective_files if f.endswith((".py", ".c", ".cpp", ".js", ".gd"))]
+
+        # --- Strategy 0a: MicroPython .mpy bytecode modules (foreign engine) ---
+        for mpy in [f for f in effective_files if str(f).lower().endswith(".mpy")]:
+            result = self._try_micropython_mpy(mpy, challenge, steps)
+            if result:
+                return result
 
         # --- Strategy 0: Godot game-loader bundles (.exe + encrypted .pck) ---
         result = self._try_godot_game_loader(effective_files, challenge, steps)
@@ -2515,6 +2524,195 @@ class ReverseEngineeringAgent(BaseAgent):
         if artifacts:
             out["artifacts"] = artifacts
         return out
+
+    # ------------------------------------------------------ MicroPython .mpy
+    # BINARY_OP name -> Python operator, for the small subset that appears in
+    # per-character check loops. Used to rebuild the transform expression.
+    _MPY_BINOPS = {
+        "__xor__": "^", "__add__": "+", "__sub__": "-", "__and__": "&",
+        "__or__": "|", "__mul__": "*", "__mod__": "%", "__floordiv__": "//",
+        "__lshift__": "<<", "__rshift__": ">>",
+    }
+    # Expressions we rebuild are only ever composed of these tokens; anything
+    # else means our reconstruction went wrong, so we refuse to eval it.
+    _MPY_SAFE_EXPR = re.compile(r"^[ ()acize0-9^&|+\-*%<>/]+$")
+
+    def _try_micropython_mpy(
+        self, mpy_path: str, challenge: Dict[str, Any], steps: List[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Reverse a MicroPython ``.mpy`` bytecode module and beat its input check.
+
+        MicroPython bytecode is unreadable to normal RE tooling ("a foreign
+        engine, unreadable to old chisels"). We disassemble it with the vendored
+        ``mpy-tool.py``, then handle the common CTF pattern: a checker that maps
+        each input byte through a position-local transform (XOR/ADD/… mixing the
+        byte, a rolling accumulator, and the index) and compares the result to a
+        constant table. Because the transform is invertible one byte at a time,
+        we reconstruct it from the disassembly and recover the exact input the
+        "ward" is listening for.
+        """
+        try:
+            with open(mpy_path, "rb") as handle:
+                magic = handle.read(2)
+        except OSError:
+            return None
+        if not magic.startswith(b"M"):
+            return None  # not a MicroPython .mpy module
+
+        steps.append(f"Detected MicroPython .mpy module (v{magic[1]}); disassembling bytecode.")
+        disasm = self._disassemble_mpy(mpy_path, steps)
+        if not disasm:
+            return None
+
+        targets = [
+            ast.literal_eval(m)
+            for m in re.findall(r"obj_table:\s*\[(\([^\]]*?\))\]", disasm)
+        ]
+        int_targets = [
+            list(t) for t in targets
+            if isinstance(t, tuple) and t and all(isinstance(x, int) for x in t)
+        ]
+        if not int_targets:
+            steps.append("Disassembled the module but found no constant byte-table to match against.")
+            # Still surface a plaintext flag if the bytecode literally embeds one.
+            flag = find_first_flag(disasm)
+            if flag:
+                return self._result(challenge, "solved", steps, flag=flag)
+            return None
+
+        for target in int_targets:
+            recovered = self._invert_mpy_check(disasm, target, steps)
+            if not recovered:
+                continue
+            steps.append(
+                "Verified the candidate against the reconstructed bytecode "
+                "transform without executing the untrusted module."
+            )
+            steps.append(f"Recovered the accepted input (the 'syllable'): {recovered!r}")
+            flag = find_first_flag(recovered) or f"HTB{{{recovered}}}"
+            steps.append(f"Flag candidate: {flag}  (raw syllable: {recovered})")
+            return self._result(
+                challenge, "solved", steps, flag=flag,
+                artifacts={"mpy_recovered_input": recovered, "mpy_target_len": len(target)},
+            )
+
+        steps.append("Could not invert the .mpy input check automatically; disassembly captured for review.")
+        return self._result(challenge, "attempted", steps, artifacts={"mpy_disassembly": disasm[:4000]})
+
+    def _disassemble_mpy(self, mpy_path: str, steps: List[str]) -> Optional[str]:
+        """Run the vendored MicroPython disassembler; return its text output."""
+        tool = Path(__file__).resolve().parents[3] / "tools" / "reverse" / "mpy" / "mpy_tool.py"
+        if not tool.is_file():
+            steps.append("Vendored mpy-tool.py not found; cannot disassemble .mpy.")
+            return None
+        try:
+            result = subprocess.run(
+                [sys.executable, str(tool), "-d", mpy_path],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            steps.append(f".mpy disassembly failed: {exc}")
+            return None
+        if result.returncode != 0 or not result.stdout:
+            steps.append(f".mpy disassembly produced no output ({result.stderr.strip()[:120]}).")
+            return None
+        return result.stdout
+
+    def _invert_mpy_check(self, disasm: str, target: List[int], steps: List[str]) -> Optional[str]:
+        """Rebuild the per-byte transform from the disassembly and invert it.
+
+        Reconstructs ``emit(acc, c, i)`` (the value compared to ``target[i]``) and
+        ``acc'(acc, c, i)`` (the rolling-accumulator update) as safe arithmetic
+        expressions over the byte ``c``, accumulator ``acc``, and index ``i``,
+        then solves each position with a 0..255 search carrying the accumulator.
+        """
+        ops: List[Tuple[str, str]] = []
+        for line in disasm.splitlines():
+            m = re.match(r"\s+[0-9a-f:]+\s+([A-Z_]+)\s*(.*)", line)
+            if m:
+                ops.append((m.group(1), m.group(2).strip()))
+        if not any(o == "DUP_TOP" for o, _ in ops) or not any(o == "POP_JUMP_IF_TRUE" for o, _ in ops):
+            return None
+
+        def slot(arg: str) -> int:
+            mm = re.match(r"(\d+)", arg)
+            return int(mm.group(1)) if mm else -1
+
+        init_acc = acc_slot = cnt_slot = emit_slot = None
+        for i, (op, arg) in enumerate(ops):
+            if op == "LOAD_CONST_SMALL_INT" and i + 1 < len(ops) and ops[i + 1][0] == "STORE_FAST":
+                if init_acc is None:
+                    init_acc, acc_slot = int(arg), slot(ops[i + 1][1])
+            if op == "DUP_TOP" and i + 1 < len(ops) and ops[i + 1][0] == "STORE_FAST":
+                cnt_slot = slot(ops[i + 1][1])
+            if op == "LOAD_METHOD" and arg.startswith("append"):
+                for j in range(i + 1, min(i + 4, len(ops))):
+                    if ops[j][0] == "LOAD_FAST":
+                        emit_slot = slot(ops[j][1])
+                        break
+        if init_acc is None or acc_slot is None or cnt_slot is None or emit_slot is None:
+            return None
+
+        start = next(k for k, (o, _) in enumerate(ops) if o == "DUP_TOP")
+        end = next(k for k, (o, _) in enumerate(ops) if o == "POP_JUMP_IF_TRUE")
+        body = ops[start:end]
+
+        slot_expr: Dict[int, str] = {}
+        stack: List[str] = []
+        k = 0
+        while k < len(body):
+            op, arg = body[k]
+            if op == "LOAD_GLOBAL" and arg.startswith("ord"):
+                # ord(syllable[i]) collapses to the unknown byte 'c'.
+                j = k
+                while j < len(body) and body[j][0] != "CALL_FUNCTION":
+                    j += 1
+                stack.append("c")
+                k = j + 1
+                continue
+            if op == "LOAD_FAST":
+                s = slot(arg)
+                stack.append("acc" if s == acc_slot else ("i" if s == cnt_slot else f"z{s}"))
+            elif op == "LOAD_CONST_SMALL_INT":
+                stack.append(str(int(arg)))
+            elif op == "BINARY_OP":
+                name = arg.split()[-1]
+                if name in self._MPY_BINOPS and len(stack) >= 2:
+                    b, a = stack.pop(), stack.pop()
+                    stack.append(f"({a} {self._MPY_BINOPS[name]} {b})")
+            elif op == "STORE_FAST" and stack:
+                slot_expr[slot(arg)] = stack.pop()
+            k += 1
+
+        emit_expr, acc_expr = slot_expr.get(emit_slot), slot_expr.get(acc_slot)
+        if not emit_expr or not acc_expr:
+            return None
+        if not self._MPY_SAFE_EXPR.match(emit_expr) or not self._MPY_SAFE_EXPR.match(acc_expr):
+            steps.append("Reconstructed transform contained unexpected tokens; refusing to evaluate.")
+            return None
+        steps.append(f"Reconstructed check: emit = {emit_expr}; acc' = {acc_expr}; acc0 = {init_acc}.")
+
+        safe_ns = {"__builtins__": {}}
+        emit = eval(f"lambda acc, c, i: {emit_expr}", safe_ns)  # noqa: S307 - expr is token-validated
+        update = eval(f"lambda acc, c, i: {acc_expr}", safe_ns)  # noqa: S307
+
+        acc = init_acc
+        recovered: List[int] = []
+        for i, want in enumerate(target):
+            for c in range(256):
+                try:
+                    if emit(acc, c, i) == want:
+                        recovered.append(c)
+                        acc = update(acc, c, i)
+                        break
+                except Exception:
+                    return None
+            else:
+                return None  # no byte satisfies this position
+        try:
+            return bytes(recovered).decode("utf-8")
+        except UnicodeDecodeError:
+            return bytes(recovered).decode("latin-1")
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities
