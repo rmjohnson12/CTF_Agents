@@ -54,6 +54,34 @@ class SequencedReasoner:
         }
 
 
+class CrossTurnVariableReasoner:
+    def __init__(self):
+        self.turn = 0
+
+    def synthesize_runtime_tool(self, challenge, history, steps, allowed_operations):
+        self.turn += 1
+        if self.turn == 1:
+            return {
+                "name": "read_encoded",
+                "evidence": ["The challenge supplied encoded.txt."],
+                "operations": [{
+                    "op": "read_artifact",
+                    "path": challenge["files"][0],
+                    "save_as": "artifact_text",
+                }],
+            }
+        return {
+            "name": "decode_prior_output",
+            "evidence": ["SFRCe2Nyb3NzX3R1cm5fdmFyaWFibGV9"],
+            "operations": [{
+                "op": "decode",
+                "source": "artifact_text",
+                "encoding": "base64",
+                "save_as": "decoded",
+            }],
+        }
+
+
 class RoutedHttpTool:
     def __init__(self):
         self.calls = []
@@ -120,6 +148,22 @@ def test_runtime_synthesis_feeds_observations_back_to_model_for_next_turn():
     assert "runtime_tool_observation" not in str(result["artifacts"])
 
 
+def test_runtime_synthesis_preserves_bounded_variables_across_turns(tmp_path):
+    artifact = tmp_path / "encoded.txt"
+    artifact.write_text("SFRCe2Nyb3NzX3R1cm5fdmFyaWFibGV9")
+    loop = RuntimeToolSynthesisLoop(CrossTurnVariableReasoner(), max_turns=2)
+
+    result = loop.attempt(
+        {"id": "runtime", "files": [str(artifact)]},
+        [],
+        ["The challenge supplied encoded.txt."],
+    )
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{cross_turn_variable}"
+    assert "_runtime_values" not in result
+
+
 def test_runtime_synthesis_rejects_cross_origin_http():
     spec = {
         "name": "leave_scope",
@@ -160,6 +204,45 @@ def test_runtime_synthesis_reads_only_supplied_artifacts(tmp_path):
     ]
     with pytest.raises(RuntimeToolValidationError, match="outside provided"):
         loop.validate_spec(bad, challenge)
+
+
+def test_runtime_synthesis_disassembles_only_supplied_artifact(monkeypatch, tmp_path):
+    artifact = tmp_path / "challenge.elf"
+    artifact.write_bytes(b"\x7fELF")
+    calls = []
+
+    monkeypatch.setattr("core.runtime_synthesis.shutil.which", lambda name: "/usr/bin/r2")
+    monkeypatch.setattr(
+        "core.runtime_synthesis.subprocess.run",
+        lambda argv, **kwargs: (
+            calls.append((argv, kwargs))
+            or SimpleNamespace(
+                stdout="0x1000 13000000 nop\nHTB{disassembly_tool}",
+                stderr="",
+                returncode=0,
+            )
+        ),
+    )
+    loop = RuntimeToolSynthesisLoop(ProposalReasoner(None))
+    challenge = {"id": "reverse", "files": [str(artifact)]}
+    spec = {
+        "name": "inspect_binary",
+        "evidence": ["The challenge supplied challenge.elf."],
+        "operations": [{
+            "op": "disassemble_artifact",
+            "path": str(artifact),
+            "max_bytes": 2048,
+            "save_as": "disassembly",
+        }],
+    }
+
+    loop.validate_spec(spec, challenge)
+    result = loop.execute_spec(spec, challenge)
+
+    assert result["flag"] == "HTB{disassembly_tool}"
+    assert calls[0][0][0] == "/usr/bin/r2"
+    assert calls[0][0][-1] == str(artifact)
+    assert calls[0][1]["timeout"] == 30
 
 
 def test_runtime_synthesis_rejects_missing_evidence():

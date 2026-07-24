@@ -541,8 +541,8 @@ You are the active solving stage for a stalled CTF workflow. Work iteratively:
 inspect the executed observations in Recent results, form the next falsifiable
 hypothesis, and compose one small ephemeral tool that advances the solve. You
 will be called again with the executed output, so do not guess beyond current
-evidence. Do not emit Python, shell commands, package installs, credentials, or
-prose outside JSON.
+evidence. Python is allowed ONLY inside a compute op's "code" field; never emit
+shell commands, package installs, credentials, or prose outside JSON.
 
 Allowed operations: {json.dumps(allowed_operations)}
 
@@ -552,7 +552,7 @@ Return exactly this shape:
   "hypothesis": "what new evidence this tests",
   "evidence": ["specific observed trace fact"],
   "operations": [
-    {{"op": "http_request|read_artifact|regex_extract|decode|json_extract", "save_as": "variable", "other_fields": "as needed"}}
+    {{"op": "http_request|read_artifact|disassemble_artifact|regex_extract|decode|json_extract|compute", "save_as": "variable", "other_fields": "as needed"}}
   ]
 }}
 
@@ -560,12 +560,23 @@ Operation fields:
 - http_request: url (same-origin absolute or relative), method GET/POST,
   optional data object, headers object, timeout_s.
 - read_artifact: path must be one of the supplied artifacts or inside a supplied directory.
+- disassemble_artifact: path must be a supplied binary artifact; optional
+  max_bytes is 64-65536. Produces bounded Radare2 analysis, functions,
+  entry-point disassembly, raw instruction bytes, and strings.
 - regex_extract: source variable, pattern, optional integer group.
 - decode: source variable, encoding base64/hex/url.
 - json_extract: source variable, dot-separated path.
-Every source variable must have been produced by an earlier operation in this
-turn. Use at most 12 operations. Prefer a narrow experiment grounded in
-observed evidence. If a prior turn failed validation, correct the cited error.
+- compute: run an algorithm you author to actually work the problem (invert a
+  transform, simulate a process, search a space, parse raw bytes). Fields: code
+  (Python <=10000 chars), optional inputs (list of prior variable names), optional
+  timeout_s. Every prior output is available as inputs[name]; supplied challenge
+  files are readable from their given paths. print() your result; a printed flag
+  is captured automatically. Use this instead of giving up when the answer needs
+  real computation rather than just fetching/decoding.
+Source variables may come from an earlier operation or from a named output in a
+prior turn's runtime_tool_observation. Use at most 12 operations. Prefer a
+narrow experiment grounded in observed evidence. If a prior turn failed
+validation, correct the cited error.
 
 Challenge:
 {json.dumps(safe_challenge, indent=2, default=str)}

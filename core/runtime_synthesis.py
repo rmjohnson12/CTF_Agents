@@ -1,20 +1,27 @@
 """Evidence-gated runtime tool synthesis.
 
 The model may compose a short-lived tool from a deliberately small operation
-DSL.  It never writes/imports Python modules or installs packages; execution is
-delegated to existing policy-enforced wrappers.
+DSL.  Observation ops (fetch/decode/regex) never write or import Python.  The
+``compute`` op lets the model run a bounded algorithm it authored, but that code
+is executed *only* through the policy-enforced ``PythonTool`` — disabled by
+default, Docker-isolated when enabled — never in this process.  This is the
+"actually work the problem" capability: given data already gathered by other
+ops, the model can invert a transform, simulate a process, or search a space.
 """
 from __future__ import annotations
 
 import base64
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urljoin, urlparse
 
 from core.utils.flag_utils import find_first_flag
 from core.utils.security import redact_sensitive_data
+from tools.common.python_tool import PythonTool
 from tools.web.http_fetch import HttpFetchTool
 
 
@@ -30,18 +37,28 @@ class RuntimeToolSynthesisLoop:
         "read_artifact",
         "regex_extract",
         "decode",
+        "disassemble_artifact",
         "json_extract",
+        "compute",
     }
+
+    # Upper bound on model-authored compute source, so a proposal can't smuggle
+    # in a huge script or blow the 50 KB spec budget on one operation.
+    MAX_COMPUTE_CODE = 10_000
 
     def __init__(
         self,
         reasoner: Any,
         http_tool: Optional[HttpFetchTool] = None,
         *,
+        python_tool: Optional[PythonTool] = None,
         max_turns: int = 4,
     ):
         self.reasoner = reasoner
         self.http_tool = http_tool or HttpFetchTool(max_preview_chars=200_000)
+        # PythonTool enforces the execution policy (disabled by default; Docker or
+        # explicit host opt-in). We never exec model code ourselves.
+        self.python_tool = python_tool or PythonTool()
         self.max_turns = min(max(int(max_turns), 1), 8)
 
     def attempt(
@@ -58,6 +75,7 @@ class RuntimeToolSynthesisLoop:
         aggregate_steps: List[str] = []
         attempted_names: List[str] = []
         seen_specs = set()
+        persisted_values: Dict[str, Any] = {}
 
         for turn in range(1, self.max_turns + 1):
             spec = propose(
@@ -91,9 +109,19 @@ class RuntimeToolSynthesisLoop:
                 default=str,
             )
             try:
-                self.validate_spec(spec, challenge, evidence_text=evidence_text)
-                result = self.execute_spec(spec, challenge)
+                self.validate_spec(
+                    spec,
+                    challenge,
+                    evidence_text=evidence_text,
+                    available_sources=set(persisted_values),
+                )
+                result = self.execute_spec(
+                    spec,
+                    challenge,
+                    initial_values=persisted_values,
+                )
                 observations = result.pop("_runtime_observations", [])
+                persisted_values.update(result.pop("_runtime_values", {}))
                 aggregate_steps.append(f"AI tool turn {turn}/{self.max_turns}: {name}")
                 aggregate_steps.extend(result.get("steps") or [])
                 if result.get("status") == "solved" and result.get("flag"):
@@ -166,6 +194,7 @@ class RuntimeToolSynthesisLoop:
         challenge: Dict[str, Any],
         *,
         evidence_text: Optional[str] = None,
+        available_sources: Optional[set[str]] = None,
     ) -> None:
         if not isinstance(spec, dict):
             raise RuntimeToolValidationError("proposal must be an object")
@@ -186,7 +215,9 @@ class RuntimeToolSynthesisLoop:
         if not isinstance(operations, list) or not 1 <= len(operations) <= 12:
             raise RuntimeToolValidationError("proposal must contain 1-12 operations")
 
-        seen_outputs = {"challenge_description"}
+        prior_sources = available_sources or set()
+        seen_outputs = {"challenge_description", *prior_sources}
+        new_outputs = set()
         for index, operation in enumerate(operations):
             if not isinstance(operation, dict):
                 raise RuntimeToolValidationError(f"operation {index} is not an object")
@@ -196,10 +227,11 @@ class RuntimeToolSynthesisLoop:
             output = str(operation.get("save_as", ""))
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", output):
                 raise RuntimeToolValidationError(f"operation {index} has an invalid save_as")
-            if output in seen_outputs:
+            if output == "challenge_description" or output in new_outputs:
                 raise RuntimeToolValidationError(f"duplicate output variable {output!r}")
             self._validate_operation(kind, operation, challenge, seen_outputs)
             seen_outputs.add(output)
+            new_outputs.add(output)
 
     def _validate_operation(
         self,
@@ -215,6 +247,24 @@ class RuntimeToolSynthesisLoop:
             self._resolve_target_url(challenge, str(operation.get("url", "")))
         elif kind == "read_artifact":
             self._resolve_artifact(challenge, str(operation.get("path", "")))
+        elif kind == "disassemble_artifact":
+            self._resolve_artifact(challenge, str(operation.get("path", "")))
+            max_bytes = int(operation.get("max_bytes", 4096))
+            if not 64 <= max_bytes <= 65_536:
+                raise RuntimeToolValidationError(
+                    "disassembly max_bytes must be between 64 and 65536"
+                )
+        elif kind == "compute":
+            code = operation.get("code")
+            if not isinstance(code, str) or not code.strip():
+                raise RuntimeToolValidationError("compute requires a non-empty 'code' string")
+            if len(code) > self.MAX_COMPUTE_CODE:
+                raise RuntimeToolValidationError(
+                    f"compute code must be at most {self.MAX_COMPUTE_CODE} characters"
+                )
+            for source in operation.get("inputs", []) or []:
+                if str(source) not in seen_outputs:
+                    raise RuntimeToolValidationError(f"compute input {source!r} is not an available variable")
         elif kind in {"regex_extract", "decode", "json_extract"}:
             source = str(operation.get("source", ""))
             if source not in seen_outputs:
@@ -231,10 +281,18 @@ class RuntimeToolSynthesisLoop:
             }:
                 raise RuntimeToolValidationError("unsupported decode encoding")
 
-    def execute_spec(self, spec: Dict[str, Any], challenge: Dict[str, Any]) -> Dict[str, Any]:
+    def execute_spec(
+        self,
+        spec: Dict[str, Any],
+        challenge: Dict[str, Any],
+        *,
+        initial_values: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         values: Dict[str, Any] = {
             "challenge_description": str(challenge.get("description", "")),
+            **(initial_values or {}),
         }
+        new_values: Dict[str, Any] = {}
         steps = [
             f"Validated ephemeral runtime tool: {str(spec['name'])[:80]}",
             f"Hypothesis: {str(spec.get('hypothesis', 'unspecified'))[:300]}",
@@ -246,6 +304,7 @@ class RuntimeToolSynthesisLoop:
             kind = operation["op"]
             output = operation["save_as"]
             values[output] = self._execute_operation(kind, operation, challenge, values)
+            new_values[output] = values[output]
             rendered = self._bounded_text(values[output])
             observations.append({
                 "operation": kind,
@@ -274,6 +333,7 @@ class RuntimeToolSynthesisLoop:
                 }
             },
             "_runtime_observations": observations,
+            "_runtime_values": new_values,
         }
 
     def _execute_operation(
@@ -297,6 +357,32 @@ class RuntimeToolSynthesisLoop:
         if kind == "read_artifact":
             path = self._resolve_artifact(challenge, operation["path"])
             return path.read_bytes()[:1_000_000].decode("utf-8", errors="replace")
+        if kind == "disassemble_artifact":
+            path = self._resolve_artifact(challenge, operation["path"])
+            r2 = shutil.which("r2") or shutil.which("radare2")
+            if not r2:
+                raise RuntimeToolValidationError(
+                    "disassemble_artifact requires radare2 on PATH"
+                )
+            max_bytes = min(max(int(operation.get("max_bytes", 4096)), 64), 65_536)
+            command = (
+                "aaa;"
+                "afl;"
+                f"pD {max_bytes} @ entry0;"
+                "izz"
+            )
+            result = subprocess.run(
+                [r2, "-q", "-e", "bin.relocs.apply=true", "-c", command, str(path)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0 and not output.strip():
+                raise RuntimeToolValidationError(
+                    f"radare2 failed with exit code {result.returncode}"
+                )
+            return output[:200_000]
         if kind == "regex_extract":
             text = self._bounded_text(values[operation["source"]])
             match = re.search(operation["pattern"], text, re.MULTILINE | re.DOTALL)
@@ -319,7 +405,52 @@ class RuntimeToolSynthesisLoop:
                     continue
                 value = value[int(part)] if isinstance(value, list) else value[part]
             return value
+        if kind == "compute":
+            return self._run_compute(operation, challenge, values)
         raise RuntimeToolValidationError(f"unsupported operation {kind!r}")
+
+    def _run_compute(
+        self,
+        operation: Dict[str, Any],
+        challenge: Dict[str, Any],
+        values: Dict[str, Any],
+    ) -> str:
+        """Run a model-authored algorithm via the sandboxed PythonTool.
+
+        Every prior operation output is exposed to the script as ``inputs[name]``
+        (JSON-safe, bounded), and any supplied challenge files are mounted
+        read-only in the Docker sandbox so the code can parse raw artifacts. The
+        script is expected to ``print`` its result; the loop scans that output
+        for a flag or carries it forward for the next turn. Execution honours the
+        PythonTool policy: it stays disabled unless the operator enables a
+        sandbox, so this op cannot run arbitrary code without an explicit opt-in.
+        """
+        code = str(operation["code"])
+        payload = {name: self._bounded_text(value)[:50_000] for name, value in values.items()}
+        preamble = (
+            "import base64 as _b64, json as _json\n"
+            "inputs = _json.loads(_b64.b64decode(%r).decode())\n"
+            % base64.b64encode(json.dumps(payload, default=str).encode()).decode()
+        )
+        timeout_s = min(max(int(operation.get("timeout_s", 10)), 1), 30)
+        result = self.python_tool.run(
+            preamble + "\n" + code,
+            timeout_s=timeout_s,
+            artifact_paths=[str(f) for f in (challenge.get("files") or [])],
+            allow_network=False,
+        )
+        if result.timed_out:
+            raise RuntimeToolValidationError(f"compute exceeded its {timeout_s}s time budget")
+        if result.exit_code == 126:
+            # Execution backend is disabled/misconfigured — surface how to enable it.
+            raise RuntimeToolValidationError(
+                (result.stderr or "compute execution backend is disabled").strip()[:300]
+            )
+        stdout = result.stdout or ""
+        if not stdout.strip() and result.stderr:
+            # Return the error text so the model can revise its code next turn.
+            return f"[compute error]\n{result.stderr[:4000]}"
+        return stdout[:200_000]
 
     @staticmethod
     def _safe_headers(value: Any) -> Optional[Dict[str, str]]:
