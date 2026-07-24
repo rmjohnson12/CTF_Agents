@@ -5,9 +5,12 @@ It classifies a challenge, selects a specialist, executes bounded tools and
 playbooks, records evidence, and reports either a verified result or a concrete
 failure reason.
 
-The project supports cryptography, reverse engineering, web, pwn, hardware,
-forensics, blockchain, secure-coding, networking, OSINT, log-analysis, and
-general coding challenges. Detailed coverage lives in
+The project supports cryptography, quantum protocols, reverse engineering, web,
+pwn, hardware, forensics, blockchain, secure-coding, networking, OSINT,
+log-analysis, and general coding challenges. Platform labels do not have to map
+one-to-one to specialists: an AI/ML challenge built around a poisoned Git
+archive, for example, can route to forensics and then use AI-driven recovery.
+Detailed coverage lives in
 [docs/capabilities.md](docs/capabilities.md).
 
 ## Installation
@@ -18,12 +21,14 @@ cd CTF_Agents
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 python3 check_setup.py
 ```
 
-Copy `.env.example` to `.env` and add an optional supported LLM key for
-LLM-assisted planning. Deterministic specialist paths remain available without
-an LLM where implemented.
+The project-root `.env.example` is the supported configuration template. Add
+one or more optional provider credentials for live model reasoning.
+Deterministic specialist paths remain available without an LLM where
+implemented.
 
 ## Quick Start
 
@@ -66,9 +71,53 @@ python3 ask.py "Decode the Saleae capture in ~/Downloads/capture.sal"
 # Remote pwn target with local files
 CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
   python3 ask.py "Pwn challenge at TARGET:PORT; files are in ~/Downloads/pwn"
+
+# Git repository with evidence in deleted history
+python3 ask.py "Forensics challenge; files are in ~/Downloads/repository"
 ```
 
 See [examples/README.md](examples/README.md) for deterministic golden paths.
+
+## Optional AI-Driven Recovery
+
+CTF_Agents can use an actual configured model, rather than only hard-coded
+playbooks. The coordinator tries normal specialist routes first. If they stall,
+the model receives bounded, redacted observations and can iteratively propose
+evidence-backed operations. The default recovery budget is four model/tool
+turns.
+
+Supported providers are NVIDIA NIM, Anthropic, OpenAI, Google Gemini/Vertex AI,
+and local Ollama. Choose a preferred provider and configure its credential in
+the project-root `.env`:
+
+```dotenv
+LLM_PROVIDER=nvidia
+NVAPI_KEY=your_nvidia_api_key
+
+# Recommended when the model needs to calculate, simulate, or parse raw data.
+CTF_AGENTS_SANDBOX=docker
+```
+
+The recovery loop can compose same-origin HTTP requests, bounded artifact reads,
+regular-expression extraction, base64/hex/URL decoding, JSON traversal,
+read-only Radare2 disassembly, and read-only Git history/patch inspection.
+Values remain available between recovery turns.
+
+For algorithmic work, the model can author a temporary Python computation. It
+does not run in the coordinator process: execution is disabled by default and
+is permitted only through the locked-down Docker backend or the explicit,
+dangerous host-execution opt-in documented in `.env.example`. Docker compute
+runs without network access and with read-only artifact mounts, resource
+limits, and a strict timeout.
+
+Only a flag found in executed output can mark a run as solved. Model suggestions
+and guesses are not accepted as results. Live reasoning is best-effort:
+provider availability, quota, output quality, and the turn limit can still
+produce an `attempted` result with a concrete trace instead of a flag.
+
+See [Runtime tool synthesis](docs/runtime_tool_synthesis.md) and
+[Security model](docs/security_model.md) for the complete operation and policy
+boundaries.
 
 ## Optional Live Reporting
 
@@ -133,6 +182,20 @@ or executes source-detected transaction sequences such as pre-0.8 ERC20
 underflow purchases. It signs the required web3 transactions and verifies
 `isSolved()` before retrieving the flag.
 
+## Persistence and Learning
+
+Normal runs and campaigns use separate SQLite stores under `logs/`:
+
+- `knowledge.db` stores reusable challenge facts.
+- `performance.db` stores routing and outcome telemetry.
+- `solve_traces.db` stores compact successful technique traces without raw
+  flags.
+- `attempts.db` stores bounded campaign attempts and failure history.
+
+Sensitive result fields are redacted. Campaign and solve-trace flag comparisons
+use hashes instead of raw flag values. See the
+[Operator's guide](docs/operators_guide.md) for retention and reuse details.
+
 ## Repository Layout
 
 ```text
@@ -172,10 +235,24 @@ to test. Network allowlists, environment isolation, artifact redaction, Docker
 controls, and host-execution controls are documented in
 [docs/security_model.md](docs/security_model.md).
 
+## Development and Verification
+
+Run the complete deterministic suite without contacting an LLM provider:
+
+```bash
+LLM_PROVIDER=none .venv/bin/python -m pytest -q
+```
+
+Provider integration tests are opt-in. New runtime, sandbox, and specialist
+changes should include focused tests plus the full offline suite before
+publication. See [Testing](docs/testing.md) for the available test groups.
+
 ## Status
 
 CTF_Agents is under active development. Compatibility is preserved where
-practical, and new changes should include focused tests and documentation.
+practical. Deterministic paths are regression-tested; provider-driven recovery
+is intentionally reported as best-effort and may stop with an evidence-backed
+failure instead of a solved flag.
 
 ## License
 
