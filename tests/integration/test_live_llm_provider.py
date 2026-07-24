@@ -124,3 +124,30 @@ def test_live_llm_recovery_review_returns_action_schema(monkeypatch):
             f"provider={provider!r}, model={model!r}, "
             f"post_call_provider={reasoner.provider!r}"
         )
+
+
+def test_live_llm_proposes_valid_agentic_runtime_action(monkeypatch):
+    reasoner = _live_reasoner_or_skip(monkeypatch)
+    from core.runtime_synthesis import RuntimeToolSynthesisLoop
+
+    challenge = {
+        "id": "live_agentic_probe",
+        "category": "misc",
+        "description": "Inspect the observed API endpoint for the encoded result.",
+        "url": "http://target.invalid:31337",
+        "files": [],
+    }
+    steps = ["Recon observed the same-origin endpoint /api/result."]
+    proposal = reasoner.synthesize_runtime_tool(
+        challenge,
+        [],
+        steps,
+        sorted(RuntimeToolSynthesisLoop.ALLOWED_OPERATIONS),
+    )
+
+    assert isinstance(proposal, dict)
+    RuntimeToolSynthesisLoop(reasoner).validate_spec(
+        proposal,
+        challenge,
+        evidence_text=json.dumps({"challenge": challenge, "history": [], "steps": steps}),
+    )

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urljoin, urlparse
 
 from core.utils.flag_utils import find_first_flag
+from core.utils.security import redact_sensitive_data
 from tools.web.http_fetch import HttpFetchTool
 
 
@@ -22,7 +23,7 @@ class RuntimeToolValidationError(ValueError):
 
 
 class RuntimeToolSynthesisLoop:
-    """Validate and execute one ephemeral, declarative recovery tool."""
+    """Run a bounded model-driven observe/propose/execute recovery loop."""
 
     ALLOWED_OPERATIONS = {
         "http_request",
@@ -32,9 +33,16 @@ class RuntimeToolSynthesisLoop:
         "json_extract",
     }
 
-    def __init__(self, reasoner: Any, http_tool: Optional[HttpFetchTool] = None):
+    def __init__(
+        self,
+        reasoner: Any,
+        http_tool: Optional[HttpFetchTool] = None,
+        *,
+        max_turns: int = 4,
+    ):
         self.reasoner = reasoner
         self.http_tool = http_tool or HttpFetchTool(max_preview_chars=200_000)
+        self.max_turns = min(max(int(max_turns), 1), 8)
 
     def attempt(
         self,
@@ -45,37 +53,112 @@ class RuntimeToolSynthesisLoop:
         propose = getattr(self.reasoner, "synthesize_runtime_tool", None)
         if not callable(propose):
             return None
-        spec = propose(challenge, history, trace_steps, sorted(self.ALLOWED_OPERATIONS))
-        if not spec:
-            return None
+        working_history = list(history[-6:])
+        working_steps = list(trace_steps[-60:])
+        aggregate_steps: List[str] = []
+        attempted_names: List[str] = []
+        seen_specs = set()
 
-        try:
+        for turn in range(1, self.max_turns + 1):
+            spec = propose(
+                challenge,
+                working_history,
+                working_steps,
+                sorted(self.ALLOWED_OPERATIONS),
+            )
+            if not spec:
+                if turn == 1:
+                    return None
+                aggregate_steps.append(f"AI solver stopped after {turn - 1} tool turn(s).")
+                break
+
+            signature = json.dumps(spec, sort_keys=True, default=str)
+            if signature in seen_specs:
+                aggregate_steps.append(
+                    f"AI solver stopped at turn {turn}: the model repeated an earlier tool."
+                )
+                break
+            seen_specs.add(signature)
+            name = str(spec.get("name", "unnamed"))[:80]
+            attempted_names.append(name)
+
             evidence_text = json.dumps(
                 {
                     "challenge": challenge,
-                    "history": history[-6:],
-                    "steps": trace_steps[-60:],
+                    "history": working_history[-8:],
+                    "steps": working_steps[-80:],
                 },
                 default=str,
             )
-            self.validate_spec(spec, challenge, evidence_text=evidence_text)
-            return self.execute_spec(spec, challenge)
-        except Exception as exc:
-            return {
-                "challenge_id": challenge.get("id"),
-                "agent_id": "runtime_tool_synthesizer",
-                "status": "attempted",
-                "flag": None,
-                "steps": [f"Synthesized tool rejected or failed safely: {exc}"],
-                "artifacts": {
-                    "runtime_tool_synthesis": {
-                        "name": str(spec.get("name", "unnamed"))[:80],
-                        "validated": False,
-                        "captured_sensitive_values": False,
-                        "techniques": ["runtime_tool_synthesis"],
-                    }
-                },
-            }
+            try:
+                self.validate_spec(spec, challenge, evidence_text=evidence_text)
+                result = self.execute_spec(spec, challenge)
+                observations = result.pop("_runtime_observations", [])
+                aggregate_steps.append(f"AI tool turn {turn}/{self.max_turns}: {name}")
+                aggregate_steps.extend(result.get("steps") or [])
+                if result.get("status") == "solved" and result.get("flag"):
+                    result["steps"] = aggregate_steps
+                    result["artifacts"]["runtime_tool_synthesis"].update({
+                        "turns_used": turn,
+                        "tool_names": attempted_names,
+                        "agentic_loop": True,
+                    })
+                    return result
+
+                feedback = {
+                    "agent_id": "runtime_tool_synthesizer",
+                    "status": "attempted",
+                    "steps": result.get("steps") or [],
+                    "artifacts": {
+                        "runtime_tool_observation": {
+                            "turn": turn,
+                            "name": name,
+                            "outputs": redact_sensitive_data(observations),
+                        }
+                    },
+                }
+            except Exception as exc:
+                message = f"Synthesized tool rejected or failed safely: {exc}"
+                aggregate_steps.extend([
+                    message,
+                    f"AI tool turn {turn}/{self.max_turns}: {name}",
+                ])
+                feedback = {
+                    "agent_id": "runtime_tool_synthesizer",
+                    "status": "attempted",
+                    "steps": [message],
+                    "artifacts": {
+                        "runtime_tool_observation": {
+                            "turn": turn,
+                            "name": name,
+                            "validation_error": str(exc)[:1000],
+                        }
+                    },
+                }
+
+            working_history.append(feedback)
+            working_history = working_history[-8:]
+            working_steps.extend(feedback["steps"])
+            working_steps = working_steps[-80:]
+
+        return {
+            "challenge_id": challenge.get("id"),
+            "agent_id": "runtime_tool_synthesizer",
+            "status": "attempted",
+            "flag": None,
+            "steps": aggregate_steps,
+            "artifacts": {
+                "runtime_tool_synthesis": {
+                    "name": attempted_names[-1] if attempted_names else "none",
+                    "validated": bool(attempted_names),
+                    "captured_sensitive_values": False,
+                    "techniques": ["runtime_tool_synthesis", "agentic_tool_loop"],
+                    "turns_used": len(attempted_names),
+                    "tool_names": attempted_names,
+                    "agentic_loop": True,
+                }
+            },
+        }
 
     def validate_spec(
         self,
@@ -157,12 +240,18 @@ class RuntimeToolSynthesisLoop:
             f"Hypothesis: {str(spec.get('hypothesis', 'unspecified'))[:300]}",
         ]
         flag = None
+        observations: List[Dict[str, Any]] = []
 
         for operation in spec["operations"]:
             kind = operation["op"]
             output = operation["save_as"]
             values[output] = self._execute_operation(kind, operation, challenge, values)
             rendered = self._bounded_text(values[output])
+            observations.append({
+                "operation": kind,
+                "save_as": output,
+                "output": rendered[:8_000],
+            })
             flag = find_first_flag(rendered)
             steps.append(f"Executed synthesized operation {kind} -> {output}.")
             if flag:
@@ -184,6 +273,7 @@ class RuntimeToolSynthesisLoop:
                     "techniques": ["runtime_tool_synthesis"],
                 }
             },
+            "_runtime_observations": observations,
         }
 
     def _execute_operation(

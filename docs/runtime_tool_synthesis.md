@@ -1,8 +1,9 @@
 # Runtime Tool Synthesis
 
-Runtime tool synthesis is the coordinator's final recovery tier for challenges
-that do not match a shipped playbook. It runs only after normal specialist
-routing and the existing recovery review fail to solve the challenge.
+Runtime tool synthesis is the coordinator's final, AI-driven recovery tier for
+challenges that do not match a shipped playbook. It runs after normal
+specialist routing and recovery review fail, then gives the configured model a
+bounded observe/propose/execute loop instead of requiring a prewritten solver.
 
 ## Flow
 
@@ -13,8 +14,11 @@ routing and the existing recovery review fail to solve the challenge.
 3. The validator checks that the quoted evidence is present in the trace and
    that every operation stays within policy.
 4. Existing wrappers execute the specification one operation at a time.
-5. Only a flag extracted from executed output can produce `solved`.
-6. The specification disappears after the run. Its non-sensitive technique
+5. Bounded, redacted observations are returned to the model for the next turn.
+6. The model may revise its hypothesis or correct a rejected action, up to four
+   turns by default.
+7. Only a flag extracted from executed output can produce `solved`.
+8. Specifications disappear after the run. Non-sensitive technique
    name may be retained in solve-trace memory.
 
 Supported operations are same-origin GET/POST requests, reads within supplied
@@ -31,8 +35,10 @@ tool wrapper while keeping execution inside known, testable primitives.
 
 ## Current limits
 
-- One proposal is attempted per stalled solve.
+- Four model/tool turns are attempted per stalled solve (hard cap: eight).
 - Specifications contain at most 12 operations and 50 KB of JSON.
+- Individual observations are capped before they are returned to the model and
+  are not persisted in the public solve result.
 - HTTP stays on the challenge origin and does not follow redirects.
 - Artifact reads are capped and cannot escape supplied paths.
 - Regexes reject lookarounds, backreferences, and quantified groups.

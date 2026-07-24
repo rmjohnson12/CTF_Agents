@@ -26,6 +26,44 @@ class FakeHttpTool:
         return SimpleNamespace(body_preview=self.body)
 
 
+class SequencedReasoner:
+    def __init__(self):
+        self.turn = 0
+        self.histories = []
+
+    def synthesize_runtime_tool(self, challenge, history, steps, allowed_operations):
+        self.histories.append(history)
+        self.turn += 1
+        if self.turn == 1:
+            return {
+                "name": "inspect_root",
+                "hypothesis": "The root page may disclose a next endpoint.",
+                "evidence": ["The root page was observed."],
+                "operations": [
+                    {"op": "http_request", "url": "/", "save_as": "response"}
+                ],
+            }
+        assert "next=/secret" in str(history[-1])
+        return {
+            "name": "follow_observed_endpoint",
+            "hypothesis": "The observed endpoint may contain the result.",
+            "evidence": ["next=/secret"],
+            "operations": [
+                {"op": "http_request", "url": "/secret", "save_as": "response"}
+            ],
+        }
+
+
+class RoutedHttpTool:
+    def __init__(self):
+        self.calls = []
+
+    def fetch(self, url, **kwargs):
+        self.calls.append(url)
+        body = "next=/secret" if url.endswith("/") else "HTB{agentic_runtime_loop}"
+        return SimpleNamespace(body_preview=body)
+
+
 def test_runtime_synthesis_executes_bounded_http_decode_chain():
     proposal = {
         "name": "decode_api_result",
@@ -56,6 +94,30 @@ def test_runtime_synthesis_executes_bounded_http_decode_chain():
     assert result["flag"] == "HTB{runtime_tool}"
     assert http.calls[0][0] == "http://target.local:31337/api/result"
     assert result["artifacts"]["runtime_tool_synthesis"]["validated"] is True
+
+
+def test_runtime_synthesis_feeds_observations_back_to_model_for_next_turn():
+    reasoner = SequencedReasoner()
+    http = RoutedHttpTool()
+    loop = RuntimeToolSynthesisLoop(reasoner, http_tool=http, max_turns=3)
+
+    result = loop.attempt(
+        {"id": "runtime", "url": "http://target.local:31337", "files": []},
+        [],
+        ["The root page was observed."],
+    )
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{agentic_runtime_loop}"
+    assert http.calls == [
+        "http://target.local:31337/",
+        "http://target.local:31337/secret",
+    ]
+    metadata = result["artifacts"]["runtime_tool_synthesis"]
+    assert metadata["agentic_loop"] is True
+    assert metadata["turns_used"] == 2
+    assert metadata["tool_names"] == ["inspect_root", "follow_observed_endpoint"]
+    assert "runtime_tool_observation" not in str(result["artifacts"])
 
 
 def test_runtime_synthesis_rejects_cross_origin_http():

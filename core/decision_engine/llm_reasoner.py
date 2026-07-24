@@ -530,16 +530,19 @@ class LLMReasoner:
         steps: List[str],
         allowed_operations: List[str],
     ) -> Optional[Dict[str, Any]]:
-        """Propose one evidence-bound tool using the constrained runtime DSL."""
+        """Propose the next evidence-bound action in the agentic tool loop."""
         if self.client is None:
             return None
         safe_challenge = redact_sensitive_data(challenge)
         safe_history = redact_sensitive_data(history[-6:])
         safe_steps = redact_sensitive_data(steps[-60:])
         prompt = f"""
-You are the tool-building recovery stage for a stalled CTF workflow. Compose one
-small, ephemeral tool from the allowed declarative operations. Do not emit
-Python, shell commands, package installs, credentials, or prose outside JSON.
+You are the active solving stage for a stalled CTF workflow. Work iteratively:
+inspect the executed observations in Recent results, form the next falsifiable
+hypothesis, and compose one small ephemeral tool that advances the solve. You
+will be called again with the executed output, so do not guess beyond current
+evidence. Do not emit Python, shell commands, package installs, credentials, or
+prose outside JSON.
 
 Allowed operations: {json.dumps(allowed_operations)}
 
@@ -560,8 +563,9 @@ Operation fields:
 - regex_extract: source variable, pattern, optional integer group.
 - decode: source variable, encoding base64/hex/url.
 - json_extract: source variable, dot-separated path.
-Every source variable must have been produced by an earlier operation. Use at
-most 12 operations. Prefer a narrow experiment grounded in observed evidence.
+Every source variable must have been produced by an earlier operation in this
+turn. Use at most 12 operations. Prefer a narrow experiment grounded in
+observed evidence. If a prior turn failed validation, correct the cited error.
 
 Challenge:
 {json.dumps(safe_challenge, indent=2, default=str)}

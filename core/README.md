@@ -30,8 +30,9 @@ Optional live solve reporting: `client.py`, `server.py`, `store.py`, `models.py`
 `redaction.py`.
 
 ### runtime_synthesis.py
-Evidence-gated composition of small ephemeral declarative tools (no host code
-execution). See [../docs/runtime_tool_synthesis.md](../docs/runtime_tool_synthesis.md).
+Evidence-gated, iterative AI tool loop that observes bounded outputs and
+composes ephemeral declarative actions (no host code execution). See
+[../docs/runtime_tool_synthesis.md](../docs/runtime_tool_synthesis.md).
 
 ### utils/
 Shared helpers: `security.py` (network allowlist / redaction / safe paths),
