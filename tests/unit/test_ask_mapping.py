@@ -212,6 +212,29 @@ def test_downloads_root_is_not_expanded_as_challenge_directory(tmp_path, monkeyp
     assert _expand_challenge_artifacts([str(downloads)]) == []
 
 
+def test_git_repository_is_preserved_as_challenge_artifact(tmp_path):
+    repository = tmp_path / "memento"
+    (repository / ".git").mkdir(parents=True)
+    (repository / "current.html").write_text("<html></html>")
+
+    assert _expand_challenge_artifacts([str(repository)]) == [
+        str(repository.resolve())
+    ]
+
+
+def test_git_repository_routes_as_forensics(tmp_path):
+    repository = tmp_path / "memento"
+    (repository / ".git").mkdir(parents=True)
+
+    challenge = _heuristic_challenge_from_instruction(
+        f"AI/ML challenge files are in {repository}",
+        available_tools=[],
+    )
+
+    assert challenge["category"] == "forensics"
+    assert challenge["files"] == [str(repository.resolve())]
+
+
 def test_small_pwn_directory_includes_versioned_libc_and_loader(tmp_path):
     challenge_dir = tmp_path / "bird"
     glibc_dir = challenge_dir / "glibc"

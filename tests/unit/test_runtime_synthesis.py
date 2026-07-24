@@ -1,3 +1,4 @@
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -243,6 +244,104 @@ def test_runtime_synthesis_disassembles_only_supplied_artifact(monkeypatch, tmp_
     assert calls[0][0][0] == "/usr/bin/r2"
     assert calls[0][0][-1] == str(artifact)
     assert calls[0][1]["timeout"] == 30
+
+
+def test_runtime_synthesis_inspects_only_explicit_git_repository(monkeypatch, tmp_path):
+    repository = tmp_path / "challenge"
+    repository.mkdir()
+    (repository / ".git").mkdir()
+    nested = repository / "nested"
+    nested.mkdir()
+    calls = []
+
+    monkeypatch.setattr("core.runtime_synthesis.shutil.which", lambda name: "/usr/bin/git")
+    monkeypatch.setattr(
+        "core.runtime_synthesis.subprocess.run",
+        lambda argv, **kwargs: (
+            calls.append((argv, kwargs))
+            or SimpleNamespace(
+                stdout="-flag = HTB{deleted_history}\n",
+                stderr="",
+                returncode=0,
+            )
+        ),
+    )
+    loop = RuntimeToolSynthesisLoop(ProposalReasoner(None))
+    challenge = {"id": "git", "files": [str(repository)]}
+    spec = {
+        "name": "inspect_deleted_files",
+        "evidence": ["The challenge supplied a Git repository."],
+        "operations": [{
+            "op": "inspect_git_history",
+            "path": str(repository),
+            "max_commits": 12,
+            "save_as": "history",
+        }],
+    }
+
+    loop.validate_spec(spec, challenge)
+    result = loop.execute_spec(spec, challenge)
+
+    assert result["flag"] == "HTB{deleted_history}"
+    assert calls[0][0][:4] == [
+        "/usr/bin/git", "-C", str(repository), "--no-pager"
+    ]
+    assert "--max-count=12" in calls[0][0]
+    assert calls[0][1]["timeout"] == 30
+
+    nested_spec = {
+        **spec,
+        "operations": [{
+            **spec["operations"][0],
+            "path": str(nested),
+        }],
+    }
+    with pytest.raises(RuntimeToolValidationError, match="explicitly supplied"):
+        loop.validate_spec(nested_spec, challenge)
+
+
+def test_runtime_synthesis_git_history_includes_deleted_content(tmp_path):
+    repository = tmp_path / "challenge"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repository), "config", "user.name", "Test"],
+        check=True,
+    )
+    erased = repository / "erased.txt"
+    erased.write_text("training rite: campaign-key=remember-me\n")
+    subprocess.run(["git", "-C", str(repository), "add", "erased.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-q", "-m", "add rite"],
+        check=True,
+    )
+    erased.unlink()
+    subprocess.run(["git", "-C", str(repository), "add", "-u"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repository), "commit", "-q", "-m", "erase rite"],
+        check=True,
+    )
+
+    loop = RuntimeToolSynthesisLoop(ProposalReasoner(None))
+    challenge = {"id": "git", "files": [str(repository)]}
+    output = loop._execute_operation(
+        "inspect_git_history",
+        {
+            "op": "inspect_git_history",
+            "path": str(repository),
+            "max_commits": 10,
+            "save_as": "history",
+        },
+        challenge,
+        {},
+    )
+
+    assert "training rite: campaign-key=remember-me" in output
+    assert "Subject: erase rite" in output
 
 
 def test_runtime_synthesis_rejects_missing_evidence():

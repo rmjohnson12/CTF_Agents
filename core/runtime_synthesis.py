@@ -38,6 +38,7 @@ class RuntimeToolSynthesisLoop:
         "regex_extract",
         "decode",
         "disassemble_artifact",
+        "inspect_git_history",
         "json_extract",
         "compute",
     }
@@ -254,6 +255,13 @@ class RuntimeToolSynthesisLoop:
                 raise RuntimeToolValidationError(
                     "disassembly max_bytes must be between 64 and 65536"
                 )
+        elif kind == "inspect_git_history":
+            self._resolve_repository(challenge, str(operation.get("path", "")))
+            max_commits = int(operation.get("max_commits", 20))
+            if not 1 <= max_commits <= 100:
+                raise RuntimeToolValidationError(
+                    "git history max_commits must be between 1 and 100"
+                )
         elif kind == "compute":
             code = operation.get("code")
             if not isinstance(code, str) or not code.strip():
@@ -383,6 +391,42 @@ class RuntimeToolSynthesisLoop:
                     f"radare2 failed with exit code {result.returncode}"
                 )
             return output[:200_000]
+        if kind == "inspect_git_history":
+            repository = self._resolve_repository(challenge, operation["path"])
+            git = shutil.which("git")
+            if not git:
+                raise RuntimeToolValidationError(
+                    "inspect_git_history requires git on PATH"
+                )
+            max_commits = min(max(int(operation.get("max_commits", 20)), 1), 100)
+            result = subprocess.run(
+                [
+                    git,
+                    "-C",
+                    str(repository),
+                    "--no-pager",
+                    "log",
+                    "--all",
+                    "--full-history",
+                    "--no-ext-diff",
+                    f"--max-count={max_commits}",
+                    "--format=commit %H%nAuthor: %an <%ae>%nDate: %aI%nSubject: %s",
+                    "--stat",
+                    "--patch",
+                    "--",
+                    ".",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            if result.returncode != 0:
+                raise RuntimeToolValidationError(
+                    f"git history inspection failed with exit code {result.returncode}: "
+                    f"{output[:500]}"
+                )
+            return output[:200_000]
         if kind == "regex_extract":
             text = self._bounded_text(values[operation["source"]])
             match = re.search(operation["pattern"], text, re.MULTILINE | re.DOTALL)
@@ -510,3 +554,16 @@ class RuntimeToolSynthesisLoop:
                 if candidate.is_file():
                     return candidate
         raise RuntimeToolValidationError("artifact path is outside provided challenge files")
+
+    @staticmethod
+    def _resolve_repository(challenge: Dict[str, Any], proposed: str) -> Path:
+        candidate = Path(proposed).expanduser().resolve()
+        for raw in challenge.get("files") or []:
+            allowed = Path(str(raw)).expanduser().resolve()
+            if candidate != allowed:
+                continue
+            if candidate.is_dir() and (candidate / ".git").exists():
+                return candidate
+        raise RuntimeToolValidationError(
+            "git repository must be an explicitly supplied challenge directory"
+        )

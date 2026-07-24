@@ -120,6 +120,20 @@ class ForensicsAgent(BaseAgent):
         }
 
         for file_path in files:
+            if os.path.isdir(file_path) and os.path.exists(
+                os.path.join(file_path, ".git")
+            ):
+                steps.append(
+                    f"Detected Git repository artifact at {file_path}; inspect "
+                    "its commit history and patches for deleted content."
+                )
+                all_artifacts["archives"].append({
+                    "file": file_path,
+                    "type": "git_repository",
+                    "history_available": True,
+                })
+                continue
+
             archive_flag, archive_artifact = self._analyze_krita_archive(file_path, steps)
             if archive_artifact:
                 all_artifacts["archives"].append(archive_artifact)

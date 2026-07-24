@@ -318,6 +318,13 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
                 continue
             if _is_broad_artifact_directory(p):
                 continue
+            if (p / ".git").exists():
+                # A repository's history can be the challenge artifact (for
+                # example, when the intended evidence is a deleted file).
+                # Preserve the root instead of flattening only the current
+                # working tree into a few recognized extensions.
+                expanded.append(str(p.resolve()))
+                continue
             if (p / "Dockerfile").exists():
                 expanded.append(str(p.resolve()))
                 continue
@@ -410,6 +417,10 @@ def _heuristic_challenge_from_instruction(
         if _load_challenge_json(path) is None
     ]
     challenge_files = _expand_challenge_artifacts(referenced_artifacts)
+    has_git_repository = any(
+        Path(path).is_dir() and (Path(path) / ".git").exists()
+        for path in challenge_files
+    )
 
     forensics_terms = ["hidden", "artifact", "forensics", "extract", "embedded", "strings"]
 
@@ -505,7 +516,8 @@ def _heuristic_challenge_from_instruction(
     elif has_log_term:
         category = "log"
     elif (
-        any(f.lower().endswith(('.pdf', '.pcap', '.pcapng')) for f in challenge_files)
+        has_git_repository
+        or any(f.lower().endswith(('.pdf', '.pcap', '.pcapng')) for f in challenge_files)
         or (
             any(f.lower().endswith(('.bin', '.dat')) for f in challenge_files)
             and any(term in lowered_input for term in forensics_terms)

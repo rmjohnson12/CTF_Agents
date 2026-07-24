@@ -552,7 +552,7 @@ Return exactly this shape:
   "hypothesis": "what new evidence this tests",
   "evidence": ["specific observed trace fact"],
   "operations": [
-    {{"op": "http_request|read_artifact|disassemble_artifact|regex_extract|decode|json_extract|compute", "save_as": "variable", "other_fields": "as needed"}}
+    {{"op": "http_request|read_artifact|disassemble_artifact|inspect_git_history|regex_extract|decode|json_extract|compute", "save_as": "variable", "other_fields": "as needed"}}
   ]
 }}
 
@@ -563,6 +563,9 @@ Operation fields:
 - disassemble_artifact: path must be a supplied binary artifact; optional
   max_bytes is 64-65536. Produces bounded Radare2 analysis, functions,
   entry-point disassembly, raw instruction bytes, and strings.
+- inspect_git_history: path must be an explicitly supplied Git repository;
+  optional max_commits is 1-100. Produces bounded read-only commit metadata,
+  changed paths, and patches, including deleted historical content.
 - regex_extract: source variable, pattern, optional integer group.
 - decode: source variable, encoding base64/hex/url.
 - json_extract: source variable, dot-separated path.
@@ -573,6 +576,11 @@ Operation fields:
   files are readable from their given paths. print() your result; a printed flag
   is captured automatically. Use this instead of giving up when the answer needs
   real computation rather than just fetching/decoding.
+The decode op accepts one encoded token only. When evidence describes ordered
+chunks, a repeated key, XOR, state, iteration, or any multi-step transform, use
+compute to parse and apply that algorithm; do not pass prose or an entire patch
+to decode. Evidence entries should quote a short exact substring from the
+observed challenge, trace, or prior output.
 Source variables may come from an earlier operation or from a named output in a
 prior turn's runtime_tool_observation. Use at most 12 operations. Prefer a
 narrow experiment grounded in observed evidence. If a prior turn failed
@@ -589,8 +597,29 @@ Recent results:
 """.strip()
         try:
             raw = self._call_llm(prompt)
-            cleaned = raw.strip().replace("```json", "").replace("```", "").strip()
-            proposal = json.loads(cleaned)
+            try:
+                cleaned = raw.strip().replace("```json", "").replace("```", "").strip()
+                proposal = json.loads(cleaned)
+            except json.JSONDecodeError as exc:
+                repair_prompt = f"""
+Your prior runtime-tool proposal was not valid JSON:
+{str(exc)}
+
+Return the same proposal again as one strict JSON object and nothing else.
+Escape every newline and quote inside Python code strings according to JSON.
+Do not change the intended hypothesis or operations.
+
+Invalid response:
+{raw[:20_000]}
+""".strip()
+                repaired = self._call_llm(repair_prompt)
+                cleaned = (
+                    repaired.strip()
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .strip()
+                )
+                proposal = json.loads(cleaned)
             return proposal if isinstance(proposal, dict) else None
         except Exception as exc:
             logger.warning("Runtime tool synthesis proposal failed: %s", exc)

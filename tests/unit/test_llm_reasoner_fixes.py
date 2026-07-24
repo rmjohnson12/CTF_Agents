@@ -171,6 +171,44 @@ def test_synthesize_runtime_tool_parses_declarative_proposal(monkeypatch):
     assert result == proposal
 
 
+def test_synthesize_runtime_tool_repairs_malformed_json_once(monkeypatch):
+    mock_client = MagicMock()
+    reasoner = LLMReasoner(client=mock_client)
+    proposal = {
+        "name": "compute_result",
+        "hypothesis": "The observed chunks need an algorithmic transform.",
+        "evidence": ["campaign-keyed payload chunk"],
+        "operations": [{
+            "op": "compute",
+            "save_as": "result",
+            "code": "print('done')",
+        }],
+    }
+    responses = iter([
+        '{"name":"compute_result","operations":[{"op":"compute","code":"line 1\nline 2"}]}',
+        json.dumps(proposal),
+    ])
+    prompts = []
+
+    def fake_call(prompt):
+        prompts.append(prompt)
+        return next(responses)
+
+    monkeypatch.setattr(reasoner, "_call_llm", fake_call)
+
+    result = reasoner.synthesize_runtime_tool(
+        SAMPLE_CHALLENGE,
+        [{"status": "attempted"}],
+        ["campaign-keyed payload chunk"],
+        ["compute"],
+    )
+
+    assert result == proposal
+    assert len(prompts) == 2
+    assert "not valid JSON" in prompts[1]
+    assert "Escape every newline" in prompts[1]
+
+
 def test_suggest_recovery_action_rejects_sql_without_sql_evidence(monkeypatch):
     mock_client = MagicMock()
     reasoner = LLMReasoner(client=mock_client)

@@ -23,10 +23,12 @@ bounded observe/propose/execute loop instead of requiring a prewritten solver.
 
 Supported operations are same-origin GET/POST requests, reads within supplied
 challenge artifacts, read-only Radare2 disassembly of supplied binaries,
-bounded regular-expression extraction, base64/hex/URL decoding, and JSON
-traversal. Variables flow from earlier operations and remain available across
-turns in the same ephemeral solve, allowing later actions to extract or decode
-newly observed evidence.
+bounded read-only history and patch inspection for explicitly supplied Git
+repositories, bounded regular-expression extraction, base64/hex/URL decoding,
+JSON traversal, and policy-gated computation. Variables flow from earlier
+operations and remain available across turns in the same ephemeral solve,
+allowing later actions to extract, decode, or compute from newly observed
+evidence.
 
 ## Why it is declarative
 
