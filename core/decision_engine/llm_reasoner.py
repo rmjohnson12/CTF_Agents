@@ -801,10 +801,10 @@ Recent results:
 
     Return ONLY valid JSON with this shape:
     {{
-    "category_guess": "crypto|web|reverse|pwn|forensics|osint|log|misc|blockchain|secure_coding|unknown",
+    "category_guess": "crypto|quantum|web|reverse|pwn|forensics|osint|log|misc|blockchain|secure_coding|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
+    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
@@ -844,7 +844,7 @@ Recent results:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
@@ -884,7 +884,7 @@ Recent results:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation of why this action is different from prior failed attempts",
     "inputs": {{"task": "optional focused instruction for the selected agent"}}
     }}
@@ -965,6 +965,7 @@ Recent results:
             "pwn": "pwn_agent",
             "binary": "pwn_agent",
             "hardware": "hardware_agent",
+            "quantum": "quantum_agent",
             "blockchain": "blockchain_agent",
             "secure_coding": "secure_coding_agent",
             "secure-coding": "secure_coding_agent",

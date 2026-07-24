@@ -19,6 +19,8 @@ Under `specialists/`, one package per category:
 - **pwn** / **binary_exploitation** — exploitation and exploit development
 - **forensics** — memory/disk/pcap/artifact analysis
 - **hardware_logic** — logic captures, ESP32 firmware, raw-TCP diagnostics
+- **quantum** — quantum circuits, EPR/Bell-state attacks, and vulnerable
+  quantum commitment protocols
 - **log_analysis** — log triage and event correlation
 - **blockchain** — smart-contract interaction, attacker-contract deployment, and
   source-driven legacy-token transaction playbooks

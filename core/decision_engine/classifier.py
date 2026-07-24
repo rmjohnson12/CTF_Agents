@@ -43,6 +43,26 @@ class ChallengeClassifier:
         indicators: List[str] = []
         files = challenge.get("files", [])
 
+        # Quantum protocols and circuit challenges. Keep this before classical
+        # crypto so "quantum cryptography" does not lose its specialist route.
+        if (
+            challenge.get("category") == "quantum"
+            or self._kw(
+                text,
+                "quantum", "qubit", "qiskit", "cirq", "bell state",
+                "epr pair", "bb84", "quantum bit commitment",
+            )
+        ):
+            indicators.append("quantum_terms")
+            return ChallengeAnalysis(
+                category_guess="quantum",
+                confidence=0.97,
+                reasoning="Detected quantum-circuit or quantum-protocol indicators.",
+                recommended_target="quantum_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
         # Docker context — must run before web/recon checks
         wants_docker_run = self._kw(
             text, "docker", "dockerfile", "container", "spawn", "run locally", "launch"

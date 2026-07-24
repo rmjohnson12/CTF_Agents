@@ -18,6 +18,7 @@ def test_registry_discovers_all_shipped_agents_in_stable_order():
         "log_agent",
         "networking_agent",
         "hardware_agent",
+        "quantum_agent",
         "docker_agent",
         "recon_agent",
         "pwn_agent",
@@ -75,4 +76,3 @@ def test_registry_attaches_constructed_agents_to_coordinator(monkeypatch):
 
     assert len(agents) == 1
     coordinator.register_agent.assert_called_once_with(agents[0])
-

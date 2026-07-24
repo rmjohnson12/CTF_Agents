@@ -1,0 +1,1 @@
+"""Quantum-computing challenge specialist."""

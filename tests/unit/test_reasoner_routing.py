@@ -30,6 +30,28 @@ def test_reasoner_routes_crypto():
     assert analysis.recommended_action == "run_agent"
 
 
+def test_reasoner_routes_quantum_commitment_to_quantum_agent():
+    reasoner = LLMReasoner(client=None)
+    challenge = {
+        "id": "quantum_oath",
+        "name": "The Coin That Won't Land",
+        "category": "quantum",
+        "description": (
+            "Prepare qubits, commit one half, then measure after the court "
+            "chooses the Z or X basis."
+        ),
+        "tags": ["quantum", "epr", "bit commitment"],
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert analysis.category_guess == "quantum"
+    assert analysis.recommended_target == "quantum_agent"
+    assert next_action["target"] == "quantum_agent"
+    assert analysis.recommended_action == "run_agent"
+
+
 def test_reasoner_routes_arms_race_wordplay_to_reverse_before_generic_host():
     reasoner = LLMReasoner(client=None)
     challenge = {

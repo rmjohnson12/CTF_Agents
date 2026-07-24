@@ -1,0 +1,14 @@
+{
+  "id": "golden_quantum",
+  "name": "Golden Quantum",
+  "category": "quantum",
+  "description": "Exploit a quantum bit commitment protocol by preparing Bell pairs and measuring the retained qubits after the verifier chooses the Z or X basis.",
+  "tags": ["quantum", "epr", "entanglement", "bit commitment"],
+  "expected": {
+    "command": "python3 main.py examples/quantum/challenge.json",
+    "category": "quantum",
+    "agent": "quantum_agent",
+    "status": "planned",
+    "flag": "HTB{golden_quantum}"
+  }
+}

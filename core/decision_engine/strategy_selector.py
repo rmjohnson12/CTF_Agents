@@ -32,6 +32,7 @@ _CATEGORY_DEFAULT_AGENTS = {
     "pwn": "pwn_agent",
     "binary": "pwn_agent",
     "hardware": "hardware_agent",
+    "quantum": "quantum_agent",
     "blockchain": "blockchain_agent",
     "secure_coding": "secure_coding_agent",
     "secure-coding": "secure_coding_agent",
@@ -182,7 +183,7 @@ class StrategySelector:
         _AGENT_TARGETS = {
             "pwn_agent", "crypto_agent", "coding_agent", "forensics_agent",
             "reverse_agent", "osint_agent", "log_agent", "web_agent",
-            "docker_agent", "recon_agent", "networking_agent", "hardware_agent",
+            "docker_agent", "recon_agent", "networking_agent", "hardware_agent", "quantum_agent",
             "blockchain_agent", "secure_coding_agent",
         }
         target = analysis.recommended_target
