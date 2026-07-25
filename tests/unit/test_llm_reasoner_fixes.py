@@ -926,3 +926,34 @@ def test_sdk_timeout_is_retryable_not_fatal(monkeypatch):
     assert client.messages.create.call_count == _MAX_LLM_RETRIES
     assert reasoner.client is not None
     assert reasoner.provider == "anthropic"
+
+
+def test_non_retryable_provider_error_fails_over(monkeypatch):
+    anthropic_client = MagicMock()
+    anthropic_client.messages.create.side_effect = RuntimeError(
+        "credit balance is too low"
+    )
+    nvidia_client = MagicMock()
+    nvidia_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content='{"ok": true}'))]
+    )
+    reasoner = LLMReasoner(
+        client=anthropic_client,
+        model="claude-test",
+        provider="anthropic",
+    )
+    reasoner._provider_candidates = ["anthropic", "nvidia"]
+    reasoner._provider_candidate_index = 0
+    reasoner._nvidia_keys = ["nvapi-test"]
+
+    def configure_nvidia(_index):
+        reasoner.client = nvidia_client
+
+    monkeypatch.setattr(reasoner, "_configure_nvidia_client", configure_nvidia)
+
+    result = reasoner._call_llm("return JSON")
+
+    assert result == '{"ok": true}'
+    assert reasoner.provider == "nvidia"
+    assert reasoner.client is nvidia_client
+    assert reasoner._llm_failovers == 1

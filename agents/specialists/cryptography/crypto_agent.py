@@ -4,10 +4,13 @@ Cryptography Specialist Agent
 Specialized agent for solving cryptography-based CTF challenges.
 """
 
-import os
-import logging
 import ast
+import base64
+import binascii
 import json
+import logging
+import os
+import re
 import socket
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
@@ -19,9 +22,7 @@ from agents.registry import AgentRegistry
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
 from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
-import base64
-import binascii
-import re
+from tools.common.partial_pem import looks_like_redacted_pem, parse_redacted_pem
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class CryptographyAgent(BaseAgent):
             "encoding",
             "rsa",
             "rsa_partial_prime_leak",
+            "rsa_redacted_pem",
             "aes",
             "classical_ciphers",
             "base64",
@@ -133,6 +135,9 @@ class CryptographyAgent(BaseAgent):
 
         if any(k in description for k in ["rsa", "public key", "private key", "prime leak", "p_high"]):
             cipher_types.append("rsa")
+
+        if self._has_redacted_pem(challenge.get("files", [])):
+            cipher_types.extend(["rsa", "rsa_redacted_pem"])
 
         cipher_types = sorted(set(cipher_types))
         has_crypto_indicators = len(cipher_types) > 0
@@ -220,6 +225,19 @@ class CryptographyAgent(BaseAgent):
             found = find_first_flag(plaintext)
             if found:
                 steps.append("SUCCESS: Found flag via RSA partial-prime Coppersmith attack.")
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps
+                }
+
+        redacted_pem_result = self._try_redacted_pem_key_recovery_from_files(challenge.get("files", []), steps)
+        if redacted_pem_result:
+            found = find_first_flag(redacted_pem_result)
+            if found:
+                steps.append("SUCCESS: Found flag by factoring the modulus from a redacted PEM key.")
                 return {
                     "challenge_id": challenge.get("id"),
                     "agent_id": self.agent_id,
@@ -1349,6 +1367,182 @@ class CryptographyAgent(BaseAgent):
             return decoded
 
         return None
+
+    @staticmethod
+    def _has_redacted_pem(files: List[str]) -> bool:
+        for file_path in files:
+            path = Path(file_path)
+            if not path.is_file() or path.stat().st_size > 1_000_000:
+                continue
+            try:
+                if looks_like_redacted_pem(path.read_text(encoding="utf-8", errors="ignore")):
+                    return True
+            except Exception as exc:
+                logger.debug("Could not inspect %s for a redacted PEM: %s", path, exc)
+        return False
+
+    def _try_redacted_pem_key_recovery_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
+        """Factor n when a redacted PEM still exposes the high bits of a prime.
+
+        A private key leaks far more than a public one even when most of it is
+        blanked out: the header lines carry the whole modulus, and any surviving
+        run over a prime hands Coppersmith the leading bits it needs.
+        """
+        pem_files: List[Tuple[Path, str]] = []
+        data_files: List[Path] = []
+        for file_path in files:
+            path = Path(file_path)
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read candidate PEM file %s: %s", path, exc)
+                continue
+            if looks_like_redacted_pem(text):
+                pem_files.append((path, text))
+            else:
+                data_files.append(path)
+
+        for path, text in pem_files:
+            key = parse_redacted_pem(text)
+            if key is None:
+                steps.append(
+                    f"  {path.name} is a redacted PEM, but too much of the modulus is masked to reconstruct it."
+                )
+                continue
+
+            # Coppersmith recovers a factor of n only while the unknown part
+            # stays under n^(1/4).
+            usable = [
+                fragment for fragment in key.prime_fragments
+                if fragment.unknown_bits < key.modulus_bits // 4
+            ]
+            if not usable:
+                steps.append(
+                    f"  Recovered a {key.modulus_bits}-bit modulus from {path.name}, "
+                    "but no prime fragment survived with enough leading bits."
+                )
+                continue
+
+            ciphertexts = self._collect_rsa_ciphertexts(data_files, key.modulus_bytes)
+            if not ciphertexts:
+                steps.append(f"  Recovered the modulus from {path.name}, but found no ciphertext to decrypt.")
+                continue
+
+            best = usable[0]
+            steps.append(
+                f"  Parsed redacted PEM {path.name}: {key.modulus_bits}-bit modulus with "
+                f"{key.modulus_unknown_bits} masked bits ({len(key.modulus_candidates)} candidates), "
+                f"prime fragment exposing {best.known_bits}/{best.prime_bits} leading bits."
+            )
+
+            if _FPYLLL_IMPORT_ERROR is not None:
+                steps.append(
+                    "  Cannot factor the modulus: lattice reduction needs fpylll, which failed to "
+                    f"import ({_FPYLLL_IMPORT_ERROR}). Install fpylll and cysignals."
+                )
+                return None
+
+            exponents = self._rsa_exponent_candidates(key.public_exponent, files)
+            for fragment in usable:
+                known_high = fragment.known_high << fragment.unknown_bits
+                bound = 1 << fragment.unknown_bits
+                for modulus in key.modulus_candidates:
+                    attempt: List[str] = []
+                    root = self._coppersmith_linear_factor_root(modulus, known_high, bound, attempt)
+                    if root is None:
+                        logger.debug("Coppersmith miss for modulus candidate: %s", attempt)
+                        continue
+                    prime = known_high + root
+                    if prime <= 1 or modulus % prime != 0:
+                        continue
+                    steps.append(
+                        f"  Coppersmith recovered the {fragment.unknown_bits} masked low bits of the prime "
+                        "and factored the modulus."
+                    )
+                    plaintext = self._decrypt_with_rsa_factors(
+                        modulus, prime, modulus // prime, exponents, ciphertexts
+                    )
+                    if plaintext:
+                        return plaintext
+                    steps.append("  Factored the modulus, but no ciphertext decrypted to a readable flag.")
+
+            steps.append(f"  Coppersmith did not recover a factor from {path.name}.")
+
+        return None
+
+    @staticmethod
+    def _rsa_exponent_candidates(parsed: Optional[int], files: List[str]) -> List[int]:
+        """Public exponents to try: the parsed one, any in the source, then defaults."""
+        candidates: List[int] = []
+        if parsed and parsed > 1:
+            candidates.append(parsed)
+        for file_path in files:
+            path = Path(file_path)
+            if path.suffix.lower() != ".py" or not path.is_file():
+                continue
+            try:
+                source = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read %s for an RSA exponent: %s", path, exc)
+                continue
+            for match in re.finditer(r"^\s*e\s*=\s*(0x[0-9a-fA-F]+|\d+)", source, re.MULTILINE):
+                candidates.append(int(match.group(1), 0))
+        candidates.extend([65537, 3, 5, 17, 7])
+        seen = set()
+        return [e for e in candidates if e > 1 and not (e in seen or seen.add(e))]
+
+    def _decrypt_with_rsa_factors(
+        self,
+        modulus: int,
+        p: int,
+        q: int,
+        exponents: List[int],
+        ciphertexts: List[int],
+    ) -> Optional[str]:
+        phi = (p - 1) * (q - 1)
+        size = (modulus.bit_length() + 7) // 8
+        for exponent in exponents:
+            try:
+                d = pow(exponent, -1, phi)
+            except ValueError:
+                continue
+            for ciphertext in ciphertexts:
+                raw = pow(ciphertext, d, modulus).to_bytes(size, "big")
+                message = self._strip_pkcs1_v15_padding(raw) or raw.lstrip(b"\x00")
+                decoded = message.decode("utf-8", errors="replace")
+                if find_first_flag(decoded):
+                    return decoded
+        return None
+
+    def _collect_rsa_ciphertexts(self, paths: List[Path], modulus_bytes: int) -> List[int]:
+        """Read RSA ciphertexts from raw, hex, or decimal files no larger than n."""
+        values: List[int] = []
+
+        def add(raw: bytes) -> None:
+            if raw and len(raw) <= modulus_bytes:
+                value = int.from_bytes(raw, "big")
+                if value > 1 and value not in values:
+                    values.append(value)
+
+        for path in paths:
+            if path.suffix.lower() == ".py":
+                continue
+            try:
+                raw = path.read_bytes()
+            except Exception as exc:
+                logger.debug("Could not read candidate ciphertext %s: %s", path, exc)
+                continue
+            add(raw)
+            add(self._read_hex_cipher_file(path))
+            text = raw.decode("utf-8", errors="ignore").strip()
+            if text.isdigit():
+                digits = int(text)
+                if digits > 1 and digits not in values:
+                    values.append(digits)
+
+        return values
 
     def _try_threebyte_rotate_xor_cipher_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
         source_files = [Path(f) for f in files if str(f).lower().endswith(".py")]

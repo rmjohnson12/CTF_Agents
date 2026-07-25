@@ -738,11 +738,35 @@ Invalid response:
                     logger.error("LLM authorization failed. Disabling LLM for this run and falling back to heuristic mode.")
                     self._disable_llm("authorization failed (HTTP 401/403) — check API keys")
                     return ""
+                # A non-retryable error is usually specific to the provider that
+                # raised it (unknown model, exhausted credits, a request shape it
+                # rejects), so try the other configured providers before giving up
+                # on LLM reasoning for the whole run.
+                if self._advance_provider():
+                    logger.warning(
+                        "LLM provider raised a non-retryable error (%s); failing over.",
+                        self._describe_exception(exc),
+                    )
+                    retry_count = 0
+                    continue
                 logger.error("LLM call failed with non-retryable error: %s", exc)
-                self._disable_llm(f"non-retryable error: {type(exc).__name__}")
+                self._disable_llm(f"non-retryable error: {self._describe_exception(exc)}")
                 return ""
 
         return ""
+
+    @staticmethod
+    def _describe_exception(exc: Exception) -> str:
+        """Exception type plus its message, so a degraded run is diagnosable.
+
+        Recording only the class name hides the difference between a billing
+        problem, an unknown model id, and a malformed request - all of which
+        surface as the same exception type but need different fixes.
+        """
+        message = " ".join(str(exc).split())
+        if not message:
+            return type(exc).__name__
+        return f"{type(exc).__name__}: {message[:300]}"
 
     def _disable_llm(self, reason: Optional[str] = None) -> None:
         self._disabled_reason = reason or "all configured LLM providers failed"

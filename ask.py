@@ -308,6 +308,8 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
         ".go", ".sh", ".pcap", ".pcapng", ".pdf", ".zip", ".log",
         ".csv", ".jpg", ".jpeg", ".png", ".v", ".sv", ".vhdl", ".vhd",
         ".exe", ".pck", ".gd", ".gdc", ".sol",
+        # Key material is the artifact itself in partial-key crypto challenges.
+        ".pem", ".key", ".pub", ".crt", ".der",
     }
 
     for path in paths:

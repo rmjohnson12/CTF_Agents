@@ -1,3 +1,4 @@
+import importlib
 import os
 import shutil
 import sys
@@ -181,7 +182,27 @@ def check():
             
         print(f"{status} {category}: {', '.join(found)} " + (f"(MISSING: {', '.join(missing)})" if missing else ""))
 
-    # 4. Check Workspace
+    # 4. Check solver backends
+    #
+    # These are imported lazily by the specialists, so a broken one does not
+    # crash anything - it just silently removes whole attack classes from the
+    # agents' reach. Surface them here instead.
+    print("\n--- Solver Backends ---")
+    backends = {
+        "fpylll": "lattice reduction (RSA Coppersmith / partial-key recovery)",
+        "sympy": "polynomial roots, discrete logs",
+        "z3": "constraint solving (custom cipher inversion)",
+        "Crypto": "pycryptodome primitives",
+        "gmpy2": "big-integer speedups",
+    }
+    for module, purpose in backends.items():
+        try:
+            importlib.import_module(module)
+            print(f"[+] {module}: INSTALLED ({purpose})")
+        except Exception as exc:
+            print(f"[-] {module}: UNAVAILABLE ({purpose}) — {type(exc).__name__}: {exc}")
+
+    # 5. Check Workspace
     print("\n--- Workspace ---")
     rockyou = Path.home() / "Downloads" / "rockyou.txt"
     if rockyou.exists():

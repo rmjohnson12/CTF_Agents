@@ -43,6 +43,9 @@ tests.
 - Cryptographic decoding and constraint recovery, including source-backed
   repeating-XOR known-prefix recovery and small-subgroup Diffie-Hellman oracle
   discrete-log recovery
+- Redacted-PEM key recovery: rebuilds the base64 grid of a partially masked
+  PKCS#1 private key, walks the DER with sub-byte precision to recover the
+  modulus and a prime's leading bits, then factors the modulus with Coppersmith
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
 - Interactive coding-instance discovery from page content, `/run`-style grader
