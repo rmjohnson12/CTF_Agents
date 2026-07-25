@@ -46,6 +46,9 @@ tests.
 - Redacted-PEM key recovery: rebuilds the base64 grid of a partially masked
   PKCS#1 private key, walks the DER with sub-byte precision to recover the
   modulus and a prime's leading bits, then factors the modulus with Coppersmith
+- Bounded chosen-plaintext recovery for source-identified two-round AES-like
+  encrypted-save oracles, including reversible key expansion and winning-save
+  forgery within a 13-query budget
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
 - Interactive coding-instance discovery from page content, `/run`-style grader

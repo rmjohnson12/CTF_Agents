@@ -19,9 +19,16 @@ from urllib.parse import urlparse
 from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
 from agents.registry import AgentRegistry
+from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
-from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
+from tools.crypto.two_round_aes import (
+    DifferentialFamily,
+    TwoRoundAesCipher,
+    TwoRoundAesRecoveryError,
+    recover_master_key,
+)
+from tools.web.http_fetch import HttpFetchTool
 from tools.common.partial_pem import looks_like_redacted_pem, parse_redacted_pem
 
 logger = logging.getLogger(__name__)
@@ -45,11 +52,13 @@ class CryptographyAgent(BaseAgent):
         self, 
         agent_id: str = "crypto_agent", 
         john_tool: Optional[JohnTool] = None,
-        hashcat_tool: Optional[HashcatTool] = None
+        hashcat_tool: Optional[HashcatTool] = None,
+        http_tool: Optional[HttpFetchTool] = None,
     ):
         super().__init__(agent_id, AgentType.SPECIALIST)
         self.john_tool = john_tool or JohnTool()
         self.hashcat_tool = hashcat_tool or HashcatTool()
+        self.http_tool = http_tool or HttpFetchTool(max_preview_chars=200_000)
         self.capabilities = [
             "crypto",
             "cryptography",
@@ -60,6 +69,7 @@ class CryptographyAgent(BaseAgent):
             "rsa",
             "rsa_partial_prime_leak",
             "rsa_redacted_pem",
+            "two_round_aes_differential",
             "aes",
             "classical_ciphers",
             "base64",
@@ -139,6 +149,9 @@ class CryptographyAgent(BaseAgent):
         if self._has_redacted_pem(challenge.get("files", [])):
             cipher_types.extend(["rsa", "rsa_redacted_pem"])
 
+        if self._load_two_round_aes_save_sources(challenge.get("files", [])):
+            cipher_types.append("two_round_aes_differential")
+
         cipher_types = sorted(set(cipher_types))
         has_crypto_indicators = len(cipher_types) > 0
         
@@ -165,6 +178,29 @@ class CryptographyAgent(BaseAgent):
         cipher_text = self._extract_ciphertext(challenge)
         
         steps.append(f"Extracted ciphertext: {cipher_text}")
+
+        reduced_aes_flag = self._try_two_round_aes_save_oracle(challenge, steps)
+        if reduced_aes_flag:
+            found = find_first_flag(reduced_aes_flag)
+            if found:
+                steps.append(
+                    "SUCCESS: Forged the winning save via two-round AES "
+                    "differential key recovery."
+                )
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps,
+                    "artifacts": {
+                        "techniques": [
+                            "chosen_plaintext_differential",
+                            "two_round_aes_key_recovery",
+                            "encrypted_save_forgery",
+                        ]
+                    },
+                }
 
         gen_oracle_flag = self._try_chosen_generator_bit_oracle(challenge, steps)
         if gen_oracle_flag:
@@ -994,6 +1030,294 @@ class CryptographyAgent(BaseAgent):
             and "pow(" in s
             and has_p_construction
         )
+
+    @staticmethod
+    def _load_two_round_aes_save_sources(
+        files: List[str],
+    ) -> Optional[Tuple[str, str]]:
+        """Return cipher/app source for the supported encrypted-save oracle."""
+        cipher_source = ""
+        app_source = ""
+        for raw_path in files:
+            path = Path(raw_path)
+            if path.suffix.lower() != ".py":
+                continue
+            try:
+                source = path.read_text(errors="ignore")
+            except (OSError, UnicodeError):
+                continue
+
+            cipher_markers = (
+                "class SnowCipher",
+                "def encrypt_block",
+                "while len(key_columns) < 12",
+                "s = self._ark(s, rk[2])",
+            )
+            app_markers = (
+                '@app.post("/api/start")',
+                '@app.post("/api/death")',
+                '@app.post("/api/load")',
+                "STARTING_LIVES",
+                "WIN_RUNES",
+                "track_seal",
+                "flags_seal",
+            )
+            if all(marker in source for marker in cipher_markers):
+                cipher_source = source
+            if all(marker in source for marker in app_markers):
+                app_source = source
+
+        if cipher_source and app_source:
+            return cipher_source, app_source
+        return None
+
+    @staticmethod
+    def _literal_assignments(source: str, names: set[str]) -> Dict[str, Any]:
+        """Safely extract requested top-level literal assignments from Python."""
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return {}
+
+        values: Dict[str, Any] = {}
+        for node in tree.body:
+            targets: List[ast.expr] = []
+            value_node: Optional[ast.expr] = None
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+                value_node = node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+                value_node = node.value
+            if value_node is None:
+                continue
+            for target in targets:
+                if not isinstance(target, ast.Name) or target.id not in names:
+                    continue
+                try:
+                    values[target.id] = ast.literal_eval(value_node)
+                except (ValueError, TypeError):
+                    pass
+        return values
+
+    @staticmethod
+    def _pack_arcade_state(
+        constants: Dict[str, Any],
+        *,
+        winning: bool,
+    ) -> bytes:
+        """Reproduce the source-defined 16-byte arcade save format."""
+        if winning:
+            sector = int(constants["WIN_SECTOR"])
+            x = int(constants["WIN_X"])
+            y = int(constants["WIN_Y"])
+            score = int(constants["WIN_SCORE"])
+            runes = tuple(int(value) for value in constants["WIN_RUNES"])
+        else:
+            sector, x, y, score = 1, 2, 2, 0
+            runes = tuple(int(value) for value in constants["DEFAULT_RUNES"])
+
+        if len(runes) != 4:
+            raise ValueError("arcade rune tuple must contain four bytes")
+        state = bytearray(16)
+        state[0] = int(constants["SIG"]) & 0xFF
+        state[1] = 5
+        state[2] = sector & 0xFF
+        state[3] = x & 0xFF
+        state[4] = y & 0xFF
+        state[5] = score & 0xFF
+        state[6] = (score >> 8) & 0xFF
+        state[7] = (score >> 16) & 0xFF
+        state[8:12] = bytes(value & 0xFF for value in runes)
+        state[12] = (
+            state[2] * 19 + state[3] * 7 + state[4] * 13 + state[5]
+        ) & 0xFF
+        state[13] = 0
+        state[14] = (
+            state[1] + state[2] + state[3] + state[4] + state[12]
+        ) & 0xFF
+        lrc = 0
+        for value in state[:15]:
+            lrc ^= value
+        state[15] = lrc
+        return bytes(state)
+
+    def _post_crypto_json(
+        self,
+        base_url: str,
+        path: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        response = self.http_tool.fetch(
+            f"{base_url}{path}",
+            method="POST",
+            timeout_s=10,
+            allow_redirects=False,
+            json_data=payload,
+        )
+        try:
+            body = json.loads(response.body_preview)
+        except json.JSONDecodeError as exc:
+            raise TwoRoundAesRecoveryError(
+                f"{path} returned non-JSON HTTP {response.status_code}"
+            ) from exc
+        if not isinstance(body, dict):
+            raise TwoRoundAesRecoveryError(f"{path} returned a non-object response")
+        if response.status_code >= 400 or not body.get("ok"):
+            error = str(body.get("error", f"HTTP {response.status_code}"))
+            raise TwoRoundAesRecoveryError(f"{path} rejected the request: {error}")
+        return body
+
+    def _try_two_round_aes_save_oracle(
+        self,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[str]:
+        """Recover the per-session key and forge a winning encrypted save."""
+        sources = self._load_two_round_aes_save_sources(challenge.get("files", []))
+        if not sources:
+            return None
+        cipher_source, app_source = sources
+        cipher_constants = self._literal_assignments(
+            cipher_source,
+            {"B", "r_con"},
+        )
+        app_constants = self._literal_assignments(
+            app_source,
+            {
+                "STARTING_LIVES",
+                "SIG",
+                "WIN_SCORE",
+                "WIN_SECTOR",
+                "WIN_X",
+                "WIN_Y",
+                "WIN_RUNES",
+                "DEFAULT_RUNES",
+            },
+        )
+        required_cipher = {"B", "r_con"}
+        required_app = {
+            "STARTING_LIVES",
+            "SIG",
+            "WIN_SCORE",
+            "WIN_SECTOR",
+            "WIN_X",
+            "WIN_Y",
+            "WIN_RUNES",
+            "DEFAULT_RUNES",
+        }
+        if (
+            not required_cipher.issubset(cipher_constants)
+            or not required_app.issubset(app_constants)
+        ):
+            steps.append(
+                "Two-round AES save oracle detected, but required literal "
+                "cipher/save constants were unavailable."
+            )
+            return None
+        if int(app_constants["STARTING_LIVES"]) < 13:
+            steps.append(
+                "Two-round AES save oracle detected, but fewer than 13 "
+                "chosen-plaintext queries are available."
+            )
+            return None
+
+        target = self._extract_tcp_target(challenge)
+        raw_url = str(challenge.get("url", "")).strip()
+        if raw_url:
+            parsed = urlparse(
+                raw_url if "://" in raw_url else f"http://{raw_url}"
+            )
+            if not parsed.hostname or not parsed.port:
+                return None
+            base_url = f"{parsed.scheme or 'http'}://{parsed.hostname}:{parsed.port}"
+        elif target:
+            base_url = f"http://{target[0]}:{target[1]}"
+        else:
+            steps.append("Two-round AES save oracle detected, but no HTTP target was supplied.")
+            return None
+
+        try:
+            sbox = tuple(int(value) for value in cipher_constants["B"])
+            rcon = tuple(int(value) for value in cipher_constants["r_con"])
+            base_plaintext = self._pack_arcade_state(app_constants, winning=False)
+            started = self._post_crypto_json(base_url, "/api/start", {})
+            session_id = str(started["session_id"])
+
+            def death_save(state: bytes) -> bytes:
+                body = self._post_crypto_json(
+                    base_url,
+                    "/api/death",
+                    {"session_id": session_id, "state_hex": state.hex()},
+                )
+                ciphertext = bytes.fromhex(str(body["ciphertext"]))
+                if len(ciphertext) < 16:
+                    raise TwoRoundAesRecoveryError(
+                        "death-save ciphertext was shorter than one block"
+                    )
+                return ciphertext[:16]
+
+            base_ciphertext = death_save(base_plaintext)
+            families: List[DifferentialFamily] = []
+            for position in (8, 9, 10):
+                samples = []
+                for delta in (1, 2, 4, 8):
+                    variant = bytearray(base_plaintext)
+                    variant[position] ^= delta
+                    variant[11] ^= delta
+                    samples.append((delta, death_save(bytes(variant))))
+                families.append(
+                    DifferentialFamily(position=position, samples=tuple(samples))
+                )
+
+            master_key = recover_master_key(
+                sbox=sbox,
+                rcon=rcon,
+                base_plaintext=base_plaintext,
+                base_ciphertext=base_ciphertext,
+                families=families,
+                paired_position=11,
+                paired_samples=families[0].samples,
+            )
+            cipher = TwoRoundAesCipher(master_key, sbox, rcon)
+            padding_block = bytes([16]) * 16
+            full_base = cipher.encrypt(base_plaintext)
+            if full_base[:16] != base_ciphertext:
+                raise TwoRoundAesRecoveryError(
+                    "recovered key did not reproduce the base save"
+                )
+            if (
+                len(full_base) != 32
+                or full_base[16:] != cipher.encrypt_block(padding_block)
+            ):
+                raise TwoRoundAesRecoveryError(
+                    "source padding behavior did not match the recovered cipher"
+                )
+
+            winning_state = self._pack_arcade_state(app_constants, winning=True)
+            forged = cipher.encrypt(winning_state)
+            loaded = self._post_crypto_json(
+                base_url,
+                "/api/load",
+                {"session_id": session_id, "ciphertext": forged.hex()},
+            )
+            flag = find_first_flag(json.dumps(loaded))
+            if flag:
+                steps.append(
+                    "Used 13 valid death saves to recover the ephemeral key "
+                    "and the server accepted a forged winning save."
+                )
+                return flag
+            steps.append("The forged winning save was accepted, but no flag was returned.")
+        except (
+            KeyError,
+            TypeError,
+            ValueError,
+            OSError,
+            TwoRoundAesRecoveryError,
+        ) as exc:
+            steps.append(f"Two-round AES save recovery failed safely: {exc}")
+        return None
 
     def _try_chosen_generator_bit_oracle(self, challenge: Dict[str, Any], steps: List[str]) -> Optional[str]:
         """Solve a "false witness" oracle that leaks key bits via a chosen generator.

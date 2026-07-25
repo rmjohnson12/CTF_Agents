@@ -212,6 +212,34 @@ def test_downloads_root_is_not_expanded_as_challenge_directory(tmp_path, monkeyp
     assert _expand_challenge_artifacts([str(downloads)]) == []
 
 
+def test_live_challenge_directory_ignores_bundled_plaintext_flag(tmp_path):
+    challenge_dir = tmp_path / "arcade"
+    challenge_dir.mkdir()
+    app = challenge_dir / "app.py"
+    app.write_text("print('challenge')")
+    decoy = challenge_dir / "flag.txt"
+    decoy.write_text("HTB{fake_flag_for_testing}")
+
+    challenge = _heuristic_challenge_from_instruction(
+        f"Crypto challenge at 127.0.0.1:5000 files are in {challenge_dir}",
+        available_tools=[],
+    )
+
+    assert challenge["files"] == [str(app.resolve())]
+
+
+def test_live_challenge_keeps_explicitly_referenced_flag_file(tmp_path):
+    flag_file = tmp_path / "flag.txt"
+    flag_file.write_text("encrypted or otherwise intentional artifact")
+
+    challenge = _heuristic_challenge_from_instruction(
+        f"Crypto challenge at 127.0.0.1:5000 using {flag_file}",
+        available_tools=[],
+    )
+
+    assert challenge["files"] == [str(flag_file.resolve())]
+
+
 def test_git_repository_is_preserved_as_challenge_artifact(tmp_path):
     repository = tmp_path / "memento"
     (repository / ".git").mkdir(parents=True)

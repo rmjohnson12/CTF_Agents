@@ -419,6 +419,23 @@ def _heuristic_challenge_from_instruction(
         if _load_challenge_json(path) is None
     ]
     challenge_files = _expand_challenge_artifacts(referenced_artifacts)
+    if url:
+        # Bundled plaintext flags are commonly local-service placeholders. Do
+        # not let one preempt a real live-target solve unless the user named
+        # that file directly.
+        explicitly_referenced_files = {
+            str(Path(path).resolve())
+            for path in referenced_artifacts
+            if Path(path).is_file()
+        }
+        challenge_files = [
+            path
+            for path in challenge_files
+            if (
+                Path(path).name.lower() != "flag.txt"
+                or path in explicitly_referenced_files
+            )
+        ]
     has_git_repository = any(
         Path(path).is_dir() and (Path(path) / ".git").exists()
         for path in challenge_files
