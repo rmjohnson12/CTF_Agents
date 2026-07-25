@@ -281,6 +281,17 @@ def test_small_pwn_directory_includes_versioned_libc_and_loader(tmp_path):
     assert str(loader.resolve()) in expanded
 
 
+def test_challenge_directory_includes_sage_source(tmp_path):
+    challenge_dir = tmp_path / "ashen"
+    challenge_dir.mkdir()
+    source = challenge_dir / "source.sage"
+    source.write_text("N = 137")
+
+    expanded = _expand_challenge_artifacts([str(challenge_dir)])
+
+    assert expanded == [str(source.resolve())]
+
+
 def test_merge_heuristic_context_drops_llm_invented_local_files(tmp_path):
     stale = tmp_path / "input.csv"
     stale.write_text("in0,in1,in2,in3\n1,1,0,0\n")

@@ -49,6 +49,8 @@ tests.
 - Bounded chosen-plaintext recovery for source-identified two-round AES-like
   encrypted-save oracles, including reversible key expansion and winning-save
   forgery within a 13-query budget
+- Source-backed Boolean-polynomial linearization over GF(2), bit-packed Gaussian
+  elimination, and bounded nullspace enumeration for AES key recovery
 - Word-embedding analogy recovery with raw vector offsets and ASCII/NFKC filtering
 - Secure-coding patches and deterministic code-runner submissions
 - Interactive coding-instance discovery from page content, `/run`-style grader

@@ -304,7 +304,7 @@ def _expand_challenge_artifacts(paths: List[str]) -> List[str]:
     expanded: List[str] = []
     skip_dir_terms = {"wordlist", "wordlists", "rockyou", "payload", "payloads"}
     useful_exts = {
-        ".enc", ".bin", ".dat", ".txt", ".json", ".py", ".c", ".cpp", ".java",
+        ".enc", ".bin", ".dat", ".txt", ".json", ".py", ".sage", ".c", ".cpp", ".java",
         ".go", ".sh", ".pcap", ".pcapng", ".pdf", ".zip", ".log",
         ".csv", ".jpg", ".jpeg", ".png", ".v", ".sv", ".vhdl", ".vhd",
         ".exe", ".pck", ".gd", ".gdc", ".sol",

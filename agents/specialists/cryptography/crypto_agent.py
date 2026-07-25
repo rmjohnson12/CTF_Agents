@@ -20,8 +20,13 @@ from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
 from agents.registry import AgentRegistry
 from core.utils.flag_utils import KNOWN_FLAG_PREFIXES, find_first_flag
-from tools.crypto.john import JohnTool
+from tools.crypto.boolean_polynomial import (
+    BooleanPolynomialError,
+    parse_sage_public_output,
+    solve_affine_boolean_system,
+)
 from tools.crypto.hashcat import HashcatTool
+from tools.crypto.john import JohnTool
 from tools.crypto.two_round_aes import (
     DifferentialFamily,
     TwoRoundAesCipher,
@@ -69,6 +74,7 @@ class CryptographyAgent(BaseAgent):
             "rsa",
             "rsa_partial_prime_leak",
             "rsa_redacted_pem",
+            "boolean_polynomial_linearization",
             "two_round_aes_differential",
             "aes",
             "classical_ciphers",
@@ -152,6 +158,9 @@ class CryptographyAgent(BaseAgent):
         if self._load_two_round_aes_save_sources(challenge.get("files", [])):
             cipher_types.append("two_round_aes_differential")
 
+        if self._load_boolean_hfe_artifacts(challenge.get("files", [])):
+            cipher_types.append("boolean_polynomial_linearization")
+
         cipher_types = sorted(set(cipher_types))
         has_crypto_indicators = len(cipher_types) > 0
         
@@ -178,6 +187,32 @@ class CryptographyAgent(BaseAgent):
         cipher_text = self._extract_ciphertext(challenge)
         
         steps.append(f"Extracted ciphertext: {cipher_text}")
+
+        boolean_hfe_result = self._try_boolean_hfe_linearization(
+            challenge.get("files", []),
+            steps,
+        )
+        if boolean_hfe_result:
+            found = find_first_flag(boolean_hfe_result)
+            if found:
+                steps.append(
+                    "SUCCESS: Linearized the Boolean public key and decrypted "
+                    "the AES ciphertext."
+                )
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps,
+                    "artifacts": {
+                        "techniques": [
+                            "boolean_polynomial_linearization",
+                            "gf2_gaussian_elimination",
+                            "bounded_nullspace_enumeration",
+                        ]
+                    },
+                }
 
         reduced_aes_flag = self._try_two_round_aes_save_oracle(challenge, steps)
         if reduced_aes_flag:
@@ -1030,6 +1065,114 @@ class CryptographyAgent(BaseAgent):
             and "pow(" in s
             and has_p_construction
         )
+
+    @staticmethod
+    def _load_boolean_hfe_artifacts(
+        files: List[str],
+    ) -> Optional[Tuple[str, Path]]:
+        """Find the source-backed Boolean HFE output supported by the solver."""
+        source = ""
+        output_paths: List[Path] = []
+        for raw_path in files:
+            path = Path(raw_path)
+            try:
+                if path.suffix.lower() in {".sage", ".py"}:
+                    if path.stat().st_size > 2_000_000:
+                        continue
+                    candidate = path.read_text(errors="ignore")
+                    markers = (
+                        "q = 2",
+                        "x^q-x",
+                        "F^(2*q)+F^q+1",
+                        "P.bits()",
+                        "hashlib.sha256(str(KEY).encode()).digest()",
+                        "AES.MODE_ECB",
+                    )
+                    if all(marker in candidate for marker in markers):
+                        source = candidate
+                elif path.suffix.lower() == ".txt" and path.stat().st_size <= 2_000_000:
+                    output_paths.append(path)
+            except (OSError, UnicodeError):
+                continue
+
+        if not source:
+            return None
+        for output_path in output_paths:
+            try:
+                parse_sage_public_output(output_path.read_text(errors="strict"))
+            except (OSError, UnicodeError, BooleanPolynomialError):
+                continue
+            return source, output_path
+        return None
+
+    def _try_boolean_hfe_linearization(
+        self,
+        files: List[str],
+        steps: List[str],
+    ) -> Optional[str]:
+        """Exploit high-degree public polynomials that are affine on GF(2)."""
+        artifacts = self._load_boolean_hfe_artifacts(files)
+        if not artifacts:
+            return None
+        source, output_path = artifacts
+        dimension_match = re.search(r"(?m)^\s*N\s*=\s*(\d+)\s*$", source)
+        if not dimension_match:
+            steps.append(
+                "Boolean HFE pattern detected, but its dimension was unavailable."
+            )
+            return None
+
+        try:
+            polynomials, encrypted_bits, ciphertext = parse_sage_public_output(
+                output_path.read_text(errors="strict")
+            )
+            dimension = int(dimension_match.group(1))
+            if dimension != len(encrypted_bits):
+                raise BooleanPolynomialError(
+                    "source and output dimensions do not match"
+                )
+            solutions = solve_affine_boolean_system(
+                polynomials,
+                encrypted_bits,
+                max_nullity=16,
+            )
+
+            from hashlib import sha256
+            from Crypto.Cipher import AES
+            from Crypto.Util.Padding import unpad
+
+            tested = 0
+            for candidate in solutions.integers():
+                # The source rejects shorter integers before encryption.
+                if candidate.bit_length() != dimension:
+                    continue
+                tested += 1
+                aes_key = sha256(str(candidate).encode()).digest()
+                plaintext = AES.new(aes_key, AES.MODE_ECB).decrypt(ciphertext)
+                try:
+                    plaintext = unpad(plaintext, 16)
+                except ValueError:
+                    continue
+                decoded = plaintext.decode("utf-8", errors="replace")
+                if find_first_flag(decoded):
+                    steps.append(
+                        f"Collapsed the degree terms over GF(2), solved rank "
+                        f"{solutions.rank}/{dimension}, and checked {tested} "
+                        f"candidate key(s) from a {solutions.nullity}-bit nullspace."
+                    )
+                    return decoded
+            steps.append(
+                f"Boolean system solved at rank {solutions.rank}/{dimension}, "
+                f"but {tested} eligible AES candidate(s) produced no flag."
+            )
+        except (
+            OSError,
+            UnicodeError,
+            BooleanPolynomialError,
+            ValueError,
+        ) as exc:
+            steps.append(f"Boolean polynomial recovery failed safely: {exc}")
+        return None
 
     @staticmethod
     def _load_two_round_aes_save_sources(
