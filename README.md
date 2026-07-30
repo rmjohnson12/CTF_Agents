@@ -30,6 +30,13 @@ one or more optional provider credentials for live model reasoning.
 Deterministic specialist paths remain available without an LLM where
 implemented.
 
+`check_setup.py` reports external tools, provider credentials, and solver
+backends. The backend section matters: specialists import `fpylll`, `sympy`,
+`z3`, `pycryptodome`, and `gmpy2` lazily, so a broken install fails open — it
+removes whole attack classes (lattice/Coppersmith recovery, constraint solving)
+without raising an error. Treat an `UNAVAILABLE` line there as a real gap, not
+a warning.
+
 ## Quick Start
 
 Use the natural-language CLI:
@@ -97,6 +104,13 @@ NVAPI_KEY=your_nvidia_api_key
 # Recommended when the model needs to calculate, simulate, or parse raw data.
 CTF_AGENTS_SANDBOX=docker
 ```
+
+Configure more than one provider when you can. An error that is specific to a
+single provider — an unknown model id, exhausted credits, a rejected request
+shape — fails the run over to the next configured provider instead of dropping
+the whole run back to heuristics. Only an authorization failure or an exhausted
+provider list disables model reasoning, and the recorded reason includes the
+provider's own message so a degraded run stays diagnosable.
 
 The recovery loop can compose same-origin HTTP requests, bounded artifact reads,
 regular-expression extraction, base64/hex/URL decoding, JSON traversal,
@@ -174,6 +188,17 @@ description: the coding agent detects the page's grader endpoint, extracts the
 problem statement, uses deterministic programs for recognized classes such as
 weighted shortest-path problems, and otherwise can iterate with LLM-generated
 code plus grader feedback.
+
+Cryptography challenges are driven from the provided source or artifact rather
+than a fixed cipher list. A partially redacted PKCS#1 PEM is rebuilt into its
+base64 grid, walked through the DER with sub-byte precision to recover the
+modulus and a prime's leading bits, and finished with Coppersmith; a
+source-identified two-round AES-like save oracle is inverted through its
+reversible key expansion within a bounded chosen-plaintext query budget; and a
+cipher expressed as Boolean polynomials is linearized over GF(2) and solved by
+bit-packed Gaussian elimination with bounded nullspace enumeration. These paths
+are deterministic and need no model, but they do need the solver backends
+listed under Installation.
 
 Blockchain challenges are solved from their published contract source: the
 agent identifies the win condition, compiles and deploys a bespoke attacker

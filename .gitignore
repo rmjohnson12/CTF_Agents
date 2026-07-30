@@ -248,3 +248,5 @@ integrations/hackthebox/.htb_session.json
 runs/htb/
 runs/
 reports/
+# Downloaded challenge artifacts (platform-owned binaries, keys, encrypted flags).
+challenges/local/
