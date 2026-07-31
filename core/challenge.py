@@ -19,6 +19,7 @@ class ChallengeCategory(Enum):
     OSINT = "osint"
     MISC = "misc"
     NETWORKING = "networking"
+    ICS = "ics"
     BLOCKCHAIN = "blockchain"
     SECURE_CODING = "secure_coding"
 

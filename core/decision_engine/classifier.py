@@ -43,6 +43,27 @@ class ChallengeClassifier:
         indicators: List[str] = []
         files = challenge.get("files", [])
 
+        # Industrial control / operational technology. Keep this before
+        # hardware and pwn: PLC and serial-network challenges use legitimate
+        # control protocols rather than generic circuit or memory exploits.
+        if (
+            str(challenge.get("category") or "").lower() in {"ics", "ot"}
+            or self._kw(
+                text,
+                "industrial control", "operational technology", "scada", "plc",
+                "hmi", "modbus", "ladder logic", "serial network",
+            )
+        ):
+            indicators.append("industrial_control_terms")
+            return ChallengeAnalysis(
+                category_guess="ics",
+                confidence=0.97,
+                reasoning="Detected industrial-control, PLC, or OT protocol indicators.",
+                recommended_target="ics_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
         # Quantum protocols and circuit challenges. Keep this before classical
         # crypto so "quantum cryptography" does not lose its specialist route.
         if (

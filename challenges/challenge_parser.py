@@ -20,7 +20,8 @@ class ParseError(ValueError):
 
 KNOWN_CATEGORIES = frozenset({
     "crypto", "web", "reverse", "pwn", "forensics",
-    "osint", "log", "misc", "networking", "hardware", "blockchain", "secure_coding", "unknown",
+    "osint", "log", "misc", "networking", "hardware", "ics",
+    "blockchain", "secure_coding", "unknown",
 })
 
 _REQUIRED_FIELDS = ("id", "name", "description")
@@ -53,6 +54,12 @@ _CATEGORY_MAP: Dict[str, str] = {
     "hardware": "hardware",
     "hw": "hardware",
     "logic": "hardware",
+    "ics": "ics",
+    "industrial control": "ics",
+    "industrial control systems": "ics",
+    "operational technology": "ics",
+    "ot": "ics",
+    "scada": "ics",
     "blockchain": "blockchain",
     "smart contract": "blockchain",
     "smart contracts": "blockchain",
@@ -265,6 +272,11 @@ class ChallengeParser:
         ]).lower()
 
         patterns = [
+            (
+                r"\bics\b|industrial.?control|operational.?technology|"
+                r"\bscada\b|\bplc\b|\bmodbus\b|ladder.?logic",
+                "ics",
+            ),
             (r"\bblockchain\b|\bsolidity\b|smart.?contract|\bethereum\b|\bweb3\b|\bganache\b|\banvil\b", "blockchain"),
             (r"secure.?coding|source.?patch|patch the vulnerability|fix the vulnerability|vulnerable code|remediate", "secure_coding"),
             (r"\bcrypto\b|cipher|decrypt|base64|xor|hash",            "crypto"),

@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 
@@ -32,6 +34,11 @@ logger = logging.getLogger(__name__)
 
 _MAX_RATE_LIMIT_RETRIES = 2
 _MAX_RATE_LIMIT_SLEEP = 30.0
+_REGIONAL_S3_HOST_RE = re.compile(
+    r"^(?P<bucket>[a-z0-9][a-z0-9.-]*)\.s3\.(?P<region>[a-z0-9-]+)\.amazonaws\.com$",
+    re.IGNORECASE,
+)
+_PRESIGNED_VALUE_RE = re.compile(r"([?&]X-Amz-[^=\s&]+)=([^\s&)]+)", re.IGNORECASE)
 
 
 def redact_token(token: Optional[str]) -> str:
@@ -72,7 +79,8 @@ class HTBClient:
         return f"{self.config.api_base}{endpoint.format(**path_params)}"
 
     def _safe_str(self, text: str) -> str:
-        return text.replace(self._token, redact_token(self._token)) if self._token else text
+        safe = text.replace(self._token, redact_token(self._token)) if self._token else text
+        return _PRESIGNED_VALUE_RE.sub(r"\1=<redacted>", safe)
 
     def _request(
         self,
@@ -185,10 +193,61 @@ class HTBClient:
 
     def download_challenge(self, challenge_id: int) -> bytes:
         """Return the raw challenge archive bytes (caller extracts safely)."""
-        content = self._request("challenge_download", path_params={"challenge_id": challenge_id}, expect="bytes")
+        try:
+            content = self._request(
+                "challenge_download",
+                path_params={"challenge_id": challenge_id},
+                expect="bytes",
+            )
+        except HTBAPIError as exc:
+            content = self._retry_regional_s3_tls_failure(exc)
         if not content:
             raise HTBEndpointError(f"challenge_download for {challenge_id} returned empty content.")
         return content
+
+    def _retry_regional_s3_tls_failure(self, error: HTBAPIError) -> bytes:
+        """Retry one narrow S3 TLS failure without weakening certificate checks.
+
+        Some local TLS stacks cannot negotiate with AWS's regional virtual-host
+        endpoint even though the global S3 endpoint works. The presigned request
+        signs the original Host header, so connect to the global endpoint (whose
+        certificate is still verified normally) while preserving that signed
+        Host value. No bearer token is sent to S3.
+        """
+        cause = error.__cause__
+        request = getattr(cause, "request", None)
+        failed_url = str(getattr(request, "url", "") or "")
+        parsed = urlsplit(failed_url)
+        host = (parsed.hostname or "").lower()
+        match = _REGIONAL_S3_HOST_RE.fullmatch(host)
+        # Depending on the local TLS stack the same failed handshake surfaces
+        # as SSLError, ConnectionError, or a connection reset.
+        is_transport_error = isinstance(cause, requests.RequestException)
+        is_presigned = bool(parsed.query and "X-Amz-Signature=" in parsed.query)
+        if not (is_transport_error and parsed.scheme == "https" and match and is_presigned):
+            raise error
+
+        global_host = f"{match.group('bucket')}.s3.amazonaws.com"
+        fallback_url = urlunsplit(
+            (parsed.scheme, global_host, parsed.path, parsed.query, parsed.fragment)
+        )
+        try:
+            response = requests.get(
+                fallback_url,
+                headers={"Host": host, "Accept": "application/octet-stream"},
+                timeout=self.config.timeout_seconds,
+                allow_redirects=False,
+            )
+        except requests.RequestException as exc:
+            raise HTBAPIError(
+                self._safe_str(f"Network error calling S3 download fallback: {exc}")
+            ) from exc
+        if response.status_code >= 400:
+            raise HTBAPIError(
+                f"S3 download fallback failed (HTTP {response.status_code}).",
+                status_code=response.status_code,
+            )
+        return response.content
 
     def start_instance(self, challenge_id: int) -> SpawnInfo:
         """Spawn a challenge container and wait for its IP:PORT.

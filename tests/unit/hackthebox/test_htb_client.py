@@ -1,3 +1,4 @@
+import requests
 import pytest
 
 from integrations.hackthebox.client import HTBClient
@@ -86,6 +87,85 @@ def test_download_returns_bytes(config):
     handler = route_handler({"/challenge/download/5": FakeResponse(200, content=b"PK\x03\x04zip")})
     client = make_client(handler, config)
     assert client.download_challenge(5) == b"PK\x03\x04zip"
+
+
+def test_download_retries_regional_s3_tls_failure_without_bearer(config, monkeypatch):
+    client = make_client(lambda *_args: FakeResponse(500), config)
+    signed_url = (
+        "https://private-bucket.s3.eu-central-1.amazonaws.com/file.zip?"
+        "X-Amz-Signature=secret-signature&X-Amz-Credential=secret-credential"
+    )
+    prepared = requests.Request("GET", signed_url).prepare()
+    tls_error = requests.exceptions.SSLError("wrong version number", request=prepared)
+    api_error = HTBAPIError("download failed")
+    api_error.__cause__ = tls_error
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: (_ for _ in ()).throw(api_error))
+
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse(200, content=b"PK\x03\x04factory")
+
+    monkeypatch.setattr("integrations.hackthebox.client.requests.get", fake_get)
+
+    content = client.download_challenge(222)
+
+    assert content == b"PK\x03\x04factory"
+    assert calls[0][0].startswith("https://private-bucket.s3.amazonaws.com/")
+    assert calls[0][1]["headers"] == {
+        "Host": "private-bucket.s3.eu-central-1.amazonaws.com",
+        "Accept": "application/octet-stream",
+    }
+    assert "Authorization" not in calls[0][1]["headers"]
+    assert calls[0][1]["allow_redirects"] is False
+
+
+def test_download_fallback_rejects_non_s3_tls_failures(config, monkeypatch):
+    client = make_client(lambda *_args: FakeResponse(500), config)
+    prepared = requests.Request(
+        "GET", "https://example.com/file.zip?X-Amz-Signature=secret"
+    ).prepare()
+    tls_error = requests.exceptions.SSLError("wrong version number", request=prepared)
+    api_error = HTBAPIError("download failed")
+    api_error.__cause__ = tls_error
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: (_ for _ in ()).throw(api_error))
+
+    with pytest.raises(HTBAPIError, match="download failed"):
+        client.download_challenge(222)
+
+
+def test_download_retries_regional_s3_connection_reset(config, monkeypatch):
+    client = make_client(lambda *_args: FakeResponse(500), config)
+    signed_url = (
+        "https://private-bucket.s3.eu-central-1.amazonaws.com/file.zip?"
+        "X-Amz-Signature=secret-signature"
+    )
+    prepared = requests.Request("GET", signed_url).prepare()
+    reset = requests.exceptions.ConnectionError(
+        ConnectionResetError(54, "Connection reset by peer"), request=prepared
+    )
+    api_error = HTBAPIError("download failed")
+    api_error.__cause__ = reset
+    monkeypatch.setattr(client, "_request", lambda *args, **kwargs: (_ for _ in ()).throw(api_error))
+    monkeypatch.setattr(
+        "integrations.hackthebox.client.requests.get",
+        lambda *args, **kwargs: FakeResponse(200, content=b"PK\x03\x04factory"),
+    )
+
+    assert client.download_challenge(222) == b"PK\x03\x04factory"
+
+
+def test_presigned_s3_values_are_redacted_from_errors(config):
+    client = make_client(lambda *_args: FakeResponse(500), config)
+    text = client._safe_str(
+        "https://bucket.s3.eu-central-1.amazonaws.com/file?"
+        "X-Amz-Credential=credential-secret&X-Amz-Signature=signature-secret"
+    )
+
+    assert "credential-secret" not in text
+    assert "signature-secret" not in text
+    assert text.count("<redacted>") == 2
 
 
 def test_server_error_maps_to_api_error(config):

@@ -128,6 +128,30 @@ def test_parse_dict_accepts_hardware_category(parser):
     assert result["category"] == "hardware"
 
 
+def test_parse_dict_accepts_ics_category(parser):
+    result = parser.parse_dict({
+        "id": "ics",
+        "name": "Factory",
+        "description": "Recover the water-storage PLC.",
+        "category": "Industrial Control Systems",
+    })
+
+    assert result["category"] == "ics"
+
+
+def test_challenge_schema_accepts_ics_category():
+    challenge = Challenge.from_dict({
+        "id": "ics",
+        "name": "Factory",
+        "category": "ics",
+        "difficulty": "easy",
+        "description": "Recover the PLC.",
+        "points": 20,
+    })
+
+    assert challenge.category is ChallengeCategory.ICS
+
+
 def test_parse_dict_accepts_blockchain_category(parser):
     result = parser.parse_dict({
         "id": "bc",

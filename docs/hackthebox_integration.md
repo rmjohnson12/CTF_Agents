@@ -82,6 +82,12 @@ This will, per selected challenge: create `runs/htb/<slug>/`, spawn an instance
 if the challenge needs one (unless `--no-start`), download and safely extract
 files, run the solver within HTB-provided scope, and record candidate flags.
 
+On hosts whose TLS stack cannot negotiate HTB's regional presigned S3 download
+endpoint, the client performs one narrow retry through AWS's global S3 hostname
+while preserving the signed regional `Host` value. Certificate verification
+remains enabled, the HTB bearer token is not sent to S3, and presigned query
+values are redacted from errors.
+
 ### Interactive coding instances
 
 Some Coding challenges expose the full problem only on the spawned instance

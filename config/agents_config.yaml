@@ -114,6 +114,17 @@ specialists:
       - traffic_manipulation
     max_concurrent_tasks: 2
 
+  industrial_control:
+    agent_id: "ics_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - plc_ladder_logic
+      - hmi_recovery
+      - modbus_rtu
+      - process_state_verification
+    max_concurrent_tasks: 1
+
   blockchain:
     agent_id: "blockchain_agent"
     enabled: true

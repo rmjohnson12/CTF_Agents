@@ -15,6 +15,7 @@ AGENT_BY_CATEGORY = {
     "web": "web_agent",
     "pwn": "pwn_agent",
     "hardware": "hardware_agent",
+    "ics": "ics_agent",
     "quantum": "quantum_agent",
     "forensics": "forensics_agent",
     "blockchain": "blockchain_agent",

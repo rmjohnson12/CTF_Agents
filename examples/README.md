@@ -13,6 +13,10 @@ Some categories also contain nested workflow fixtures. For example,
 `examples/hardware/forth/` records a deterministic diagnostic session and is
 validated without opening a network connection.
 
+The ICS golden contract validates routing only. Its Factory Modbus session is
+covered by an offline scripted socket in `tests/unit/test_ics_agent.py`; no
+network request or PLC write occurs during tests.
+
 Run the golden paths with:
 
 ```bash

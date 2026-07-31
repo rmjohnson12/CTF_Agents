@@ -18,6 +18,7 @@ def test_registry_discovers_all_shipped_agents_in_stable_order():
         "log_agent",
         "networking_agent",
         "hardware_agent",
+        "ics_agent",
         "quantum_agent",
         "docker_agent",
         "recon_agent",

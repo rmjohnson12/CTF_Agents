@@ -46,6 +46,7 @@ agents/
 │   ├── cryptography/
 │   ├── forensics/
 │   ├── hardware_logic/
+│   ├── industrial_control/
 │   ├── log_analysis/
 │   ├── misc/
 │   ├── networking/
@@ -64,7 +65,8 @@ The coordinator owns the iterative solve loop, specialist selection, history,
 checkpointing, and LLM-assisted recovery when normal routing stalls. Specialist
 agents handle domain work such as web exploitation, cryptography, quantum
 protocols, reversing, forensics, hardware logic, log analysis, pwn, networking,
-OSINT, blockchain, secure coding, and generated coding/math tasks. Support agents
+OSINT, industrial control/OT, blockchain, secure coding, and generated
+coding/math tasks. Support agents
 cover local Docker challenge launch and reconnaissance.
 
 ## Core System

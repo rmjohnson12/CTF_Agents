@@ -1,0 +1,14 @@
+{
+  "id": "golden_ics",
+  "name": "Golden ICS",
+  "category": "ics",
+  "description": "Analyze PLC ladder logic and a Modbus serial network for an industrial water-control system.",
+  "tags": ["ics", "plc", "modbus", "ladder logic"],
+  "expected": {
+    "command": "python3 main.py examples/ics/challenge.json",
+    "category": "ics",
+    "agent": "ics_agent",
+    "status": "planned",
+    "flag": "HTB{golden_ics}"
+  }
+}

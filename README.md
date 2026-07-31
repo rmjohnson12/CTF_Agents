@@ -5,9 +5,10 @@ It classifies a challenge, selects a specialist, executes bounded tools and
 playbooks, records evidence, and reports either a verified result or a concrete
 failure reason.
 
-The project supports cryptography, quantum protocols, reverse engineering, web,
-pwn, hardware, forensics, blockchain, secure-coding, networking, OSINT,
-log-analysis, and general coding challenges. Platform labels do not have to map
+The project supports cryptography, quantum protocols, industrial control and
+operational technology, reverse engineering, web, pwn, hardware, forensics,
+blockchain, secure-coding, networking, OSINT, log-analysis, and general coding
+challenges. Platform labels do not have to map
 one-to-one to specialists: an AI/ML challenge built around a poisoned Git
 archive, for example, can route to forensics and then use AI-driven recovery.
 Detailed coverage lives in
@@ -84,6 +85,10 @@ CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
 # Quantum protocol target
 CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
   python3 ask.py "Quantum bit-commitment challenge at http://TARGET:PORT"
+
+# ICS/PLC target with supplied ladder-logic artifacts
+CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
+  python3 ask.py "ICS challenge at TARGET:PORT; files are in ~/Downloads/factory"
 
 # Git repository with evidence in deleted history
 python3 ask.py "Forensics challenge; files are in ~/Downloads/repository"
@@ -241,6 +246,15 @@ the revealed basis, validates every response, and caps remote work at 128 rounds
 and 128 strands. This path needs no LLM; the target must still pass the normal
 network allowlist. See [the quantum specialist guide](agents/specialists/quantum/README.md)
 and the [offline golden contract](examples/quantum/challenge.json).
+
+Industrial-control challenges route to `ics_agent` from explicit ICS/OT labels
+or PLC, HMI, SCADA, Modbus, and ladder-logic evidence. Its first deterministic
+playbook supports HTB Factory: it validates the water-storage artifacts, sends
+only four documented Modbus coil writes, checks the automatic-to-manual mode
+transition before touching the valves, and accepts success only after the inlet
+is closed and outlet is open. See
+[the ICS specialist guide](agents/specialists/industrial_control/README.md)
+and the [offline golden contract](examples/ics/challenge.json).
 
 Blockchain challenges are solved from their published contract source: the
 agent identifies the win condition, compiles and deploys a bespoke attacker
