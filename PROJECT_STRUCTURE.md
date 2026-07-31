@@ -51,6 +51,7 @@ agents/
 │   ├── networking/
 │   ├── osint/
 │   ├── pwn/
+│   ├── quantum/
 │   ├── reverse_engineering/
 │   ├── secure_coding/
 │   └── web_exploitation/
@@ -61,10 +62,10 @@ agents/
 
 The coordinator owns the iterative solve loop, specialist selection, history,
 checkpointing, and LLM-assisted recovery when normal routing stalls. Specialist
-agents handle domain work such as web exploitation, cryptography, reversing,
-forensics, hardware logic, log analysis, pwn, networking, OSINT, blockchain,
-secure coding, and generated coding/math tasks. Support agents cover local
-Docker challenge launch and reconnaissance.
+agents handle domain work such as web exploitation, cryptography, quantum
+protocols, reversing, forensics, hardware logic, log analysis, pwn, networking,
+OSINT, blockchain, secure coding, and generated coding/math tasks. Support agents
+cover local Docker challenge launch and reconnaissance.
 
 ## Core System
 
@@ -107,6 +108,7 @@ databases are local state (default under `logs/`, overridable via
 tools/
 ├── base_tool.py
 ├── common/
+│   ├── cross_arch_runner.py Opt-in isolated execution for foreign Linux ELFs
 │   ├── docker_sandbox.py   Isolated container execution for generated solvers
 │   ├── elf_utils.py
 │   ├── embedding_analogy.py

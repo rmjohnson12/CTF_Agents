@@ -18,11 +18,14 @@ The agent works through five phases in order, stopping as soon as a flag is conf
 
 Handles the common HTB/CTF pattern where a binary has a reachable win function and a simple stack overflow:
 
-1. **PIE check** (`readelf -h`) — skips if the binary is position-independent (static addresses are invalid)
+1. **PIE check** (decoded directly from the ELF header) — skips if the binary is position-independent (static addresses are invalid)
 2. **Win function discovery** (`nm`, `objdump -t`) — looks for functions named `win`, `flag`, `shell`, `backdoor`, `success`, or `correct`
 3. **Overflow offset** — uses pwntools `cyclic` + core dump; falls back to brute-forcing common offsets (40, 56, 72 … 256) if core dumps are unavailable
 4. **ret gadget** (`ROPgadget --only ret`, `objdump -d`) — finds a bare `ret` for x86-64 stack alignment before the win call
-5. **Payload delivery** — tries locally first, then sends to the remote via pwntools if `connection_info` is provided
+5. **Payload delivery** — tries locally first, then sends to the remote via
+   pwntools if `connection_info` is provided. A foreign Linux ELF can use the
+   opt-in cross-architecture container runner instead of failing every ladder
+   attempt.
 
 ## Tools Used
 
@@ -32,7 +35,7 @@ Handles the common HTB/CTF pattern where a binary has a reachable win function a
 | checksec | Mitigation detection |
 | nm / objdump | Symbol and gadget extraction |
 | ROPgadget | ret gadget lookup |
-| readelf | PIE detection |
+| ELF header parser | PIE, bitness, architecture, and emulation-platform detection |
 | angr | Symbolic execution (optional, `pip install angr`) |
 | Ghidra headless | Static analysis (optional, set `GHIDRA_HOME`) |
 
@@ -55,6 +58,9 @@ Handles the common HTB/CTF pattern where a binary has a reachable win function a
 | Variable | Effect |
 |----------|--------|
 | `GHIDRA_HOME` | Enables Ghidra headless analysis |
+| `CTF_AGENTS_ALLOW_DOCKER=1` | Explicitly allows isolated local challenge and foreign-ELF execution |
+| `CTF_AGENTS_DOCKER_BIN` | Overrides the Docker-compatible container CLI |
+| `CTF_AGENTS_ELF_RUNNER_IMAGE` | Overrides the cross-architecture runtime image |
 
 ## Common Techniques Handled
 

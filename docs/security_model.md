@@ -50,11 +50,12 @@ executable code.
 
 Local Docker challenge execution is opt-in with
 `CTF_AGENTS_ALLOW_DOCKER=1`. Spawned ports bind to loopback, and cleanup must be
-attempted and reported even after failures.
+attempted and reported even after failures. The same opt-in controls isolated
+execution of foreign-architecture challenge binaries.
 
 ## Cross-architecture binary execution
 
-A challenge binary the host cannot execute natively is run through
+A challenge binary the host cannot execute natively may be run through
 `tools/common/cross_arch_runner.py`, which mounts it read-only into a throwaway
 container started with `--platform` derived from the binary's ELF header. The
 threat model is stronger than the generated-solver sandbox — this is an
@@ -64,6 +65,11 @@ container keeps the same restrictions and adds nothing back: `--network none`,
 `no-new-privileges`, a non-root uid, memory and PID caps, `--rm`, and a strict
 timeout followed by forced removal. There is no flag that enables networking on
 this path.
+
+The runner is default-deny: it does not probe or invoke the container runtime
+unless `CTF_AGENTS_ALLOW_DOCKER=1` is set for the authorized run. It copies the
+binary into a private temporary staging directory and adjusts only that copy's
+permissions, leaving the original artifact unchanged.
 
 When no container runtime is reachable, the agent reports that it cannot deliver
 a local payload and stops. It does not fall back to executing the binary on the
@@ -115,7 +121,7 @@ binds require an ingestion token. See [live_reporting.md](live_reporting.md).
 - Remote React/RSC execution: an explicit `CTF_AGENTS_ALLOWED_NETWORKS` match,
   or the legacy `CTF_AGENTS_ALLOW_REMOTE_R2S=1` override
 - Host Python execution: `CTF_AGENTS_ALLOW_HOST_PYTHON_EXECUTION=1`
-- Local Docker challenge runs: `CTF_AGENTS_ALLOW_DOCKER=1`
+- Local Docker challenge and foreign-ELF runs: `CTF_AGENTS_ALLOW_DOCKER=1`
 - Sensitive browser artifacts: `CTF_AGENTS_CAPTURE_SENSITIVE_ARTIFACTS=1`
 
 These controls do not replace authorization. They only enable a bounded

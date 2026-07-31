@@ -11,15 +11,17 @@ capabilities, non-root uid, hard resource limits, strict timeout — but execute
 the *challenge* binary under ``--platform`` rather than a generated Python
 script. Docker Desktop and podman supply the qemu-user binfmt handlers that make
 the cross-architecture case work; when they cannot, the caller gets an explicit
-reason instead of a retry loop.
+reason instead of a retry loop. Execution is default-deny behind
+``CTF_AGENTS_ALLOW_DOCKER=1``, and only a temporary copy of the artifact is
+permission-adjusted and mounted.
 """
 from __future__ import annotations
 
 import logging
 import os
 import shutil
-import stat
 import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -70,6 +72,11 @@ def image() -> str:
     return os.getenv("CTF_AGENTS_ELF_RUNNER_IMAGE") or _DEFAULT_IMAGE
 
 
+def docker_execution_enabled() -> bool:
+    """Return whether the operator explicitly allowed local Docker runs."""
+    return os.getenv("CTF_AGENTS_ALLOW_DOCKER") == "1"
+
+
 class CrossArchElfRunner:
     """Execute a foreign ELF through Docker's binfmt/qemu emulation."""
 
@@ -90,6 +97,13 @@ class CrossArchElfRunner:
         its own connect timeout before failing. One bounded probe up front keeps
         a dead daemon from multiplying across an exploit ladder.
         """
+        if not docker_execution_enabled():
+            return (
+                False,
+                "Docker execution is disabled; set CTF_AGENTS_ALLOW_DOCKER=1 "
+                "for an authorized local challenge run",
+            )
+
         if self._daemon_state is not None:
             return self._daemon_state
 
@@ -157,16 +171,13 @@ class CrossArchElfRunner:
         if not host.is_file():
             return CrossArchRunResult(False, reason=f"binary not found: {binary}")
 
-        # The container runs as nobody against a read-only mount, so it can only
-        # load a world-readable, world-executable file. A challenge extracted at
-        # 0644 — or made runnable by the native path's owner-only `chmod +0700`
-        # — is refused by the OCI runtime with exit 126 before the binary starts.
-        perm_error = self._ensure_readable_and_executable(host)
-        if perm_error:
-            return CrossArchRunResult(False, reason=perm_error)
+        staging_dir, staged, stage_error = self._stage_binary(host)
+        if stage_error:
+            return CrossArchRunResult(False, reason=stage_error)
+        assert staging_dir is not None and staged is not None
 
         container_name = f"ctf-elf-{uuid.uuid4().hex[:12]}"
-        guest_path = f"/target/{host.name}"
+        guest_path = "/target/challenge"
         argv = [
             docker_bin(), "run", "--rm", "-i",
             "--name", container_name,
@@ -181,69 +192,75 @@ class CrossArchElfRunner:
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
             "--user", _RUNNER_UID_GID,
-            "-v", f"{host}:{guest_path}:ro",
+            "-v", f"{staged}:{guest_path}:ro",
             "-w", "/tmp",
             image(),
             guest_path,
         ]
 
-        start = time.time()
         try:
-            proc = subprocess.run(
-                argv,
-                input=payload,
-                capture_output=True,
-                env=minimal_subprocess_env(),
-                timeout=timeout_s,
-            )
-        except subprocess.TimeoutExpired:
-            self._force_remove(container_name)
-            return CrossArchRunResult(
-                False,
-                reason=f"emulated execution timed out after {timeout_s}s",
-                timed_out=True,
-            )
-        except OSError as exc:
-            return CrossArchRunResult(False, reason=f"emulated execution failed: {exc}")
+            start = time.time()
+            try:
+                proc = subprocess.run(
+                    argv,
+                    input=payload,
+                    capture_output=True,
+                    env=minimal_subprocess_env(),
+                    timeout=timeout_s,
+                )
+            except subprocess.TimeoutExpired:
+                self._force_remove(container_name)
+                return CrossArchRunResult(
+                    False,
+                    reason=f"emulated execution timed out after {timeout_s}s",
+                    timed_out=True,
+                )
+            except OSError as exc:
+                return CrossArchRunResult(False, reason=f"emulated execution failed: {exc}")
 
-        raw = (proc.stdout or b"") + (proc.stderr or b"")
-        output = raw[:_MAX_CAPTURE_BYTES].decode("utf-8", errors="replace")
+            raw = (proc.stdout or b"") + (proc.stderr or b"")
+            output = raw[:_MAX_CAPTURE_BYTES].decode("utf-8", errors="replace")
 
-        # 125 is the daemon refusing the request (missing image, unsupported
-        # --platform) and 126 is the runtime failing to exec the target (not
-        # executable by the container uid). Neither is the binary running and
-        # crashing, so report them as a failure to run — otherwise the caller
-        # treats the error text as program output and repeats the same doomed
-        # container start for every payload.
-        if proc.returncode in (125, 126):
-            return CrossArchRunResult(
-                False,
-                reason=f"docker could not run the target: {output.strip()[:200]}",
-                exit_code=proc.returncode,
+            # 125 is the daemon refusing the request (missing image, unsupported
+            # --platform) and 126 is the runtime failing to exec the target (not
+            # executable by the container uid). Neither is the binary running and
+            # crashing, so report them as a failure to run — otherwise the caller
+            # treats the error text as program output and repeats the same doomed
+            # container start for every payload.
+            if proc.returncode in (125, 126):
+                return CrossArchRunResult(
+                    False,
+                    reason=f"docker could not run the target: {output.strip()[:200]}",
+                    exit_code=proc.returncode,
+                )
+
+            logger.debug(
+                "Emulated %s in %.1fs (exit=%s)", host.name, time.time() - start, proc.returncode
             )
-
-        logger.debug(
-            "Emulated %s in %.1fs (exit=%s)", host.name, time.time() - start, proc.returncode
-        )
-        return CrossArchRunResult(True, output=output, exit_code=proc.returncode)
+            return CrossArchRunResult(True, output=output, exit_code=proc.returncode)
+        finally:
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------
     @staticmethod
-    def _ensure_readable_and_executable(host: Path) -> Optional[str]:
-        """Add r-x for all so the container's nobody uid can load the file.
+    def _stage_binary(host: Path) -> Tuple[Optional[Path], Optional[Path], Optional[str]]:
+        """Copy *host* to a private throwaway path loadable by the container.
 
-        Both bits are required: the loader has to read a dynamically linked
-        binary as well as exec it, and the mount is read-only so the permissions
-        cannot be repaired from inside the container. Returns an error string if
-        the file still is not loadable.
+        The original artifact may be owner-only and must remain untouched. The
+        staged copy receives only read/execute bits and is removed after the run.
         """
+        staging_dir: Optional[Path] = None
         try:
-            mode = host.stat().st_mode
-            if (mode & 0o555) != 0o555:
-                host.chmod(mode | 0o555)
+            temp_base = os.getenv("CTF_AGENTS_SANDBOX_TMPDIR") or None
+            staging_dir = Path(tempfile.mkdtemp(prefix="ctf-elf-runner-", dir=temp_base))
+            staged = staging_dir / "challenge"
+            shutil.copyfile(host, staged)
+            staged.chmod(0o555)
         except OSError as exc:
-            return f"cannot make {host.name} readable and executable for the container: {exc}"
-        return None
+            if staging_dir is not None:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            return None, None, f"cannot stage {host.name} for container execution: {exc}"
+        return staging_dir, staged, None
 
     def _force_remove(self, container_name: str) -> None:
         try:

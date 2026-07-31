@@ -81,6 +81,10 @@ python3 ask.py "Decode the Saleae capture in ~/Downloads/capture.sal"
 CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
   python3 ask.py "Pwn challenge at TARGET:PORT; files are in ~/Downloads/pwn"
 
+# Quantum protocol target
+CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
+  python3 ask.py "Quantum bit-commitment challenge at http://TARGET:PORT"
+
 # Git repository with evidence in deleted history
 python3 ask.py "Forensics challenge; files are in ~/Downloads/repository"
 ```
@@ -99,7 +103,8 @@ going to run.
 The agents now read the binary's ELF header first and pick one of three routes:
 
 - **Native** — the host's OS and architecture match, so the binary runs directly.
-- **Emulated** — the binary is mounted read-only into a throwaway container
+- **Emulated** — after explicit Docker authorization, a staged copy of the
+  binary is mounted read-only into a throwaway container
   started with `--platform` taken from its ELF header, letting the container
   runtime's qemu/binfmt handlers translate it. The container carries the same
   posture as the generated-solver sandbox: no network, read-only root, dropped
@@ -109,8 +114,9 @@ The agents now read the binary's ELF header first and pick one of three routes:
   host and binary architectures named, and stops instead of retrying. If the
   challenge has a remote target, payload delivery continues against it.
 
-Set `CTF_AGENTS_ELF_RUNNER_IMAGE` or `CTF_AGENTS_DOCKER_BIN` to override the
-emulation image or container runtime; both are documented in `.env.example`.
+Set `CTF_AGENTS_ALLOW_DOCKER=1` only for an authorized local challenge run.
+`CTF_AGENTS_ELF_RUNNER_IMAGE` and `CTF_AGENTS_DOCKER_BIN` override the emulation
+image and container runtime; all three settings are documented in `.env.example`.
 
 ## Optional AI-Driven Recovery
 
@@ -226,6 +232,15 @@ cipher expressed as Boolean polynomials is linearized over GF(2) and solved by
 bit-packed Gaussian elimination with bounded nullspace enumeration. These paths
 are deterministic and need no model, but they do need the solver backends
 listed under Installation.
+
+Quantum challenges have their own deterministic specialist. It recognizes
+quantum-circuit and entanglement evidence and currently supports Oathbinding-style
+bit-commitment APIs whose verifier reveals a Z/X basis after commitment. The
+agent prepares Bell pairs with `H(a), CX(a,b)`, measures the retained halves in
+the revealed basis, validates every response, and caps remote work at 128 rounds
+and 128 strands. This path needs no LLM; the target must still pass the normal
+network allowlist. See [the quantum specialist guide](agents/specialists/quantum/README.md)
+and the [offline golden contract](examples/quantum/challenge.json).
 
 Blockchain challenges are solved from their published contract source: the
 agent identifies the win condition, compiles and deploys a bespoke attacker

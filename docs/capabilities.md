@@ -41,9 +41,13 @@ tests.
   formatted-history disclosure, and JWT authorization
 - Reverse-engineering strategies for local artifacts and authorized remote machine-code streams
 - ELF-header-driven execution routing: a challenge binary the host cannot run
-  natively is executed inside a locked-down container started with the
-  `--platform` its header implies, and an undeliverable payload is reported once
-  with both architectures named instead of retried across an offset ladder
+  natively may be executed, after explicit Docker authorization, from a staged
+  copy inside a locked-down container started with the `--platform` its header
+  implies; an undeliverable payload is reported once with both architectures
+  named instead of retried across an offset ladder
+- Bounded quantum-protocol analysis and deterministic Oathbinding recovery using
+  Bell-state correlations and deferred Z/X-basis measurement, with network
+  allowlisting, response validation, and round/strand limits
 - Cryptographic decoding and constraint recovery, including source-backed
   repeating-XOR known-prefix recovery and small-subgroup Diffie-Hellman oracle
   discrete-log recovery
@@ -80,7 +84,7 @@ tests.
 
 ## Specialist categories
 
-Current specialists cover web, cryptography, reverse engineering, pwn,
-forensics, hardware, blockchain, secure coding, networking, OSINT, log analysis,
-and miscellaneous coding. See each module under `agents/specialists/` and its
-tests for the current detailed playbook inventory.
+Current specialists cover web, cryptography, quantum protocols, reverse
+engineering, pwn, forensics, hardware, blockchain, secure coding, networking,
+OSINT, log analysis, and miscellaneous coding. See each module under
+`agents/specialists/` and its tests for the current detailed playbook inventory.

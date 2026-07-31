@@ -6,6 +6,7 @@ suite stays offline and does not require a docker daemon.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +23,11 @@ def _elf_bytes(machine: int = 0x3E, ei_class: int = 2, ei_data: int = 1) -> byte
     header[16:18] = (2).to_bytes(2, "little")
     header[18:20] = machine.to_bytes(2, "little" if ei_data == 1 else "big")
     return bytes(header) + b"\x00" * 44
+
+
+@pytest.fixture(autouse=True)
+def allow_authorized_docker_execution(monkeypatch):
+    monkeypatch.setenv("CTF_AGENTS_ALLOW_DOCKER", "1")
 
 
 @pytest.fixture
@@ -59,6 +65,46 @@ def _daemon_up(argv, _kwargs):
 # ---------------------------------------------------------------------------
 # Daemon probing
 # ---------------------------------------------------------------------------
+
+def test_docker_execution_is_default_deny(monkeypatch):
+    monkeypatch.delenv("CTF_AGENTS_ALLOW_DOCKER", raising=False)
+    monkeypatch.setattr(cross_arch_runner.shutil, "which", lambda _n: "/usr/bin/docker")
+    calls = _patch_subprocess(monkeypatch, lambda a, k: _FakeProc())
+
+    ok, detail = CrossArchElfRunner().daemon_available()
+
+    assert ok is False
+    assert "CTF_AGENTS_ALLOW_DOCKER=1" in detail
+    assert calls == []
+
+
+def test_run_does_not_stage_or_invoke_docker_without_opt_in(monkeypatch, binary):
+    monkeypatch.delenv("CTF_AGENTS_ALLOW_DOCKER", raising=False)
+    monkeypatch.setattr(cross_arch_runner.shutil, "which", lambda _n: "/usr/bin/docker")
+    calls = _patch_subprocess(monkeypatch, lambda a, k: _FakeProc())
+    original_mode = Path(binary).stat().st_mode & 0o777
+
+    result = CrossArchElfRunner().run(binary, payload=b"AAAA")
+
+    assert result.ran is False
+    assert "CTF_AGENTS_ALLOW_DOCKER=1" in result.reason
+    assert Path(binary).stat().st_mode & 0o777 == original_mode
+    assert calls == []
+
+
+def test_revoking_docker_permission_overrides_cached_daemon(monkeypatch):
+    monkeypatch.setattr(cross_arch_runner.shutil, "which", lambda _n: "/usr/bin/docker")
+    calls = _patch_subprocess(monkeypatch, _daemon_up)
+    runner = CrossArchElfRunner()
+    assert runner.daemon_available()[0] is True
+
+    monkeypatch.delenv("CTF_AGENTS_ALLOW_DOCKER", raising=False)
+    ok, detail = runner.daemon_available()
+
+    assert ok is False
+    assert "CTF_AGENTS_ALLOW_DOCKER=1" in detail
+    assert len(calls) == 1
+
 
 def test_missing_cli_reports_reason_without_running(monkeypatch):
     monkeypatch.setattr(cross_arch_runner.shutil, "which", lambda _n: None)
@@ -233,23 +279,33 @@ def test_docker_refusal_is_not_reported_as_a_target_crash(monkeypatch, binary, c
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o600, 0o700, 0o744])
-def test_binary_is_made_loadable_by_the_container_uid(monkeypatch, tmp_path, mode):
-    """Owner-only bits are useless to uid 65534, and the mount is read-only.
-
-    0o700 is what the native path's own chmod produces, so the emulated
-    fallback inherits a file it cannot load unless this repairs it.
-    """
+def test_staged_binary_is_loadable_without_mutating_original(monkeypatch, tmp_path, mode):
+    """The nobody container uid gets a staged copy; source modes stay intact."""
     path = tmp_path / "artifact"
     path.write_bytes(_elf_bytes())
     path.chmod(mode)
     monkeypatch.setattr(cross_arch_runner.shutil, "which", lambda _n: "/usr/bin/docker")
-    _patch_subprocess(monkeypatch, _daemon_up)
+    observed = {}
+
+    def handler(argv, kwargs):
+        if argv[1] == "version":
+            return _FakeProc(stdout="27.1.1\n")
+        mount = argv[argv.index("-v") + 1]
+        staged = Path(mount.rsplit(":", 2)[0])
+        observed["path"] = staged
+        observed["mode"] = staged.stat().st_mode & 0o777
+        observed["bytes"] = staged.read_bytes()
+        return _FakeProc()
+
+    _patch_subprocess(monkeypatch, handler)
 
     result = CrossArchElfRunner().run(str(path))
 
     assert result.ran is True
-    # Read as well as execute: the loader must read a dynamically linked ELF.
-    assert path.stat().st_mode & 0o555 == 0o555
+    assert path.stat().st_mode & 0o777 == mode
+    assert observed["mode"] == 0o555
+    assert observed["bytes"] == path.read_bytes()
+    assert not observed["path"].exists()
 
 
 def test_cpu_quota_is_capped_like_the_generated_solver_sandbox(monkeypatch, binary):
