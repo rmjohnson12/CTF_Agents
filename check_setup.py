@@ -1,9 +1,12 @@
 import importlib
 import os
+import platform
 import shutil
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+
+from tools.common.cross_arch_runner import CrossArchElfRunner, docker_bin
 
 def _load_nvidia_keys():
     raw_keys = []
@@ -202,7 +205,57 @@ def check():
         except Exception as exc:
             print(f"[-] {module}: UNAVAILABLE ({purpose}) — {type(exc).__name__}: {exc}")
 
-    # 5. Check Workspace
+    # 5. Check the reversing / pwn stack
+    #
+    # Same fail-open problem as the solver backends: the pwn agent skips Ghidra
+    # when GHIDRA_HOME is unset and skips angr when it is not importable, and a
+    # run only says "skipped" in a trace nobody reads. Local execution is worse
+    # - a Linux ELF simply cannot run on a non-Linux or foreign-arch host, and
+    # the failure looks like a broken exploit.
+    print("\n--- Reversing / Pwn Stack ---")
+    for module, purpose in {
+        "angr": "symbolic execution (automatic win-input discovery)",
+        "pwn": "pwntools: payload delivery, cyclic offsets, ROP",
+        "capstone": "disassembly",
+        "unicorn": "CPU emulation",
+    }.items():
+        try:
+            importlib.import_module(module)
+            print(f"[+] {module}: INSTALLED ({purpose})")
+        except Exception as exc:
+            print(f"[-] {module}: UNAVAILABLE ({purpose}) — {type(exc).__name__}: {exc}")
+
+    ghidra_home = os.getenv("GHIDRA_HOME")
+    if ghidra_home and Path(ghidra_home).is_dir():
+        print(f"[+] GHIDRA_HOME: {ghidra_home}")
+    elif ghidra_home:
+        print(f"[-] GHIDRA_HOME: set to {ghidra_home} but that is not a directory")
+    else:
+        print("[-] GHIDRA_HOME: unset (static analysis phase will be skipped)")
+
+    print("[+] checksec: INSTALLED" if shutil.which("checksec")
+          else "[-] checksec: MISSING (mitigation detection falls back to heuristics)")
+
+    # Local execution of challenge binaries.
+    host_os, host_arch = platform.system(), platform.machine()
+    if host_os == "Linux":
+        print(f"[+] Native ELF execution: available ({host_os}/{host_arch})")
+    else:
+        print(f"[!] Native ELF execution: UNAVAILABLE — host is {host_os}/{host_arch}, "
+              "challenge binaries are Linux ELFs")
+
+    runner = CrossArchElfRunner()
+    if not runner.cli_available():
+        print(f"[-] Emulated ELF execution: no '{docker_bin()}' CLI on PATH "
+              "(set CTF_AGENTS_DOCKER_BIN for another runtime)")
+    else:
+        ok, detail = runner.daemon_available()
+        if ok:
+            print(f"[+] Emulated ELF execution: available via {detail}")
+        else:
+            print(f"[-] Emulated ELF execution: {detail}")
+
+    # 6. Check Workspace
     print("\n--- Workspace ---")
     rockyou = Path.home() / "Downloads" / "rockyou.txt"
     if rockyou.exists():

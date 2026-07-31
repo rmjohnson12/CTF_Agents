@@ -40,6 +40,10 @@ tests.
 - Evidence-gated URL-to-PDF chains spanning duplicate-parameter parser mismatches,
   formatted-history disclosure, and JWT authorization
 - Reverse-engineering strategies for local artifacts and authorized remote machine-code streams
+- ELF-header-driven execution routing: a challenge binary the host cannot run
+  natively is executed inside a locked-down container started with the
+  `--platform` its header implies, and an undeliverable payload is reported once
+  with both architectures named instead of retried across an offset ladder
 - Cryptographic decoding and constraint recovery, including source-backed
   repeating-XOR known-prefix recovery and small-subgroup Diffie-Hellman oracle
   discrete-log recovery

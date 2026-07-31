@@ -11,6 +11,7 @@ Orchestration order for a binary challenge:
 """
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import re
@@ -26,7 +27,8 @@ from agents.registry import AgentRegistry
 from core.decision_engine.llm_reasoner import LLMReasoner
 from core.utils.flag_utils import find_first_flag
 from core.utils.security import SecurityPolicyError, assert_host_allowed, minimal_subprocess_env
-from tools.common.elf_utils import is_elf_binary
+from tools.common.cross_arch_runner import CrossArchElfRunner
+from tools.common.elf_utils import elf_info, host_can_execute, is_elf_binary
 from tools.pwn.pwntools_wrapper import PwntoolsWrapper
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,7 @@ class PwnAgent(BaseAgent):
         agent_id: str = "pwn_agent",
         reasoner: Optional[LLMReasoner] = None,
         pwn_tool: Optional[PwntoolsWrapper] = None,
+        elf_runner: Optional[CrossArchElfRunner] = None,
     ) -> None:
         super().__init__(agent_id, AgentType.SPECIALIST)
         self.reasoner = reasoner
@@ -90,6 +93,12 @@ class PwnAgent(BaseAgent):
         # deps don't prevent the agent from loading.
         self._angr: Any = None
         self._ghidra: Any = None
+
+        # Cross-architecture execution. `_exec_mode` caches the verdict per
+        # binary so a multi-payload ladder probes the host and the container
+        # runtime once instead of once per attempt.
+        self.elf_runner = elf_runner or CrossArchElfRunner()
+        self._exec_mode: Dict[str, tuple[str, str]] = {}
 
     # ------------------------------------------------------------------
     # BaseAgent interface
@@ -325,6 +334,35 @@ class PwnAgent(BaseAgent):
 
         return steps, None
 
+    def _execution_mode(self, binary: str) -> tuple[str, str]:
+        """Decide how *binary* can be run here: natively, emulated, or not at all.
+
+        Returns (mode, reason) where mode is ``native``, ``emulated``, or
+        ``unavailable``. The verdict is cached per binary because an exploit
+        ladder calls this once per payload, and probing the container runtime
+        every time would cost seconds per attempt.
+        """
+        cached = self._exec_mode.get(binary)
+        if cached is not None:
+            return cached
+
+        runnable, reason = host_can_execute(binary)
+        if runnable:
+            mode = ("native", reason)
+        else:
+            info = elf_info(binary)
+            if info is not None and info.docker_platform is None:
+                mode = ("unavailable", f"{reason}; no emulation target for {info.machine_name}")
+            else:
+                available, detail = self.elf_runner.daemon_available()
+                if available:
+                    mode = ("emulated", f"{reason}; emulating with {detail}")
+                else:
+                    mode = ("unavailable", f"{reason}; {detail}")
+
+        self._exec_mode[binary] = mode
+        return mode
+
     def _phase_run_with_payload(
         self, binary: str, payload: bytes
     ) -> tuple[List[str], Optional[str]]:
@@ -334,6 +372,40 @@ class PwnAgent(BaseAgent):
         Returns (steps, flag_string_or_None).
         """
         steps: List[str] = []
+        mode, reason = self._execution_mode(binary)
+
+        if mode == "unavailable":
+            steps.append(f"Local execution unavailable: {reason}")
+            return steps, None
+
+        if mode == "emulated":
+            steps.append(f"Executing binary under emulation ({len(payload)} byte payload)...")
+            result = self.elf_runner.run(binary, payload, timeout_s=20)
+            if not result.ran:
+                if result.timed_out:
+                    # A timeout is a property of this payload — the binary is
+                    # probably blocked reading more input — not proof that the
+                    # host cannot run it. Report it and keep the route open so
+                    # the next payload still gets a turn.
+                    steps.append(f"Emulated execution timed out: {result.reason}")
+                    return steps, None
+
+                steps.append(f"Emulated execution unavailable: {result.reason}")
+                # A structural failure (no daemon, refused platform, unloadable
+                # file) repeats for every payload, so record it once and let the
+                # rest of the ladder short-circuit.
+                self._exec_mode[binary] = ("unavailable", result.reason)
+                return steps, None
+
+            preview = result.output[:200].replace("\n", " ")
+            steps.append(f"Binary output: {preview!r}")
+            flag = find_first_flag(result.output)
+            if flag:
+                steps.append(f"Flag confirmed: {flag}")
+                return steps, flag
+            steps.append("No flag pattern found in binary output")
+            return steps, None
+
         steps.append(f"Executing binary with angr payload ({len(payload)} bytes)...")
         try:
             if not os.access(binary, os.X_OK):
@@ -359,16 +431,56 @@ class PwnAgent(BaseAgent):
 
             steps.append("No flag pattern found in binary output")
 
-        except FileNotFoundError:
-            steps.append(f"Binary not found or not executable: {binary}")
+        except FileNotFoundError as exc:
+            # ENOENT here is ambiguous: either the challenge file is gone, or it
+            # is present but its interpreter is not — a dynamically linked
+            # 32-bit ELF on a host with no 32-bit userland.
+            if os.path.exists(binary):
+                steps.extend(self._record_exec_failure(binary, exc))
+            else:
+                steps.append(f"Binary not found or not executable: {binary}")
         except PermissionError:
             steps.append(f"Permission denied running binary: {binary}")
         except subprocess.TimeoutExpired:
             steps.append("Binary execution timed out (10s)")
+        except OSError as exc:
+            # ENOEXEC means the host cannot load this binary at all. The header
+            # check only claims "native" when it has no evidence against it, so
+            # being wrong here is expected on an unusual host — what matters is
+            # that it costs one attempt rather than one per rung of the ladder.
+            if exc.errno == errno.ENOEXEC:
+                steps.extend(self._record_exec_failure(binary, exc))
+            else:
+                steps.append(f"Binary execution error: {exc}")
         except Exception as exc:
             steps.append(f"Binary execution error: {exc}")
 
         return steps, None
+
+    def _record_exec_failure(self, binary: str, exc: OSError) -> List[str]:
+        """Re-route after a native exec proved the host cannot load *binary*."""
+        steps = [f"Host cannot load this binary: {exc}"]
+        info = elf_info(binary)
+
+        if info is not None and info.docker_platform:
+            available, detail = self.elf_runner.daemon_available()
+            if available:
+                self._exec_mode[binary] = (
+                    "emulated", f"native exec failed ({exc.strerror}); emulating with {detail}"
+                )
+                steps.append(f"Switching to emulation: {detail}")
+            else:
+                self._exec_mode[binary] = (
+                    "unavailable", f"native exec failed ({exc.strerror}); {detail}"
+                )
+                steps.append(f"No emulation available: {detail}")
+            return steps
+
+        self._exec_mode[binary] = (
+            "unavailable", f"native exec failed ({exc.strerror}); no emulation target"
+        )
+        steps.append("No emulation target for this architecture")
+        return steps
 
     def _phase_pwntools_fallback(
         self, binary: str, challenge: Dict[str, Any]
@@ -1007,6 +1119,19 @@ class PwnAgent(BaseAgent):
             return steps, None
 
         conn_info = self._extract_connection_info(challenge)
+
+        # With no way to run the binary and no remote target, every payload in
+        # the ladder below would fail identically. Say so once and stop rather
+        # than emitting a dozen indistinguishable execution errors.
+        mode, reason = self._execution_mode(binary)
+        if mode == "unavailable" and not conn_info:
+            steps.append(
+                f"ret2win: cannot deliver a payload — {reason}, and the challenge "
+                "has no remote target. Start a container runtime or supply "
+                "connection_info to exercise this path."
+            )
+            return steps, None
+
         offset = self._find_overflow_offset(binary, steps)
 
         if offset is not None:
@@ -1090,6 +1215,13 @@ class PwnAgent(BaseAgent):
         return None
 
     def _find_overflow_offset(self, binary: str, steps: List[str]) -> Optional[int]:
+        mode, reason = self._execution_mode(binary)
+        if mode != "native":
+            # Core-dump discovery needs a real local process and the host's
+            # core-file plumbing; neither survives emulation.
+            steps.append(f"Core-dump offset discovery needs native execution ({reason})")
+            return None
+
         try:
             import pwn  # type: ignore
             pwn.context.log_level = "error"
@@ -1160,6 +1292,14 @@ class PwnAgent(BaseAgent):
         return None
 
     def _is_pie(self, binary: str) -> bool:
+        # Read e_type straight from the header. Shelling out to readelf failed
+        # open on any host without binutils installed — every binary looked
+        # non-PIE, so the PIE early-outs never fired and both ret2win and
+        # ret2libc ran full offset ladders against meaningless static addresses.
+        info = elf_info(binary)
+        if info is not None:
+            return info.is_pie
+
         try:
             r = subprocess.run(
                 ["readelf", "-h", binary], capture_output=True, text=True, timeout=5

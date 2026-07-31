@@ -30,12 +30,14 @@ one or more optional provider credentials for live model reasoning.
 Deterministic specialist paths remain available without an LLM where
 implemented.
 
-`check_setup.py` reports external tools, provider credentials, and solver
-backends. The backend section matters: specialists import `fpylll`, `sympy`,
-`z3`, `pycryptodome`, and `gmpy2` lazily, so a broken install fails open — it
-removes whole attack classes (lattice/Coppersmith recovery, constraint solving)
-without raising an error. Treat an `UNAVAILABLE` line there as a real gap, not
-a warning.
+`check_setup.py` reports external tools, provider credentials, solver backends,
+and the reversing/pwn stack. Those last two sections matter most: specialists
+import `fpylll`, `sympy`, `z3`, `pycryptodome`, `angr`, and friends lazily, and
+they skip Ghidra when `GHIDRA_HOME` is unset, so a missing dependency fails
+open — it removes whole attack classes (lattice/Coppersmith recovery,
+constraint solving, symbolic execution) without raising an error. Treat an
+`UNAVAILABLE` line there as a real gap, not a warning. The same section reports
+whether this host can execute challenge binaries at all.
 
 ## Quick Start
 
@@ -84,6 +86,31 @@ python3 ask.py "Forensics challenge; files are in ~/Downloads/repository"
 ```
 
 See [examples/README.md](examples/README.md) for deterministic golden paths.
+
+## Running Challenge Binaries
+
+Pwn and reversing challenges ship Linux ELFs, which a macOS or Windows host
+cannot execute — and an x86-64 binary will not run on an arm64 host either.
+Both cases surface from `exec` as a bare `[Errno 8] Exec format error`, which
+looks like a broken exploit rather than a host limitation, so an exploit ladder
+that retries on failure will spend its whole budget on attempts that were never
+going to run.
+
+The agents now read the binary's ELF header first and pick one of three routes:
+
+- **Native** — the host's OS and architecture match, so the binary runs directly.
+- **Emulated** — the binary is mounted read-only into a throwaway container
+  started with `--platform` taken from its ELF header, letting the container
+  runtime's qemu/binfmt handlers translate it. The container carries the same
+  posture as the generated-solver sandbox: no network, read-only root, dropped
+  capabilities, `no-new-privileges`, a non-root uid, memory and PID caps, and a
+  hard timeout with forced removal.
+- **Unavailable** — no runtime can be reached. The agent says so once, with the
+  host and binary architectures named, and stops instead of retrying. If the
+  challenge has a remote target, payload delivery continues against it.
+
+Set `CTF_AGENTS_ELF_RUNNER_IMAGE` or `CTF_AGENTS_DOCKER_BIN` to override the
+emulation image or container runtime; both are documented in `.env.example`.
 
 ## Optional AI-Driven Recovery
 
