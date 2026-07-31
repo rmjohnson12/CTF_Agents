@@ -21,7 +21,7 @@ class ParseError(ValueError):
 KNOWN_CATEGORIES = frozenset({
     "crypto", "web", "reverse", "pwn", "forensics",
     "osint", "log", "misc", "networking", "hardware", "ics",
-    "blockchain", "secure_coding", "unknown",
+    "quantum", "ai_ml", "blockchain", "secure_coding", "unknown",
 })
 
 _REQUIRED_FIELDS = ("id", "name", "description")
@@ -60,6 +60,13 @@ _CATEGORY_MAP: Dict[str, str] = {
     "operational technology": "ics",
     "ot": "ics",
     "scada": "ics",
+    "quantum": "quantum",
+    "ai/ml": "ai_ml",
+    "ai-ml": "ai_ml",
+    "ai_ml": "ai_ml",
+    "aiml": "ai_ml",
+    "artificial intelligence": "ai_ml",
+    "machine learning": "ai_ml",
     "blockchain": "blockchain",
     "smart contract": "blockchain",
     "smart contracts": "blockchain",
@@ -272,6 +279,12 @@ class ChallengeParser:
         ]).lower()
 
         patterns = [
+            (
+                r"prompt.?inject|prompt.?leak|system.?prompt|jailbreak|"
+                r"chatbot.?password|ai.?assistant.?secret",
+                "ai_ml",
+            ),
+            (r"\bquantum\b|\bqubit\b|\bqiskit\b|bell.?state|\bepr\b", "quantum"),
             (
                 r"\bics\b|industrial.?control|operational.?technology|"
                 r"\bscada\b|\bplc\b|\bmodbus\b|ladder.?logic",

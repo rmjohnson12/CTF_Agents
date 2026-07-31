@@ -17,6 +17,7 @@ AGENT_BY_CATEGORY = {
     "hardware": "hardware_agent",
     "ics": "ics_agent",
     "quantum": "quantum_agent",
+    "ai_ml": "ai_ml_agent",
     "forensics": "forensics_agent",
     "blockchain": "blockchain_agent",
     "secure_coding": "secure_coding_agent",

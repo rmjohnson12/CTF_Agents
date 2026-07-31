@@ -33,6 +33,7 @@ _CATEGORY_ALIASES = {
     "logs": "log",
     "hardware_logic": "hardware",
     "blockchain_exploitation": "blockchain",
+    "aiml": "ai_ml",
 }
 
 

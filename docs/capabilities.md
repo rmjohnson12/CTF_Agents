@@ -48,6 +48,9 @@ tests.
 - Bounded quantum-protocol analysis and deterministic Oathbinding recovery using
   Bell-state correlations and deferred Z/X-basis measurement, with network
   allowlisting, response validation, and round/strand limits
+- Bounded adversarial AI/ML prompt-leaking workflows with verified HTTP client
+  contracts, JWT/CSRF session progression, model-output-derived candidates, and
+  authoritative verification-endpoint flag acceptance
 - Evidence-gated ICS/OT recovery for PLC ladder-logic processes, including
   bounded Modbus RTU single-coil writes and verified process-state transitions
 - Cryptographic decoding and constraint recovery, including source-backed
@@ -88,7 +91,8 @@ tests.
 
 ## Specialist categories
 
-Current specialists cover web, cryptography, quantum protocols, industrial
+Current specialists cover web, cryptography, quantum protocols, adversarial
+AI/ML, industrial
 control systems and operational technology, reverse
 engineering, pwn, forensics, hardware, blockchain, secure coding, networking,
 OSINT, log analysis, and miscellaneous coding. See each module under

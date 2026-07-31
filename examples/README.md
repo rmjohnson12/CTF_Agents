@@ -17,6 +17,10 @@ The ICS golden contract validates routing only. Its Factory Modbus session is
 covered by an offline scripted socket in `tests/unit/test_ics_agent.py`; no
 network request or PLC write occurs during tests.
 
+The AI/ML golden contract also validates routing only. Its five-level chatbot,
+CSRF, disclosure, and verification workflow is covered by the scripted session
+in `tests/unit/test_ai_ml_agent.py`; no model or network call occurs in tests.
+
 Run the golden paths with:
 
 ```bash

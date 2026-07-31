@@ -5,8 +5,8 @@ It classifies a challenge, selects a specialist, executes bounded tools and
 playbooks, records evidence, and reports either a verified result or a concrete
 failure reason.
 
-The project supports cryptography, quantum protocols, industrial control and
-operational technology, reverse engineering, web, pwn, hardware, forensics,
+The project supports cryptography, quantum protocols, adversarial AI/ML,
+industrial control and operational technology, reverse engineering, web, pwn, hardware, forensics,
 blockchain, secure-coding, networking, OSINT, log-analysis, and general coding
 challenges. Platform labels do not have to map
 one-to-one to specialists: an AI/ML challenge built around a poisoned Git
@@ -246,6 +246,16 @@ the revealed basis, validates every response, and caps remote work at 128 rounds
 and 128 strands. This path needs no LLM; the target must still pass the normal
 network allowlist. See [the quantum specialist guide](agents/specialists/quantum/README.md)
 and the [offline golden contract](examples/quantum/challenge.json).
+
+Adversarial AI/ML challenges route to `ai_ml_agent` from AI/ML labels or strong
+prompt-injection, prompt-leaking, system-prompt, and chatbot-secret evidence.
+Its first deterministic playbook validates the target's process/verify and
+JWT/CSRF contract, applies four reviewed disclosure transformations per level,
+and verifies only candidates present in model output. Prompt, candidate, level,
+and response-size budgets prevent brute force or unbounded interaction, and a
+flag is trusted only when returned by the verification endpoint. See
+[the AI/ML specialist guide](agents/specialists/ai_ml/README.md) and the
+[offline golden contract](examples/ai_ml/challenge.json).
 
 Industrial-control challenges route to `ics_agent` from explicit ICS/OT labels
 or PLC, HMI, SCADA, Modbus, and ladder-logic evidence. Its first deterministic

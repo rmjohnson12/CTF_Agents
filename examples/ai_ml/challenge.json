@@ -1,0 +1,14 @@
+{
+  "id": "golden_ai_ml",
+  "name": "Golden AI/ML",
+  "category": "ai_ml",
+  "description": "Test an AI assistant for prompt injection and system-prompt leakage while preserving its JWT and CSRF session across levels.",
+  "tags": ["ai/ml", "prompt injection", "prompt leaking", "chatbot"],
+  "expected": {
+    "command": "python3 main.py examples/ai_ml/challenge.json",
+    "category": "ai_ml",
+    "agent": "ai_ml_agent",
+    "status": "planned",
+    "flag": "HTB{golden_ai_ml}"
+  }
+}

@@ -869,10 +869,10 @@ Invalid response:
 
     Return ONLY valid JSON with this shape:
     {{
-    "category_guess": "crypto|quantum|ics|web|reverse|pwn|forensics|osint|log|misc|blockchain|secure_coding|unknown",
+    "category_guess": "crypto|quantum|ai_ml|ics|web|reverse|pwn|forensics|osint|log|misc|blockchain|secure_coding|unknown",
     "confidence": 0.0,
     "reasoning": "short explanation",
-    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|ics_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
+    "recommended_target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|ai_ml_agent|ics_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "recommended_action": "run_agent|run_tool|stop",
     "detected_indicators": ["indicator1", "indicator2"]
     }}
@@ -881,6 +881,8 @@ Invalid response:
     heap exploits, format string bugs, ELF binaries with exploitation intent).
     Use "blockchain_agent" for blockchain, Ethereum, Solidity smart contract, and RPC-based challenges.
     Use "ics_agent" for ICS/OT, SCADA, PLC, HMI, ladder-logic, and Modbus challenges.
+    Use "ai_ml_agent" for AI/ML prompt-injection, prompt-leaking, system-prompt,
+    and adversarial chatbot challenges.
     Use "secure_coding_agent" for source-remediation challenges where the task is
     to patch vulnerable code through an editor/API and verify the fix.
     If the challenge references a local Docker/Dockerfile/container challenge folder,
@@ -913,7 +915,7 @@ Invalid response:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|ics_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|ai_ml_agent|ics_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation",
     "inputs": {{}}
     }}
@@ -953,7 +955,7 @@ Invalid response:
     Return ONLY valid JSON with this shape:
     {{
     "next_action": "run_agent|run_tool|stop",
-    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|ics_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
+    "target": "pwn_agent|docker_agent|recon_agent|web_agent|crypto_agent|quantum_agent|ai_ml_agent|ics_agent|coding_agent|forensics_agent|reverse_agent|osint_agent|log_agent|networking_agent|blockchain_agent|secure_coding_agent|browser_snapshot|tony_htb_sql|none",
     "reasoning": "short explanation of why this action is different from prior failed attempts",
     "inputs": {{"task": "optional focused instruction for the selected agent"}}
     }}
@@ -1037,6 +1039,9 @@ Invalid response:
             "ics": "ics_agent",
             "ot": "ics_agent",
             "quantum": "quantum_agent",
+            "ai/ml": "ai_ml_agent",
+            "ai_ml": "ai_ml_agent",
+            "ai-ml": "ai_ml_agent",
             "blockchain": "blockchain_agent",
             "secure_coding": "secure_coding_agent",
             "secure-coding": "secure_coding_agent",

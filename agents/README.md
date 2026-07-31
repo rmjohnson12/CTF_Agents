@@ -23,6 +23,8 @@ Under `specialists/`, one package per category:
   process-control playbooks
 - **quantum** — quantum circuits, EPR/Bell-state attacks, and vulnerable
   quantum commitment protocols
+- **ai_ml** — adversarial chatbots, prompt injection/leaking, and bounded
+  JWT/CSRF verification workflows
 - **log_analysis** — log triage and event correlation
 - **blockchain** — smart-contract interaction, attacker-contract deployment, and
   source-driven legacy-token transaction playbooks

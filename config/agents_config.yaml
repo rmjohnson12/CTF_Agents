@@ -125,6 +125,18 @@ specialists:
       - process_state_verification
     max_concurrent_tasks: 1
 
+  ai_ml:
+    agent_id: "ai_ml_agent"
+    enabled: true
+    priority: 1
+    capabilities:
+      - prompt_injection
+      - prompt_leaking
+      - system_prompt_extraction
+      - model_output_analysis
+      - jwt_csrf_session_workflows
+    max_concurrent_tasks: 1
+
   blockchain:
     agent_id: "blockchain_agent"
     enabled: true

@@ -84,6 +84,29 @@ class ChallengeClassifier:
                 detected_indicators=indicators,
             )
 
+        # Adversarial AI/ML and prompt-security interfaces. Exact category
+        # labels are authoritative; keyword routing requires strong chatbot or
+        # prompt-security evidence so generic data-science artifacts keep their
+        # content-based owners.
+        category = str(challenge.get("category") or "").strip().lower()
+        if (
+            category in {"ai/ml", "ai_ml", "ai-ml", "aiml"}
+            or self._kw(
+                text,
+                "prompt injection", "prompt leak", "system prompt",
+                "jailbreak", "chatbot password", "ai assistant secret",
+            )
+        ):
+            indicators.append("adversarial_ai_terms")
+            return ChallengeAnalysis(
+                category_guess="ai_ml",
+                confidence=0.97,
+                reasoning="Detected an AI/ML prompt-security or chatbot challenge.",
+                recommended_target="ai_ml_agent",
+                recommended_action="run_agent",
+                detected_indicators=indicators,
+            )
+
         # Docker context — must run before web/recon checks
         wants_docker_run = self._kw(
             text, "docker", "dockerfile", "container", "spawn", "run locally", "launch"

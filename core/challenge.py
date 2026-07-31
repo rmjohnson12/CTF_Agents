@@ -20,6 +20,8 @@ class ChallengeCategory(Enum):
     MISC = "misc"
     NETWORKING = "networking"
     ICS = "ics"
+    QUANTUM = "quantum"
+    AI_ML = "ai_ml"
     BLOCKCHAIN = "blockchain"
     SECURE_CODING = "secure_coding"
 
