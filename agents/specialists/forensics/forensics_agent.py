@@ -4,13 +4,22 @@ Forensics Specialist Agent
 Specialized agent for forensics-based CTF challenges.
 """
 
+import base64
+import io
 import json
 import logging
 import os
 import re
+import tempfile
+import time
 import zipfile
+import zlib
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
+from urllib.parse import urljoin, urlparse
+
+import requests
 
 from config.defaults import DEFAULT_ROCKYOU_PATHS
 from agents.base_agent import BaseAgent, AgentType
@@ -24,6 +33,7 @@ from tools.common.strings import StringsTool
 from tools.crypto.john import JohnTool
 from tools.crypto.hashcat import HashcatTool
 from core.utils.flag_utils import find_first_flag
+from core.utils.security import SecurityPolicyError, assert_url_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +54,9 @@ class ForensicsAgent(BaseAgent):
         tshark_tool: Optional[TsharkTool] = None,
         scapy_tool: Optional[ScapyTool] = None,
         john_tool: Optional[JohnTool] = None,
-        hashcat_tool: Optional[HashcatTool] = None
+        hashcat_tool: Optional[HashcatTool] = None,
+        http_session: Optional[requests.Session] = None,
+        sleeper=time.sleep,
     ):
         super().__init__(agent_id, AgentType.SPECIALIST)
         self.binwalk_tool = binwalk_tool or BinwalkTool()
@@ -55,6 +67,8 @@ class ForensicsAgent(BaseAgent):
         self.scapy_tool = scapy_tool or ScapyTool()
         self.john_tool = john_tool or JohnTool()
         self.hashcat_tool = hashcat_tool or HashcatTool()
+        self.http_session = http_session or requests.Session()
+        self._sleep = sleeper
         self.capabilities = [
             "forensics",
             "file_analysis",
@@ -66,6 +80,10 @@ class ForensicsAgent(BaseAgent):
             "artifact_extraction",
             "steganography",
             "metadata",
+            "office_external_relationships",
+            "powershell_format_deobfuscation",
+            "php_webshell_channel_decoding",
+            "keepass_exfiltration_recovery",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -96,6 +114,10 @@ class ForensicsAgent(BaseAgent):
 
         files = challenge.get("files", [])
         if not files:
+            office_result = self._try_live_office_external_relationship(challenge, steps)
+            if office_result:
+                return office_result
+
             live_result = self._try_live_ssh_forensics(challenge, steps)
             if live_result:
                 return live_result
@@ -118,6 +140,22 @@ class ForensicsAgent(BaseAgent):
             "archives": [],
             "pcap": []
         }
+
+        webshell_flag, webshell_artifact = self._try_php_webshell_keepass_exfiltration(
+            files,
+            steps,
+        )
+        if webshell_artifact:
+            all_artifacts["webshell_channel"] = webshell_artifact
+        if webshell_flag:
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": webshell_flag,
+                "steps": steps,
+                "artifacts": all_artifacts,
+            }
 
         for file_path in files:
             if os.path.isdir(file_path) and os.path.exists(
@@ -301,7 +339,7 @@ class ForensicsAgent(BaseAgent):
                     if ips:
                         answer = f"Possible server IPs found in PCAP: {', '.join(ips[:3])}"
                         steps.append(f"  Heuristic answer for IP question: {answer}")
-                        flag = answer
+                        all_artifacts["heuristic_answer"] = answer
 
         return {
             "challenge_id": challenge.get("id"),
@@ -311,6 +349,393 @@ class ForensicsAgent(BaseAgent):
             "steps": steps,
             "artifacts": all_artifacts
         }
+
+    def _try_live_office_external_relationship(
+        self,
+        challenge: Dict[str, Any],
+        steps: List[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Follow a bounded OOXML external relationship and decode its script.
+
+        The challenge must supply an authorized live HTTP target and name an
+        Office document path in its description. External relationship hosts
+        are never contacted directly; only their path is replayed against the
+        already allowlisted spawned target, preserving the dynamic HTB port.
+        """
+        base_url = self._http_base_url(challenge)
+        document_path = self._office_document_path(challenge)
+        if not base_url or not document_path:
+            return None
+
+        try:
+            assert_url_allowed(base_url)
+            document = self._bounded_http_get(
+                urljoin(base_url + "/", document_path.lstrip("/")),
+                retry_connections=True,
+            )
+            relationship_target = self._external_office_relationship(document)
+            if not relationship_target:
+                steps.append(
+                    "Downloaded the live Office artifact, but found no external OOXML relationship."
+                )
+                return None
+            external_path = urlparse(relationship_target.rstrip("!")).path
+            if not external_path or not external_path.startswith("/"):
+                raise ValueError("external Office relationship did not contain a safe absolute path")
+            steps.append(
+                "Downloaded the Office artifact and identified an external OLE relationship."
+            )
+            payload = self._bounded_http_get(
+                urljoin(base_url + "/", external_path.lstrip("/")),
+                retry_connections=False,
+            )
+            decoded_scripts = self._decode_embedded_base64_text(payload)
+            for script in decoded_scripts:
+                recovered = self._evaluate_powershell_format_strings(script)
+                flag = find_first_flag(recovered)
+                if flag:
+                    steps.append(
+                        "Decoded the external script and evaluated its PowerShell format expression."
+                    )
+                    return {
+                        "challenge_id": challenge.get("id"),
+                        "agent_id": self.agent_id,
+                        "status": "solved",
+                        "flag": flag,
+                        "steps": steps,
+                        "artifacts": {
+                            "external_relationship_type": "oleObject",
+                            "external_path": external_path,
+                            "techniques": [
+                                "ooxml_external_relationship_analysis",
+                                "base64_script_decoding",
+                                "powershell_format_deobfuscation",
+                            ],
+                        },
+                    }
+            steps.append(
+                "The external Office payload contained no supported PowerShell format expression."
+            )
+        except (requests.RequestException, SecurityPolicyError, ValueError, zipfile.BadZipFile) as exc:
+            steps.append(f"Live Office analysis stopped safely: {exc}")
+        return None
+
+    def _bounded_http_get(self, url: str, *, retry_connections: bool) -> bytes:
+        attempts = 8 if retry_connections else 1
+        last_error: Optional[requests.RequestException] = None
+        for attempt in range(attempts):
+            try:
+                response = self.http_session.get(
+                    url,
+                    timeout=(5, 12),
+                    allow_redirects=False,
+                )
+                response.raise_for_status()
+                content = response.content
+                if len(content) > 2 * 1024 * 1024:
+                    raise ValueError("forensic HTTP artifact exceeded the 2 MiB limit")
+                return content
+            except requests.ConnectionError as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    self._sleep(1.0)
+                    continue
+                raise
+        raise last_error or requests.ConnectionError("forensic HTTP download failed")
+
+    @staticmethod
+    def _external_office_relationship(document: bytes) -> Optional[str]:
+        with zipfile.ZipFile(io.BytesIO(document)) as archive:
+            member = "word/_rels/document.xml.rels"
+            if member not in archive.namelist():
+                return None
+            root = ET.fromstring(archive.read(member))
+            for relationship in root.iter():
+                if not relationship.tag.endswith("Relationship"):
+                    continue
+                rel_type = relationship.attrib.get("Type", "")
+                target = relationship.attrib.get("Target", "")
+                target_mode = relationship.attrib.get("TargetMode", "")
+                if (
+                    target_mode.lower() == "external"
+                    and rel_type.endswith(("/oleObject", "/attachedTemplate"))
+                    and target.startswith(("http://", "https://"))
+                ):
+                    return target
+        return None
+
+    @staticmethod
+    def _decode_embedded_base64_text(payload: bytes) -> List[str]:
+        text = payload.decode("utf-8", errors="ignore")
+        decoded: List[str] = []
+        for match in re.finditer(r"[A-Za-z0-9+/]{40,}={0,2}", text):
+            raw = match.group(0)
+            try:
+                candidate = base64.b64decode(raw + "=" * (-len(raw) % 4))
+            except Exception:
+                continue
+            candidate_text = candidate.decode("utf-8", errors="ignore")
+            if candidate_text and candidate_text not in decoded:
+                decoded.append(candidate_text)
+        return decoded
+
+    @staticmethod
+    def _evaluate_powershell_format_strings(script: str) -> str:
+        recovered: List[str] = []
+        pattern = re.compile(
+            r"\(\s*[\"'](?P<template>(?:\{\d+\})+)[\"']\s*-f\s*"
+            r"(?P<arguments>(?:[\"'][^\"']*[\"']\s*,?\s*)+)\)",
+            re.IGNORECASE,
+        )
+        for match in pattern.finditer(script):
+            arguments = re.findall(r"[\"']([^\"']*)[\"']", match.group("arguments"))
+            template = match.group("template")
+
+            def substitute(index_match: re.Match[str]) -> str:
+                index = int(index_match.group(1))
+                return arguments[index] if index < len(arguments) else ""
+
+            recovered.append(re.sub(r"\{(\d+)\}", substitute, template))
+        return "\n".join(recovered)
+
+    @staticmethod
+    def _http_base_url(challenge: Dict[str, Any]) -> Optional[str]:
+        for raw in (
+            challenge.get("url"),
+            challenge.get("target"),
+            challenge.get("connection_info"),
+        ):
+            if isinstance(raw, dict):
+                raw = raw.get("url") or raw.get("base_url")
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            if not value.startswith(("http://", "https://")):
+                value = "http://" + value
+            parsed = urlparse(value)
+            if parsed.hostname and parsed.port:
+                return f"{parsed.scheme}://{parsed.netloc}"
+        return None
+
+    @staticmethod
+    def _office_document_path(challenge: Dict[str, Any]) -> Optional[str]:
+        text = " ".join(
+            [
+                str(challenge.get("description") or ""),
+                " ".join(str(item) for item in challenge.get("hints", [])),
+            ]
+        )
+        match = re.search(
+            r"(?:https?://[A-Za-z0-9.:-]+)?(/[A-Za-z0-9_.-]+\.(?:doc|docx))\b",
+            text,
+            re.IGNORECASE,
+        )
+        return match.group(1) if match else None
+
+    def _try_php_webshell_keepass_exfiltration(
+        self,
+        files: List[str],
+        steps: List[str],
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        php_files = [Path(item) for item in files if str(item).lower().endswith(".php")]
+        pcap_files = [
+            Path(item)
+            for item in files
+            if str(item).lower().endswith((".pcap", ".pcapng"))
+        ]
+        if not php_files or not pcap_files:
+            return None, None
+
+        profile = None
+        for php_file in php_files:
+            try:
+                source = php_file.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            profile = self._php_webshell_profile(source)
+            if profile:
+                break
+        if not profile:
+            return None, None
+
+        key, prefix, suffix, password_hash = profile
+        wordlist = next(
+            (candidate for candidate in DEFAULT_ROCKYOU_PATHS if Path(candidate).is_file()),
+            None,
+        )
+        if not wordlist:
+            steps.append("Detected a keyed PHP webshell, but no approved wordlist was available.")
+            return None, {"type": "keyed_php_webshell", "decoded_messages": 0}
+        cracked = self.john_tool.run(password_hash, wordlist=wordlist, timeout_s=60)
+        if not cracked.cracked_password:
+            steps.append("Detected a keyed PHP webshell, but its key hash was not recovered.")
+            return None, {"type": "keyed_php_webshell", "decoded_messages": 0}
+
+        decoded_messages: List[bytes] = []
+        for pcap_file in pcap_files:
+            for stream in self.scapy_tool.reconstruct_all_streams(str(pcap_file)):
+                for raw_data in (stream.data_c2s, stream.data_s2c):
+                    decoded_messages.extend(
+                        self._decode_php_webshell_messages(raw_data, key, prefix, suffix)
+                    )
+
+        kdbx_blobs: List[bytes] = []
+        for message in decoded_messages:
+            stripped = re.sub(rb"\s+", b"", message)
+            try:
+                blob = base64.b64decode(stripped + b"=" * (-len(stripped) % 4))
+            except Exception:
+                continue
+            if blob.startswith(b"\x03\xd9\xa2\x9a\x67\xfb\x4b\xb5"):
+                kdbx_blobs.append(blob)
+
+        for blob in kdbx_blobs:
+            flag = self._flag_from_kdbx(blob, cracked.cracked_password)
+            if flag:
+                steps.append(
+                    "Decoded the keyed compressed/XOR webshell channel from the PCAP."
+                )
+                steps.append(
+                    "Recovered the exfiltrated KDBX database and opened it with the source-derived key password."
+                )
+                return flag, {
+                    "type": "php_webshell_keepass_exfiltration",
+                    "decoded_messages": len(decoded_messages),
+                    "kdbx_blobs": len(kdbx_blobs),
+                    "captured_sensitive_values": False,
+                    "techniques": [
+                        "php_webshell_deobfuscation",
+                        "compressed_xor_channel_decoding",
+                        "pcap_exfiltration_recovery",
+                        "keepass_database_analysis",
+                    ],
+                }
+
+        steps.append(
+            "Decoded the keyed PHP webshell channel, but recovered no flag-bearing KDBX database."
+        )
+        return None, {
+            "type": "keyed_php_webshell",
+            "decoded_messages": len(decoded_messages),
+            "kdbx_blobs": len(kdbx_blobs),
+        }
+
+    @staticmethod
+    def _php_webshell_profile(source: str) -> Optional[Tuple[bytes, bytes, bytes, str]]:
+        candidates = [source]
+        assignments: Dict[str, str] = {}
+        for match in re.finditer(
+            r"\$([A-Za-z_]\w*)\s*=\s*(?:'([^']*)'|\"([^\"]*)\")\s*;",
+            source,
+            re.DOTALL,
+        ):
+            assignments[match.group(1)] = (
+                match.group(2) if match.group(2) is not None else match.group(3)
+            )
+
+        builder_pattern = re.compile(
+            r"str_replace\(\s*['\"]([^'\"]{1,8})['\"]\s*,\s*['\"]['\"]\s*,\s*"
+            r"((?:\$[A-Za-z_]\w*\s*\.?\s*)+)\)",
+        )
+        for match in builder_pattern.finditer(source):
+            marker, expression = match.groups()
+            names = re.findall(r"\$([A-Za-z_]\w*)", expression)
+            if names and all(name in assignments for name in names):
+                candidates.append(
+                    "".join(assignments[name] for name in names).replace(marker, "")
+                )
+
+        marker_match = re.search(
+            r"str_replace\(\s*['\"]([^'\"]{1,8})['\"]\s*,\s*['\"]['\"]",
+            source,
+        )
+        if marker_match:
+            candidates.append(source.replace(marker_match.group(1), ""))
+
+        for deobfuscated in candidates:
+            values = {}
+            for name in ("k", "kh", "kf"):
+                match = re.search(
+                    rf"\${name}\s*=\s*[\"']([0-9a-fA-F]+)[\"']",
+                    deobfuscated,
+                )
+                if not match:
+                    break
+                values[name] = match.group(1)
+            if len(values) != 3:
+                continue
+            password_hash = values["k"] + values["kh"] + values["kf"]
+            if len(values["k"]) != 8 or len(password_hash) != 32:
+                continue
+            if not all(
+                term in deobfuscated
+                for term in ("php://input", "base64_decode", "gzuncompress")
+            ):
+                continue
+            return (
+                values["k"].encode("ascii"),
+                values["kh"].encode("ascii"),
+                values["kf"].encode("ascii"),
+                password_hash.lower(),
+            )
+        return None
+
+    @staticmethod
+    def _decode_php_webshell_messages(
+        raw_data: bytes,
+        key: bytes,
+        prefix: bytes,
+        suffix: bytes,
+    ) -> List[bytes]:
+        decoded: List[bytes] = []
+        pattern = re.compile(re.escape(prefix) + rb"([A-Za-z0-9+/=]+?)" + re.escape(suffix))
+        for match in pattern.finditer(raw_data):
+            encoded = match.group(1)
+            try:
+                encrypted = base64.b64decode(encoded + b"=" * (-len(encoded) % 4))
+                compressed = bytes(
+                    value ^ key[index % len(key)]
+                    for index, value in enumerate(encrypted)
+                )
+                message = zlib.decompress(compressed)
+            except Exception:
+                continue
+            decoded.append(message)
+        return decoded
+
+    @staticmethod
+    def _flag_from_kdbx(blob: bytes, password: str) -> Optional[str]:
+        try:
+            from pykeepass import PyKeePass
+        except ImportError:
+            return None
+
+        temporary_name = ""
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".kdbx", delete=False) as temporary:
+                temporary.write(blob)
+                temporary_name = temporary.name
+            database = PyKeePass(temporary_name, password=password)
+            for entry in database.entries:
+                for value in (
+                    entry.title,
+                    entry.username,
+                    entry.password,
+                    entry.url,
+                    entry.notes,
+                ):
+                    flag = find_first_flag(str(value or ""))
+                    if flag:
+                        return flag
+        except Exception:
+            return None
+        finally:
+            if temporary_name:
+                try:
+                    Path(temporary_name).unlink()
+                except OSError:
+                    pass
+        return None
 
     def _analyze_krita_archive(
         self,

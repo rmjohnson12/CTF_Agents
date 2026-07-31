@@ -30,6 +30,10 @@ tests.
 - Encoded artifact recovery and flag extraction
 - Saleae UART decoding and ESP32 flash-image parsing
 - Bounded raw-TCP Forth diagnostic discovery with dictionary-gated command execution
+- Bounded OOXML external-relationship inspection for live Office artifacts,
+  including Base64 script recovery and PowerShell format-expression deobfuscation
+- Source-gated PHP webshell traffic recovery from PCAP streams, including keyed
+  compressed/XOR decoding and exfiltrated KeePass database inspection
 - Result redaction and bounded persistence
 
 ## Exploit and solution generation
