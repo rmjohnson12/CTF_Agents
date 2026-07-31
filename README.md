@@ -131,13 +131,21 @@ the model receives bounded, redacted observations and can iteratively propose
 evidence-backed operations. The default recovery budget is four model/tool
 turns.
 
-Supported providers are NVIDIA NIM, Anthropic, OpenAI, Google Gemini/Vertex AI,
+CTF_Agents works without a paid API key wherever a deterministic playbook is
+implemented. For a more capable AI-assisted experience on unfamiliar
+challenges, configure a hosted provider such as Anthropic, OpenAI, Google, or
+NVIDIA NIM. Paid access can offer better availability and higher usage limits,
+but it does not guarantee a solve and may incur charges. Provider calls send
+bounded, redacted challenge observations to that third party; never commit API
+keys.
+
+Supported providers are Anthropic, OpenAI, Google Gemini/Vertex AI, NVIDIA NIM,
 and local Ollama. Choose a preferred provider and configure its credential in
 the project-root `.env`:
 
 ```dotenv
-LLM_PROVIDER=nvidia
-NVAPI_KEY=your_nvidia_api_key
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_anthropic_api_key_here
 
 # Recommended when the model needs to calculate, simulate, or parse raw data.
 CTF_AGENTS_SANDBOX=docker
