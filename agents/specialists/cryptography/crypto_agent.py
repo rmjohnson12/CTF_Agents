@@ -9,6 +9,7 @@ import base64
 import binascii
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -74,6 +75,7 @@ class CryptographyAgent(BaseAgent):
             "rsa",
             "rsa_partial_prime_leak",
             "rsa_redacted_pem",
+            "rsa_shared_prime_obfuscated_modulus",
             "boolean_polynomial_linearization",
             "two_round_aes_differential",
             "aes",
@@ -154,6 +156,9 @@ class CryptographyAgent(BaseAgent):
 
         if self._has_redacted_pem(challenge.get("files", [])):
             cipher_types.extend(["rsa", "rsa_redacted_pem"])
+
+        if self._has_shared_prime_rsa_source(challenge.get("files", [])):
+            cipher_types.extend(["rsa", "rsa_shared_prime_obfuscated_modulus"])
 
         if self._load_two_round_aes_save_sources(challenge.get("files", [])):
             cipher_types.append("two_round_aes_differential")
@@ -261,6 +266,30 @@ class CryptographyAgent(BaseAgent):
                     "status": "solved",
                     "flag": found,
                     "steps": steps,
+                }
+
+        rsa_shared_prime_result = self._try_rsa_shared_prime_obfuscated_modulus_from_files(
+            challenge.get("files", []), steps
+        )
+        if rsa_shared_prime_result:
+            found = find_first_flag(rsa_shared_prime_result)
+            if found:
+                steps.append(
+                    "SUCCESS: Found flag by factoring shared-prime RSA moduli through the linear leak."
+                )
+                return {
+                    "challenge_id": challenge.get("id"),
+                    "agent_id": self.agent_id,
+                    "status": "solved",
+                    "flag": found,
+                    "steps": steps,
+                    "artifacts": {
+                        "techniques": [
+                            "source_semantic_analysis",
+                            "rsa_shared_prime_gcd",
+                            "obfuscated_modulus_recovery",
+                        ]
+                    },
                 }
 
         rsa_low_exponent_result = self._try_rsa_low_exponent_from_files(challenge.get("files", []), steps)
@@ -920,6 +949,157 @@ class CryptographyAgent(BaseAgent):
         plaintext = self._int_to_bytes(root).decode("utf-8", errors="replace")
         steps.append(f"  Collected {len(samples)} capsules from {host}:{port}; recovered RSA plaintext.")
         return plaintext
+
+    @classmethod
+    def _try_rsa_shared_prime_obfuscated_modulus_from_files(
+        cls,
+        files: List[str],
+        steps: List[str],
+    ) -> Optional[str]:
+        """Recover two RSA plaintext parts from a shared prime and linear leak.
+
+        Supported source contract::
+
+            n1 = p * q
+            n2 = q * z
+            c1 = pow(flag1, e, n1)
+            c2 = pow(flag2, e, n2)
+            leak = n1 * E + n2
+
+        ``gcd(n1, leak)`` reveals ``q`` without learning ``E``. Since all
+        three primes have the same bit length, ``n2 < 2*n1`` and the modulus
+        is one of ``leak % n1`` or that remainder plus ``n1``. Both candidates
+        are tried, and only a reconstructed flag is accepted.
+        """
+        source = ""
+        outputs: List[str] = []
+        for raw_path in files:
+            path = Path(raw_path)
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as exc:
+                logger.debug("Could not read shared-prime RSA artifact %s: %s", path, exc)
+                continue
+            if path.suffix.lower() == ".py":
+                source += text + "\n"
+            else:
+                outputs.append(text)
+
+        if not cls._looks_like_shared_prime_rsa_source(source):
+            return None
+
+        exponent_match = re.search(
+            r"(?m)^\s*e\s*=\s*(0x[0-9a-fA-F]+|\d+)\s*$",
+            source,
+        )
+        if not exponent_match:
+            return None
+        exponent = int(exponent_match.group(1), 0)
+        if exponent < 3 or exponent % 2 == 0:
+            return None
+
+        for output in outputs:
+            values: Dict[str, int] = {}
+            for name in ("n1", "c1", "c2"):
+                match = re.search(rf"(?m)^\s*{name}\s*:\s*(\d+)\s*$", output)
+                if match:
+                    values[name] = int(match.group(1))
+            leak_match = re.search(
+                r"(?m)^\s*\(\s*n1\s*\*\s*E\s*\)\s*\+\s*n2\s*:\s*(\d+)\s*$",
+                output,
+            )
+            if set(values) != {"n1", "c1", "c2"} or not leak_match:
+                continue
+
+            n1, c1, c2 = values["n1"], values["c1"], values["c2"]
+            leak = int(leak_match.group(1))
+            shared_prime = math.gcd(n1, leak)
+            if not 1 < shared_prime < n1 or n1 % shared_prime:
+                continue
+            other_n1_prime = n1 // shared_prime
+            plaintext1 = cls._rsa_raw_decrypt(
+                c1,
+                n1,
+                shared_prime,
+                other_n1_prime,
+                exponent,
+            )
+            if plaintext1 is None:
+                continue
+
+            remainder = leak % n1
+            for n2 in (remainder, remainder + n1):
+                if n2 <= shared_prime or n2 % shared_prime or c2 >= n2:
+                    continue
+                other_n2_prime = n2 // shared_prime
+                plaintext2 = cls._rsa_raw_decrypt(
+                    c2,
+                    n2,
+                    shared_prime,
+                    other_n2_prime,
+                    exponent,
+                )
+                if plaintext2 is None:
+                    continue
+                for combined in (plaintext1 + plaintext2, plaintext2 + plaintext1):
+                    decoded = combined.decode("utf-8", errors="ignore")
+                    if find_first_flag(decoded):
+                        steps.append(
+                            "  Detected source-backed shared-prime RSA with a linear modulus leak."
+                        )
+                        steps.append(
+                            "  Recovered the shared factor by GCD, resolved the one-bit modulus ambiguity, and decrypted both parts."
+                        )
+                        return decoded
+        return None
+
+    @classmethod
+    def _has_shared_prime_rsa_source(cls, files: List[str]) -> bool:
+        for raw_path in files:
+            path = Path(raw_path)
+            if path.suffix.lower() != ".py" or not path.is_file():
+                continue
+            try:
+                source = path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            if cls._looks_like_shared_prime_rsa_source(source):
+                return True
+        return False
+
+    @staticmethod
+    def _looks_like_shared_prime_rsa_source(source: str) -> bool:
+        compact = re.sub(r"\s+", "", source)
+        return all(
+            marker in compact
+            for marker in (
+                "n1=p*q",
+                "n2=q*z",
+                "pow(flag1,e,n1)",
+                "pow(flag2,e,n2)",
+                "n1*E+n2",
+            )
+        )
+
+    @staticmethod
+    def _rsa_raw_decrypt(
+        ciphertext: int,
+        modulus: int,
+        prime1: int,
+        prime2: int,
+        exponent: int,
+    ) -> Optional[bytes]:
+        if prime1 * prime2 != modulus or not 0 <= ciphertext < modulus:
+            return None
+        phi = (prime1 - 1) * (prime2 - 1)
+        try:
+            private_exponent = pow(exponent, -1, phi)
+        except ValueError:
+            return None
+        plaintext = pow(ciphertext, private_exponent, modulus)
+        return CryptographyAgent._int_to_bytes(plaintext)
 
     def _try_rsa_low_exponent_from_files(self, files: List[str], steps: List[str]) -> Optional[str]:
         """Recover unpadded low-exponent RSA plaintexts from local output files."""

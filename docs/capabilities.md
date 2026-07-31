@@ -59,6 +59,9 @@ tests.
 - Redacted-PEM key recovery: rebuilds the base64 grid of a partially masked
   PKCS#1 private key, walks the DER with sub-byte precision to recover the
   modulus and a prime's leading bits, then factors the modulus with Coppersmith
+- Source-gated shared-prime RSA recovery when a second same-size modulus is
+  obscured by a linear multiple of the first: GCD factor recovery, bounded
+  modulus disambiguation, and multi-part plaintext reconstruction
 - Bounded chosen-plaintext recovery for source-identified two-round AES-like
   encrypted-save oracles, including reversible key expansion and winning-save
   forgery within a 13-query budget

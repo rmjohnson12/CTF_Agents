@@ -238,6 +238,13 @@ bit-packed Gaussian elimination with bounded nullspace enumeration. These paths
 are deterministic and need no model, but they do need the solver backends
 listed under Installation.
 
+The RSA specialist also recognizes two same-size moduli that share a prime when
+the second modulus is hidden in a linear expression such as `n1*E + n2`. It
+recovers the shared factor by GCD, resolves the bounded quotient ambiguity,
+decrypts both source-defined ciphertext parts, and accepts only a reconstructed
+flag. No challenge-specific modulus, ciphertext, or flag fragment is embedded
+in the playbook.
+
 Quantum challenges have their own deterministic specialist. It recognizes
 quantum-circuit and entanglement evidence and currently supports Oathbinding-style
 bit-commitment APIs whose verifier reveals a Z/X basis after commitment. The

@@ -272,6 +272,73 @@ def test_crypto_agent_solves_local_rsa_low_exponent_unpadded_output(tmp_path):
     assert any("RSA low-exponent" in step for step in result["steps"])
 
 
+@pytest.mark.parametrize("n2_is_larger", [False, True])
+def test_crypto_agent_solves_source_backed_shared_prime_rsa_linear_leak(
+    tmp_path,
+    n2_is_larger,
+):
+    primes = [
+        170141183460469231731687303715884118099,
+        170141183460469231731687303716871760241,
+        170141183460469231731687303718229784631,
+    ]
+    q = primes[1]
+    if n2_is_larger:
+        p, z = primes[0], primes[2]
+    else:
+        p, z = primes[2], primes[0]
+    exponent = 65537
+    part1 = b"HTB{shared_"
+    part2 = b"prime_leak}"
+    message1 = int.from_bytes(part1, "big")
+    message2 = int.from_bytes(part2, "big")
+    n1 = p * q
+    n2 = q * z
+    assert message1 < n1 and message2 < n2
+    c1 = pow(message1, exponent, n1)
+    c2 = pow(message2, exponent, n2)
+    multiplier = (1 << 100) + 12345
+    leak = n1 * multiplier + n2
+
+    source = tmp_path / "encrypt.py"
+    source.write_text(
+        "from Crypto.Util.number import bytes_to_long, getPrime\n"
+        "p, q, z = [getPrime(128) for _ in range(3)]\n"
+        "e = 0x10001\n"
+        "n1 = p * q\n"
+        "n2 = q * z\n"
+        "c1 = pow(flag1, e, n1)\n"
+        "c2 = pow(flag2, e, n2)\n"
+        "E = bytes_to_long(urandom(16))\n"
+        "print(f'(n1 * E) + n2: {n1 * E + n2}')\n"
+    )
+    output = tmp_path / "output.txt"
+    output.write_text(
+        f"n1: {n1}\n"
+        f"c1: {c1}\n"
+        f"c2: {c2}\n"
+        f"(n1 * E) + n2: {leak}\n"
+    )
+
+    result = CryptographyAgent().solve_challenge(
+        {
+            "id": "shared-prime-linear-leak",
+            "category": "crypto",
+            "description": "Recover two RSA-encrypted flag parts from the supplied source.",
+            "files": [str(source), str(output)],
+        }
+    )
+
+    assert result["status"] == "solved"
+    assert result["flag"] == "HTB{shared_prime_leak}"
+    assert "rsa_shared_prime_obfuscated_modulus" in result["steps"][1]
+    assert result["artifacts"]["techniques"] == [
+        "source_semantic_analysis",
+        "rsa_shared_prime_gcd",
+        "obfuscated_modulus_recovery",
+    ]
+
+
 def test_crypto_agent_rsa_broadcast_math_helpers_recover_plaintext():
     agent = CryptographyAgent()
     plaintext = b"flag"
