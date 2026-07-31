@@ -260,7 +260,9 @@ Blockchain challenges are solved from their published contract source: the
 agent identifies the win condition, compiles and deploys a bespoke attacker
 contract when the exploit requires a contract caller (e.g. a `tx.origin` gate),
 or executes source-detected transaction sequences such as pre-0.8 ERC20
-underflow purchases. It signs the required web3 transactions and verifies
+underflow purchases. It can also mirror same-block entropy inside a helper
+contract when an unlock key is derived entirely from caller-visible block
+values. It signs the required web3 transactions and verifies
 `isSolved()` before retrieving the flag.
 
 ## Persistence and Learning

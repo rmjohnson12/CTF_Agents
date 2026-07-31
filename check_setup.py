@@ -197,6 +197,7 @@ def check():
         "z3": "constraint solving (custom cipher inversion)",
         "Crypto": "pycryptodome primitives",
         "gmpy2": "big-integer speedups",
+        "solcx": "Solidity compilation (source-driven attacker contracts)",
     }
     for module, purpose in backends.items():
         try:

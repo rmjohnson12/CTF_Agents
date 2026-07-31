@@ -70,6 +70,8 @@ tests.
 - Interface-gated EVM lifecycle transactions with on-chain `isSolved()` verification
 - Source-driven attacker-contract compilation and deployment for exploits that
   require a contract caller (e.g. `tx.origin` access-control gates)
+- Source-gated same-block entropy mirroring for EVM vaults whose private unlock
+  key is derived from caller-visible block values and a constantized secret
 - Source-detected pre-0.8 ERC20 balance underflow, bounded token/shop discovery,
   signed purchase transactions, and on-chain solve verification
 - Credentialed live-SSH loader/rootkit triage with explicitly gated host trust
