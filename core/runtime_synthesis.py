@@ -379,16 +379,16 @@ class RuntimeToolSynthesisLoop:
                 f"pD {max_bytes} @ entry0;"
                 "izz"
             )
-            result = subprocess.run(
+            proc = subprocess.run(
                 [r2, "-q", "-e", "bin.relocs.apply=true", "-c", command, str(path)],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
-            output = (result.stdout or "") + (result.stderr or "")
-            if result.returncode != 0 and not output.strip():
+            output = (proc.stdout or "") + (proc.stderr or "")
+            if proc.returncode != 0 and not output.strip():
                 raise RuntimeToolValidationError(
-                    f"radare2 failed with exit code {result.returncode}"
+                    f"radare2 failed with exit code {proc.returncode}"
                 )
             return output[:200_000]
         if kind == "inspect_git_history":
@@ -399,7 +399,7 @@ class RuntimeToolSynthesisLoop:
                     "inspect_git_history requires git on PATH"
                 )
             max_commits = min(max(int(operation.get("max_commits", 20)), 1), 100)
-            result = subprocess.run(
+            proc = subprocess.run(
                 [
                     git,
                     "-C",
@@ -420,10 +420,10 @@ class RuntimeToolSynthesisLoop:
                 text=True,
                 timeout=30,
             )
-            output = (result.stdout or "") + (result.stderr or "")
-            if result.returncode != 0:
+            output = (proc.stdout or "") + (proc.stderr or "")
+            if proc.returncode != 0:
                 raise RuntimeToolValidationError(
-                    f"git history inspection failed with exit code {result.returncode}: "
+                    f"git history inspection failed with exit code {proc.returncode}: "
                     f"{output[:500]}"
                 )
             return output[:200_000]

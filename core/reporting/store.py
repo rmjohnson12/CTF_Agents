@@ -78,7 +78,7 @@ class ReportingStore:
                     data["final_flag"], data["error_message"],
                 ),
             )
-            return int(cursor.lastrowid)
+            return int(cursor.lastrowid or 0)
 
     def timeline(
         self,

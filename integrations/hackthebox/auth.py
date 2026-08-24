@@ -160,8 +160,10 @@ def _login(creds: HTBCredentials, config: HTBConfig, session: Optional[requests.
 
     try:
         data = resp.json()
-    except ValueError:
-        raise HTBAuthError("Login returned non-JSON; use an App Token via HTB_TOKEN instead.")
+    except ValueError as exc:
+        raise HTBAuthError(
+            "Login returned non-JSON; use an App Token via HTB_TOKEN instead."
+        ) from exc
 
     if _requires_2fa(data):
         if not creds.otp:

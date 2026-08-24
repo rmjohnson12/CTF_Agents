@@ -71,8 +71,7 @@ class NetworkingAgent(BaseAgent):
         steps = []
         files = challenge.get("files", [])
         url = challenge.get("url") or challenge.get("target", {}).get("url")
-        description = challenge.get("description", "").lower()
-        
+
         flag = None
         artifacts = {}
 
@@ -108,7 +107,7 @@ class NetworkingAgent(BaseAgent):
 
             # Step C: Stream Reconstruction (Scapy)
             try:
-                steps.append(f"  Reconstructing streams with Scapy...")
+                steps.append("  Reconstructing streams with Scapy...")
                 streams = self.scapy_tool.reconstruct_all_streams(pcap)
                 steps.append(f"    Extracted {len(streams)} streams.")
                 

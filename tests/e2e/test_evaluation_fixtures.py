@@ -90,7 +90,7 @@ def test_eval_ctfd_decimal_encoding():
 
     result = build_coordinator().solve_challenge(challenge)
 
-    assert result["status"] == "solved", f"Expected solved. Steps:\n" + "\n".join(result.get("steps", []))
+    assert result["status"] == "solved", "Expected solved. Steps:\n" + "\n".join(result.get("steps", []))
     assert result["flag"] == "CTF{dec2asc}"
 
 
@@ -115,7 +115,7 @@ def test_eval_pico_hex_encoding():
 
     result = build_coordinator().solve_challenge(challenge)
 
-    assert result["status"] == "solved", f"Expected solved. Steps:\n" + "\n".join(result.get("steps", []))
+    assert result["status"] == "solved", "Expected solved. Steps:\n" + "\n".join(result.get("steps", []))
     assert result["flag"] == "CTF{hex_d3c0de}"
 
 
@@ -139,5 +139,5 @@ def test_eval_log_web_access_most_common_ip():
 
     result = build_coordinator().solve_challenge(challenge)
 
-    assert result["status"] == "solved", f"Expected solved. Steps:\n" + "\n".join(result.get("steps", []))
+    assert result["status"] == "solved", "Expected solved. Steps:\n" + "\n".join(result.get("steps", []))
     assert result["flag"] == "172.16.42.200"

@@ -128,7 +128,7 @@ class CodingAgent(BaseAgent):
         # Get task description from inputs (passed by coordinator) or challenge description
         task_desc = challenge.get('current_task_description') or challenge.get('description', 'Solve the challenge')
         
-        analysis = self.analyze_challenge(challenge)
+        self.analyze_challenge(challenge)
         steps = []
         flag = None
         max_retries = 3
@@ -306,6 +306,11 @@ for path in paths:
                 'flag': None,
                 'steps': steps
             }
+
+        # Bound before the loop: both are read at the top of a retry
+        # iteration but only assigned further down the body.
+        last_error: Optional[str] = None
+        last_stdout: Optional[str] = None
 
         for attempt in range(max_retries + 1):
             if not script_content or attempt > max_retries:

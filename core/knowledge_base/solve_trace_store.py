@@ -132,7 +132,7 @@ class SolveTraceStore:
                     time.time(),
                 ),
             )
-            return int(cursor.lastrowid)
+            return int(cursor.lastrowid or 0)
 
     def get_recent_solves(
         self,
@@ -314,7 +314,7 @@ class SolveTraceStore:
 
     @staticmethod
     def _artifact_keys(history: List[Dict[str, Any]], result: Dict[str, Any]) -> List[str]:
-        keys = set()
+        keys: set[str] = set()
         for entry in [*history, result]:
             artifacts = entry.get("artifacts") or {}
             if isinstance(artifacts, dict):

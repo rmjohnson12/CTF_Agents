@@ -912,12 +912,10 @@ contract MagicVaultSolver {{
             winner = self._select_winning_arg(
                 web3, target, candidates, plan, keccak, abi_encode, steps
             )
-            replayed_any = False
             if winner is not None:
                 steps.append(f"Recovered winning argument from a prior transaction: 0x{winner.hex()}")
                 if not self._replay_solve_arg(web3, acct, target, selector, winner, steps):
                     return None
-                replayed_any = True
             else:
                 # No pre-verifiable winner: bounded replay of distinct arguments
                 # broadcast by *other* players, newest first, checking isSolved.
@@ -937,7 +935,6 @@ contract MagicVaultSolver {{
                 for arg in distinct:
                     if not self._replay_solve_arg(web3, acct, target, selector, arg, steps):
                         continue
-                    replayed_any = True
                     if self._verify_solved(web3, setup_address, target, acct.address, steps):
                         winner = arg
                         break

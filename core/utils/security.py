@@ -6,7 +6,7 @@ import re
 import socket
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator, List
+from typing import Any, Iterable, Iterator, List, Union
 from urllib.parse import urlparse
 
 import yaml
@@ -255,7 +255,10 @@ def _host_matches_allowed(host: str, allowed: Iterable[str]) -> bool:
     return False
 
 
-def _ip_matches_allowed(ip: ipaddress._BaseAddress, allowed: Iterable[str]) -> bool:
+def _ip_matches_allowed(
+    ip: Union[ipaddress.IPv4Address, ipaddress.IPv6Address],
+    allowed: Iterable[str],
+) -> bool:
     for entry in allowed:
         entry = entry.strip()
         if not entry:

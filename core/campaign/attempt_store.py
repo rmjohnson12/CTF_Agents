@@ -128,7 +128,7 @@ class AttemptStore:
                     json.dumps(summary, sort_keys=True, default=str),
                 ),
             )
-            attempt_id = int(cursor.lastrowid)
+            attempt_id = int(cursor.lastrowid or 0)
             for sequence, entry in enumerate(safe_result.get("history") or []):
                 routing = entry.get("routing") or {}
                 actor = entry.get("agent_id") or routing.get("selected_target")

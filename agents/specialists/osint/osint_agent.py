@@ -65,7 +65,7 @@ class OSINTAgent(BaseAgent):
         }
 
     def solve_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
-        analysis = self.analyze_challenge(challenge)
+        self.analyze_challenge(challenge)
         steps: List[str] = []
         flag = None
         artifacts = {}
@@ -96,7 +96,6 @@ class OSINTAgent(BaseAgent):
 
         # 2. Extract and analyze domains/emails/usernames
         domains = re.findall(r'[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', description)
-        emails = re.findall(r'[a-zA-Z0-9.-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', description)
         
         if domains:
             steps.append(f"Found potential domains: {', '.join(domains[:3])}")

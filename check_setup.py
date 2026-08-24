@@ -267,7 +267,7 @@ def check():
         if local_rockyou.exists():
             print(f"[+] Wordlist: Found at {local_rockyou.absolute()}")
         else:
-            print(f"[-] Wordlist: rockyou.txt not found (Cracking will be limited)")
+            print("[-] Wordlist: rockyou.txt not found (Cracking will be limited)")
 
     print("\n[!] Setup check complete.")
 

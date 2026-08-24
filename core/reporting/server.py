@@ -182,8 +182,8 @@ def create_app(
                 request.headers.get("Last-Event-ID")
                 or request.query.get("after_id", "0")
             )
-        except ValueError:
-            raise web.HTTPBadRequest(text="invalid Last-Event-ID")
+        except ValueError as exc:
+            raise web.HTTPBadRequest(text="invalid Last-Event-ID") from exc
 
         stream_headers = {
             "Content-Type": "text/event-stream",

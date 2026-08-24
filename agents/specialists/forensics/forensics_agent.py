@@ -108,7 +108,7 @@ class ForensicsAgent(BaseAgent):
         }
 
     def solve_challenge(self, challenge: Dict[str, Any]) -> Dict[str, Any]:
-        analysis = self.analyze_challenge(challenge)
+        self.analyze_challenge(challenge)
         steps: List[str] = []
         flag = None
 
@@ -186,7 +186,7 @@ class ForensicsAgent(BaseAgent):
                 try:
                     pdf_res = self.qpdf_tool.run(file_path)
                     if pdf_res.is_encrypted:
-                        steps.append(f"  [!] PDF is encrypted. Attempting to find password...")
+                        steps.append("  [!] PDF is encrypted. Attempting to find password...")
                         
                         # 1. Try common wordlist (rockyou) via John
                         wordlist = next((p for p in DEFAULT_ROCKYOU_PATHS if os.path.exists(p)), None)
@@ -491,7 +491,9 @@ class ForensicsAgent(BaseAgent):
             arguments = re.findall(r"[\"']([^\"']*)[\"']", match.group("arguments"))
             template = match.group("template")
 
-            def substitute(index_match: re.Match[str]) -> str:
+            def substitute(
+                index_match: re.Match[str], arguments: List[str] = arguments
+            ) -> str:
                 index = int(index_match.group(1))
                 return arguments[index] if index < len(arguments) else ""
 
