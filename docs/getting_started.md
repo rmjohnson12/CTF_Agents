@@ -3,8 +3,8 @@
 ## Requirements
 
 - Python 3.10 or newer
-- Packages from `requirements.txt`
-- Optional external security tools reported by `python3 check_setup.py`
+- Packages declared in `pyproject.toml`
+- Optional external security tools reported by `ctf-agents-check`
 - Optional LLM credentials in the project-root `.env`
 
 ## Setup
@@ -12,9 +12,9 @@
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[all]"
 cp .env.example .env
-python3 check_setup.py
+ctf-agents-check
 ```
 
 The project-root `.env.example` is the configuration template. Do not commit

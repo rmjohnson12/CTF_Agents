@@ -28,7 +28,10 @@ CTF_Agents/
 ├── reporting_server.py     Standalone live-reporting HTTP service launcher
 ├── simulate.py             Original iterative workflow simulator
 ├── simulate_v2.py          Expanded simulator scenarios
-├── requirements.txt        Python dependency list
+├── pyproject.toml          Packaging, dependencies/extras, ruff/mypy/pytest config
+├── uv.lock                 Resolved dependency versions for reproducible installs
+├── requirements.txt        Compatibility shim; resolves to `-e .[all]`
+├── SECURITY.md             Vulnerability disclosure policy and scope
 └── README.md               Main user-facing project guide
 ```
 

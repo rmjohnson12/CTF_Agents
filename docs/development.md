@@ -5,10 +5,17 @@
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 pytest -q -p no:cacheprovider
-python3 check_setup.py
+ruff check .
+mypy
+ctf-agents-check
 ```
+
+`[dev]` pulls in every specialist extra plus the test and lint tooling. See the
+extras table in the [README](../README.md#installation) for leaner installs.
+Dependencies and the ruff/mypy/pytest configuration all live in
+`pyproject.toml`; `uv.lock` pins the resolved versions.
 
 Keep changes narrow, preserve existing interfaces, and prefer extending an
 existing agent or wrapper over adding a parallel abstraction.

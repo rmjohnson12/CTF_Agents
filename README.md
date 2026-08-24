@@ -21,17 +21,38 @@ git clone https://github.com/rmjohnson12/CTF_Agents.git
 cd CTF_Agents
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[all]"
 cp .env.example .env
-python3 check_setup.py
+ctf-agents-check
 ```
+
+`[all]` installs every specialist. To keep the install lean, take only what you
+need — the core install always includes routing, the LLM providers, the web
+tooling, and the deterministic crypto paths:
+
+| Extra          | Adds                                          | Needed for                                  |
+| -------------- | --------------------------------------------- | ------------------------------------------- |
+| `[lattice]`    | `fpylll`, `cysignals`                         | Coppersmith / RSA partial-key recovery      |
+| `[blockchain]` | `web3`, `py-solc-x`                           | Solidity challenges, on-chain interaction   |
+| `[reversing]`  | `pwntools`, `z3-solver`, `capstone`, `unicorn`| pwn, symbolic execution, CPU emulation      |
+| `[forensics]`  | `pykeepass`, `pypdf`                          | KDBX recovery, PDF artifact extraction      |
+| `[ml]`         | `gensim`                                      | Word-vector analogy challenges              |
+| `[dev]`        | all of the above, plus pytest/ruff/mypy       | contributing                                |
+
+`[lattice]` compiles against GMP/MPFR/MPC. On Debian/Ubuntu:
+`sudo apt-get install libgmp-dev libmpfr-dev libmpc-dev`.
+
+`pip install -r requirements.txt` still works and is equivalent to `.[all]`.
+Exact resolved versions for a reproducible install are pinned in `uv.lock`
+(`uv sync --all-extras`).
 
 The project-root `.env.example` is the supported configuration template. Add
 one or more optional provider credentials for live model reasoning.
 Deterministic specialist paths remain available without an LLM where
 implemented.
 
-`check_setup.py` reports external tools, provider credentials, solver backends,
+`ctf-agents-check` (equivalently `python3 check_setup.py`) reports external
+tools, provider credentials, solver backends,
 and the reversing/pwn stack. Those last two sections matter most: specialists
 import `fpylll`, `sympy`, `z3`, `pycryptodome`, `angr`, and friends lazily, and
 they skip Ghidra when `GHIDRA_HOME` is unset, so a missing dependency fails
@@ -45,9 +66,20 @@ whether this host can execute challenge binaries at all.
 Use the natural-language CLI:
 
 ```bash
-python3 ask.py "Crypto challenge: decode 48 54 42 7b 68 65 78 7d"
-python3 ask.py --plan "Web challenge at http://127.0.0.1:3000"
+ctf-agents "Crypto challenge: decode 48 54 42 7b 68 65 78 7d"
+ctf-agents --plan "Web challenge at http://127.0.0.1:3000"
 ```
+
+Installing the project puts five commands on `PATH`. Each is equivalent to the
+repo-root script it wraps, so `python3 ask.py ...` keeps working unchanged:
+
+| Command                | Script               | Purpose                          |
+| ---------------------- | -------------------- | -------------------------------- |
+| `ctf-agents`           | `ask.py`             | natural-language entry point     |
+| `ctf-agents-run`       | `main.py`            | structured challenge JSON        |
+| `ctf-agents-campaign`  | `campaign.py`        | bounded campaign / benchmarks    |
+| `ctf-agents-check`     | `check_setup.py`     | environment and backend report   |
+| `ctf-agents-report`    | `reporting_server.py`| live reporting service           |
 
 Remote targets must be explicitly allowlisted:
 
@@ -341,7 +373,12 @@ config/       Runtime and tool configuration
 Use CTF_Agents only against systems and challenge instances you are authorized
 to test. Network allowlists, environment isolation, artifact redaction, Docker
 controls, and host-execution controls are documented in
-[docs/security_model.md](docs/security_model.md).
+[docs/security_model.md](docs/security_model.md), which also states how
+challenge-authored text reaching the model is contained.
+
+Found a way past one of those boundaries? Report it privately — see
+[SECURITY.md](SECURITY.md), which also draws the line between a vulnerability
+and the tool doing its job.
 
 ## Development and Verification
 
@@ -349,6 +386,13 @@ Run the complete deterministic suite without contacting an LLM provider:
 
 ```bash
 LLM_PROVIDER=none .venv/bin/python -m pytest -q
+```
+
+Lint and type checks, matching what CI runs:
+
+```bash
+ruff check .
+mypy
 ```
 
 Provider integration tests are opt-in. New runtime, sandbox, and specialist
