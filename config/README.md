@@ -28,15 +28,14 @@ This directory contains configuration files for the multi-agent CTF system.
 
 ## Environment Variables
 
-Sensitive configuration should use environment variables:
-- API keys
-- Database passwords
+Secrets belong in environment variables, never in the YAML files above:
+- Provider API keys
 - External service credentials
-- Secret tokens
+- Live-reporting tokens
 
 Copy the repository-root `.env.example` to `.env` for local API keys and
-provider selection. `config/.env.example` is kept for legacy reference, but the
-runtime loads the root `.env`.
+provider selection. The root `.env` is the only environment file the runtime
+loads; there is no `config/.env`.
 
 ## Configuration Hierarchy
 
@@ -48,21 +47,5 @@ Configuration priority (highest to lowest):
 
 ## Example Structure
 
-```yaml
-# system_config.yaml
-system:
-  name: "CTF Multi-Agent System"
-  version: "1.0.0"
-  max_concurrent_challenges: 5
-  log_level: "INFO"
-  
-coordinator:
-  strategy: "hierarchical"
-  decision_threshold: 0.8
-  timeout_minutes: 30
-  
-performance:
-  enable_caching: true
-  parallel_agents: true
-  max_threads: 10
-```
+See `system_config.yaml` for the live schema. It is not reproduced here, so the
+two cannot drift apart.
