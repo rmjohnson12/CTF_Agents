@@ -2,6 +2,58 @@
 
 CTF_Agents treats challenge metadata and artifacts as untrusted input.
 
+## Untrusted content and prompt injection
+
+Challenge descriptions, file artifacts, HTTP response bodies, disassembly
+listings, and Git history are all written by the challenge author, and all of
+them reach the recovery model as observations. Assume every one of them contains
+text addressed to the model.
+
+The stance is that observed content is **data, never instruction**. The system
+does not rely on the model recognizing or refusing an injected instruction.
+Containment is structural: the model has no capability that an injected
+instruction could usefully redirect.
+
+- **No direct action.** The model never executes anything. Its only outward
+  product is a declarative specification of at most 12 operations drawn from a
+  fixed allowlist (same-origin HTTP, reads of supplied artifacts, bounded regex,
+  base64/hex/URL decode, JSON lookup, and sandboxed compute). It cannot emit
+  shell commands, install packages, or register a persistent tool.
+- **Evidence must be real.** Every proposal has to cite trace facts, and the
+  validator checks each citation against the observed trace, rejecting the
+  proposal outright when a citation is not present (`core/runtime_synthesis.py`,
+  `_validate_spec` / `_evidence_supported`). Text invented to justify an action
+  fails the gate.
+- **Targets cannot authorize themselves.** A URL that appears inside artifact
+  text still has to satisfy the same-origin rule and the host allowlist. See
+  [Network boundaries](#network-boundaries).
+- **Paths cannot escape.** Reads resolve only to explicitly supplied artifacts;
+  path escapes are rejected.
+- **Generated code is contained, not trusted.** Model-authored Python runs only
+  in the fail-closed Docker backend with `--network none`, or not at all. Host
+  execution requires a separate, explicit operator opt-in.
+- **Flags must be earned.** A run is marked solved only when a flag pattern is
+  found in *executed output* (`core/runtime_synthesis.py`). A model that simply
+  asserts a flag — because an artifact told it to — cannot mark a run solved.
+- **Context is bounded and redacted.** Challenge data, the last 6 history
+  entries, and the last 60 steps are passed through `redact_sensitive_data`
+  before they reach a provider (`core/decision_engine/llm_reasoner.py`).
+
+Known limits, stated plainly:
+
+- There is no prompt-level instruction telling the model to disregard directives
+  found in artifacts. The guarantees above are structural, not persuasive, and
+  should be read that way.
+- Injected text can still influence *which* allowed operation gets chosen. It
+  can waste turns or steer analysis down a dead end. It cannot widen the
+  allowlist, reach a new host, read an unsupplied path, or manufacture a flag.
+- Redaction is pattern-based. It reduces incidental secret exposure to a
+  provider; it is not a guarantee against a determined exfiltration attempt
+  embedded in challenge text.
+
+Report anything that crosses one of these boundaries through
+[SECURITY.md](../SECURITY.md).
+
 ## Network boundaries
 
 Remote hosts must be approved through `CTF_AGENTS_ALLOWED_NETWORKS` or trusted
