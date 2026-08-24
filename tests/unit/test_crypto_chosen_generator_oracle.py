@@ -69,7 +69,7 @@ def test_agent_solves_chosen_generator_bit_oracle(tmp_path):
     from Crypto.Util.Padding import pad
 
     key = secrets.token_bytes(16)
-    key_bits = list(map(int, f"{int.from_bytes(key):0128b}"))
+    key_bits = list(map(int, f'{int.from_bytes(key, "big"):0128b}'))
     ct_hex = AES.new(key, AES.MODE_ECB).encrypt(pad(_FLAG, 16)).hex()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

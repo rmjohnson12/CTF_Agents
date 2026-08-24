@@ -148,7 +148,14 @@ ignore = ["E501", "F401", "B905"]
 "tests/**" = ["B011", "F841"]
 
 [tool.mypy]
-python_version = "3.10"
+# Not the project minimum (3.10). numpy >= 2.5 reaches the module graph through
+# openai._extras.numpy_proxy and ships stubs written with PEP 695 `type`
+# statements, which mypy treats as a fatal parse error whenever python_version
+# is below 3.12. That failure pre-empts per-module overrides, so the target has
+# to move rather than be suppressed. Minimum-version compatibility is enforced
+# by the 3.10-3.13 pytest matrix in CI, which is what caught the 3.11+-only
+# int.from_bytes() default in the first place.
+python_version = "3.12"
 files = ["core"]
 # core/ is the beachhead. Imports into tools/ and agents/ are resolved for
 # types but not themselves reported yet; widen `files` as they are cleaned up.
@@ -159,6 +166,7 @@ warn_redundant_casts = true
 no_implicit_optional = true
 # Not strict yet: core/ is the beachhead, specialists come later.
 check_untyped_defs = false
+
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

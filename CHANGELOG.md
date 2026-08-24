@@ -3,6 +3,18 @@
 Notable changes per release. Versions follow the tag on the default branch and
 `core/_version.py`, which is the single place the version is declared.
 
+## Unreleased
+
+### Fixes
+
+- `int.from_bytes()` without an explicit `byteorder` is Python 3.11+; the
+  chosen-generator oracle test used the default and failed on 3.10. Caught by
+  the new version matrix on its first run.
+- Moved the mypy target from 3.10 to 3.12. numpy >= 2.5 enters the module graph
+  through `openai._extras.numpy_proxy` and ships PEP 695 stubs that mypy treats
+  as a fatal parse error below 3.12, ahead of any per-module override. The
+  pytest matrix enforces minimum-version compatibility instead.
+
 ## 2.6.0 — 2026-08-24
 
 The first release since `v2.5` (tagged 2026-05-05), covering 138 commits of
