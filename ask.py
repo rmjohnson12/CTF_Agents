@@ -19,7 +19,8 @@ from core.utils.llm_health import warn_if_llm_degraded
 
 def _parse_cli_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="ask.py",
+        # No explicit prog: argparse uses argv[0], so help reads "ask.py" when
+        # run as a script and "ctf-agents" when run as the installed command.
         description="Run the natural-language CTF agent CLI.",
     )
     parser.add_argument(
@@ -757,10 +758,10 @@ Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) i
                         _merge_heuristic_context(ChallengeParser().parse_dict(llm_dict), heuristic)
                     )
                 except ParseError:
-                    print(f"LLM produced an invalid challenge shape, using heuristics...")
+                    print("LLM produced an invalid challenge shape, using heuristics...")
                     challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
                 except Exception:
-                    print(f"LLM mapping failed or not available, using heuristics...")
+                    print("LLM mapping failed or not available, using heuristics...")
                     challenge = _normalize_challenge(ChallengeParser().parse_dict(heuristic))
         else:
             # Follow-up input: append to description and set resume
@@ -821,21 +822,30 @@ Do NOT invent, guess, or hallucinate file paths or a url (like localhost:8080) i
         
         user_input = "" # Clear for next loop iteration input
 
-if __name__ == "__main__":
-    _one_shot_cli = len(sys.argv) > 1
-    _exit_code = 0
+def cli() -> int:
+    """Console-script entry point for ``ctf-agents``.
+
+    Holds the exit-code contract that used to live in the ``__main__`` block so
+    the installed script and ``python3 ask.py`` behave identically.
+    """
+    one_shot = len(sys.argv) > 1
+    exit_code = 0
     try:
         main()
     except KeyboardInterrupt:
-        _exit_code = 130
+        exit_code = 130
         print("\nInterrupted.", file=sys.stderr)
     except Exception:
-        _exit_code = 1
+        exit_code = 1
         import traceback
         traceback.print_exc()
     finally:
-        if _one_shot_cli:
+        if one_shot:
             sys.stdout.flush()
             sys.stderr.flush()
-            os._exit(_exit_code)
-    sys.exit(_exit_code)
+            os._exit(exit_code)
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(cli())

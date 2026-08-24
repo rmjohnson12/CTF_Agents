@@ -1,71 +1,10 @@
-# Requirements for the CTF Multi-Agent System
-
-# Core dependencies
-pyyaml>=6.0
-python-dotenv>=1.0.0
-pydantic>=2.0.0
-
-# Agent framework
-openai>=1.0.0  # For AI-powered agents
-anthropic>=0.8.0  # Alternative AI provider
-google-genai>=1.0.0  # Google Gemini / Gemini Enterprise Agent Platform provider
-
-# Communication and async
-aiohttp>=3.9.0
-# asyncio-mqtt>=0.16.0  # Unused in current core
-# redis>=5.0.0  # Optional: for message queue (unused)
-
-# Database and storage (unused in current core — uncomment if needed)
-# sqlalchemy>=2.0.0
-# alembic>=1.13.0
-# pymongo>=4.6.0  # Optional: for MongoDB
-
-# Web scraping and requests
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-selenium>=4.16.0
-playwright>=1.40.0
-web3>=7.0.0
-
-# Cryptography
-cryptography>=41.0.0
-pycryptodome>=3.19.0
-fpylll>=0.6.4  # Lattice reduction for RSA partial-key/Coppersmith attacks
-cysignals>=1.12.6  # Runtime dependency for fpylll
-
-# Data processing
-pandas>=2.1.0
-numpy>=1.26.0
-gensim>=4.3.0  # Word-vector analogy challenges; models require explicit download opt-in
-
-# Logging and monitoring
-structlog>=23.2.0
-sentry-sdk>=1.39.0
-
-# Testing
-pytest>=7.4.0
-pytest-asyncio>=0.23.0
-pytest-cov>=4.1.0
-pytest-mock>=3.12.0
-
-# Utilities
-click>=8.1.0  # CLI framework
-rich>=13.7.0  # Terminal formatting
-python-magic>=0.4.27  # File type detection
-
-# CTF-specific tools (Python libraries)
-pwntools>=4.11.0
-z3-solver>=4.12.0
-capstone>=5.0.0  # Disassembly
-# keystone-engine>=0.9.2  # Assembly (Disabled: build fails on Python 3.13)
-unicorn>=2.0.0  # CPU emulation
-pypdf>=5.0.0  # Text extraction from generated PDF challenge artifacts
-pykeepass>=4.1.1  # KDBX recovery for exfiltrated password-database forensics
-
-# Optional: ML/AI
-# scikit-learn>=1.3.0
-# tensorflow>=2.15.0
-# torch>=2.1.0
-scapy
-py-solc-x>=2.0  # compile/deploy attacker contracts for blockchain challenges
-sympy>=1.12  # discrete log / factoring for small-subgroup DH crypto challenges
+# Dependency metadata now lives in pyproject.toml.
+#
+# This file is kept as a working shim so the documented quickstart
+# (`pip install -r requirements.txt`) still installs the full stack. Prefer:
+#
+#   pip install -e ".[all]"     # every specialist
+#   pip install -e ".[dev]"     # the above plus test/lint tooling
+#
+# Add or change dependencies in pyproject.toml, not here.
+-e .[all]

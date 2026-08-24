@@ -112,5 +112,10 @@ def main(argv: List[str]) -> int:
     return 0
 
 
+def cli() -> int:
+    """Console-script entry point for ``ctf-agents-run``."""
+    return main(sys.argv)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(cli())

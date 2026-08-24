@@ -2,7 +2,7 @@
 
 system:
   name: "CTF Multi-Agent System"
-  version: "1.0.0"
+  # Version is not duplicated here; it lives in core/_version.py.
   environment: "development"  # development, staging, production
   
   # Concurrent challenge limits
