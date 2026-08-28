@@ -36,7 +36,7 @@ Handles the common HTB/CTF pattern where a binary has a reachable win function a
 | nm / objdump | Symbol and gadget extraction |
 | ROPgadget | ret gadget lookup |
 | ELF header parser | PIE, bitness, architecture, and emulation-platform detection |
-| angr | Symbolic execution (optional, `pip install angr`) |
+| angr | Symbolic execution (separate optional install: `pip install angr`; not included in project extras) |
 | Ghidra headless | Static analysis (optional, set `GHIDRA_HOME`) |
 
 ## Challenge Input Format

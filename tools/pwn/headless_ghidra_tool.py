@@ -10,17 +10,13 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import List, Optional
 
 from tools.common.runner import ToolRunner
 from tools.common.result import ToolResult
-
-# Path to the companion Ghidra postScript (relative to repo root)
-_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "shared" / "scripts"
-_POST_SCRIPT = _SCRIPT_DIR / "DumpAnalysis.java"
-
 
 @dataclass(frozen=True)
 class GhidraString:
@@ -125,20 +121,27 @@ class HeadlessGhidraTool:
         exports_path = str(work / "exports.tsv")
         functions_path = str(work / "functions.tsv")
 
-        argv = [
-            analyze_headless,
-            str(work),          # project location
-            project_name,       # project name
-            "-import", str(binary),
-            "-postScript", str(_POST_SCRIPT),
-            strings_path,
-            imports_path,
-            exports_path,
-            functions_path,
-            "-deleteProject",   # clean up the .gpr after run
-        ]
+        post_script = resources.files("tools.pwn").joinpath("DumpAnalysis.java")
+        if not post_script.is_file():
+            raise FileNotFoundError("Packaged Ghidra postScript is missing: DumpAnalysis.java")
 
-        res = self.runner.run(argv, timeout_s=timeout_s, cwd=str(work))
+        # as_file() also supports zipped importers. Keep the context open until
+        # Ghidra exits so any temporary extraction remains available.
+        with resources.as_file(post_script) as post_script_path:
+            argv = [
+                analyze_headless,
+                str(work),          # project location
+                project_name,       # project name
+                "-import", str(binary),
+                "-postScript", str(post_script_path),
+                strings_path,
+                imports_path,
+                exports_path,
+                functions_path,
+                "-deleteProject",   # clean up the .gpr after run
+            ]
+
+            res = self.runner.run(argv, timeout_s=timeout_s, cwd=str(work))
 
         # Parse the four artifact files
         strings = self._parse_strings(strings_path)

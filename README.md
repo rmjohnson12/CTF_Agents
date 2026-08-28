@@ -26,15 +26,16 @@ cp .env.example .env
 ctf-agents-check
 ```
 
-`[all]` installs every specialist. To keep the install lean, take only what you
-need — the core install always includes routing, the LLM providers, the web
-tooling, and the deterministic crypto paths:
+`[all]` installs the maintained Python extras for every specialist. To keep the
+install lean, take only what you need — the core install always includes
+routing, the LLM providers, the web tooling, and the deterministic crypto
+paths:
 
 | Extra          | Adds                                          | Needed for                                  |
 | -------------- | --------------------------------------------- | ------------------------------------------- |
 | `[lattice]`    | `fpylll`, `cysignals`                         | Coppersmith / RSA partial-key recovery      |
 | `[blockchain]` | `web3`, `py-solc-x`                           | Solidity challenges, on-chain interaction   |
-| `[reversing]`  | `pwntools`, `z3-solver`, `capstone`, `unicorn`| pwn, symbolic execution, CPU emulation      |
+| `[reversing]`  | `pwntools`, `z3-solver`, `capstone`, `unicorn`| pwn, constraint solving, CPU emulation      |
 | `[forensics]`  | `pykeepass`, `pypdf`                          | KDBX recovery, PDF artifact extraction      |
 | `[ml]`         | `gensim`                                      | Word-vector analogy challenges              |
 | `[dev]`        | all of the above, plus pytest/ruff/mypy       | contributing                                |
@@ -45,6 +46,12 @@ tooling, and the deterministic crypto paths:
 `pip install -r requirements.txt` still works and is equivalent to `.[all]`.
 Exact resolved versions for a reproducible install are pinned in `uv.lock`
 (`uv sync --all-extras`).
+
+`angr` is a separately installed reversing capability: `pip install angr`.
+It is intentionally not part of `[reversing]`, `[all]`, or `[dev]`, keeping its
+large native solver stack and release cadence independent from the baseline
+extras. The pwn specialist detects it at runtime and continues without symbolic
+execution when it is unavailable.
 
 The project-root `.env.example` is the supported configuration template. Add
 one or more optional provider credentials for live model reasoning.

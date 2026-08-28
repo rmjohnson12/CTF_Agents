@@ -4,6 +4,7 @@ These tests exercise the TSV parsers and GHIDRA_HOME validation
 without requiring a Ghidra installation.
 """
 import os
+from importlib import resources
 import pytest
 
 from tools.pwn.headless_ghidra_tool import (
@@ -12,6 +13,13 @@ from tools.pwn.headless_ghidra_tool import (
     GhidraExport,
     GhidraFunction,
 )
+
+
+def test_dump_analysis_is_a_package_resource():
+    script = resources.files("tools.pwn").joinpath("DumpAnalysis.java")
+
+    assert script.is_file()
+    assert "class DumpAnalysis" in script.read_text(encoding="utf-8")
 
 
 # ── TSV parsing ──────────────────────────────────────────────────────

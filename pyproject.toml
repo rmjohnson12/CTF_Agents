@@ -1,12 +1,13 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctf-agents"
 description = "A hierarchical multi-agent system for solving CTF challenges."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dynamic = ["version"]
 authors = [{ name = "CTF Agents Team" }]
@@ -119,6 +120,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 config = ["*.yaml"]
+"tools.pwn" = ["DumpAnalysis.java"]
 
 [tool.ruff]
 line-length = 120
