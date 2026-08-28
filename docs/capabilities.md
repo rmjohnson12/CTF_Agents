@@ -39,6 +39,10 @@ tests.
 ## Exploit and solution generation
 
 - Web authentication, source-guided API, upload, session, and dependency paths
+- Source-gated registration/login race exploitation for Go/SQL applications
+  where a nullable privilege column, non-atomic permission assignment, ignored
+  scan error, and privileged integer zero-value form a complete escalation chain;
+  attempts and concurrency are bounded and session tokens are never persisted
 - General API option/command enumeration (discover endpoints from client JS,
   enumerate option lists, submit secret/hidden options for a flag)
 - Evidence-gated URL-to-PDF chains spanning duplicate-parameter parser mismatches,

@@ -111,6 +111,31 @@ def test_reasoner_routes_web():
     assert analysis.recommended_action == "run_tool"
 
 
+def test_reasoner_routes_source_backed_web_challenge_to_web_agent_first(tmp_path):
+    reasoner = LLMReasoner(client=None)
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "main.go").write_text("package main")
+    challenge = {
+        "id": "web_source_001",
+        "name": "Source-backed web challenge",
+        "category": "web",
+        "description": "Analyze the supplied source and solve the authorized target.",
+        "url": "http://target:8080",
+        "files": [str(source_dir)],
+        "hints": [],
+        "tags": ["web"],
+        "metadata": {},
+    }
+
+    analysis = reasoner.analyze_challenge(challenge)
+    next_action = reasoner.choose_next_action(challenge, analysis, [])
+
+    assert next_action["next_action"] == "run_agent"
+    assert next_action["target"] == "web_agent"
+    assert "source-guided" in next_action["reasoning"]
+
+
 def test_reasoner_routes_secure_coding():
     reasoner = LLMReasoner(client=None)
 

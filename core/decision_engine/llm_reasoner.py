@@ -8,6 +8,7 @@ import threading
 import time
 import importlib
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
@@ -416,6 +417,20 @@ class LLMReasoner:
         history: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         direct_agent = self._direct_agent_for_category(challenge)
+        if (
+            not history
+            and direct_agent == "web_agent"
+            and self._has_web_source_artifacts(challenge)
+        ):
+            return {
+                "next_action": "run_agent",
+                "target": "web_agent",
+                "reasoning": (
+                    "The web challenge includes local source artifacts; dispatching "
+                    "to web_agent for source-guided analysis before generic browser recon."
+                ),
+                "inputs": {},
+            }
         if direct_agent and not history and self._analysis_allows_direct_route(direct_agent, analysis):
             return {
                 "next_action": "run_agent",
@@ -1021,6 +1036,35 @@ Invalid response:
             return False
         url = challenge.get("url") or challenge.get("target", {}).get("url")
         return bool(url)
+
+    @staticmethod
+    def _has_web_source_artifacts(challenge: Dict[str, Any]) -> bool:
+        source_suffixes = (
+            ".go", ".py", ".php", ".js", ".mjs", ".ts", ".tsx", ".jsx",
+            ".java", ".rb", ".rs", ".cs", ".sql", ".html", ".htm",
+        )
+        for raw_path in challenge.get("files", []):
+            candidate = Path(str(raw_path)).expanduser()
+            if candidate.is_dir():
+                try:
+                    for child in candidate.rglob("*"):
+                        if child.is_file() and (
+                            child.name.lower() in {
+                                "dockerfile", "compose.yml", "compose.yaml",
+                                "go.mod", "package.json",
+                            }
+                            or child.suffix.lower() in source_suffixes
+                        ):
+                            return True
+                except OSError:
+                    pass
+            path = str(candidate).lower()
+            name = path.rsplit("/", 1)[-1]
+            if path.endswith(source_suffixes) or name in {
+                "dockerfile", "compose.yml", "compose.yaml", "go.mod", "package.json"
+            }:
+                return True
+        return False
 
     @staticmethod
     def _direct_agent_for_category(challenge: Dict[str, Any]) -> Optional[str]:

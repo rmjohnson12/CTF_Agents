@@ -18,6 +18,25 @@ CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
 The final status distinguishes `solved`, `attempted`, and `failed`. Review the
 recent steps and persisted report before retrying.
 
+## Source-gated registration races
+
+When Go source proves the nullable-permission race pattern, pass both the source
+directory and authorized instance URL. The web specialist runs a bounded set of
+concurrent registration/login requests and accepts success only after the
+source-derived privileged route returns a flag:
+
+```bash
+CTF_AGENTS_ALLOWED_NETWORKS=TARGET \
+  python3 ask.py \
+  "Solve the authorized web target at https://TARGET using source in ~/Downloads/source"
+```
+
+If the CTF platform places an authentication proxy in front of the instance,
+store an exported cookie list locally as `config/sessions/NAME.json` and set
+`metadata.session_name` to `NAME` in structured challenge JSON. Session files
+are git-ignored; keep them mode `0600`. The playbook reports an authentication
+requirement without persisting cookie or JWT values.
+
 ## Resume
 
 Structured challenges can resume from `logs/checkpoints/<challenge_id>.json`:

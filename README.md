@@ -267,6 +267,13 @@ problem statement, uses deterministic programs for recognized classes such as
 weighted shortest-path problems, and otherwise can iterate with LLM-generated
 code plus grader feedback.
 
+For supplied Go web source, the web specialist also recognizes a complete
+registration/login permission race: a nullable privilege column omitted during
+insert, permission assignment in a later query, an ignored SQL scan error, and
+an admin value equal to Go's integer zero-value. Only that full source fingerprint
+activates the bounded concurrent playbook. JWTs and platform-session values are
+used in memory and excluded from persisted artifacts.
+
 Cryptography challenges are driven from the provided source or artifact rather
 than a fixed cipher list. A partially redacted PKCS#1 PEM is rebuilt into its
 base64 grid, walked through the DER with sub-byte precision to recover the
