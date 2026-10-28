@@ -60,9 +60,11 @@ class SessionCache:
     def save(self, token: str, user: Dict[str, Any]) -> None:
         payload = {"token": token, "user": user, "obtained_at": int(time.time())}
         try:
-            with open(self.path, "w", encoding="utf-8") as fh:
+            # Create 0600 up front so the token is never briefly world-readable.
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh)
-            os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+            os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)  # tighten a pre-existing file too
         except OSError as exc:  # pragma: no cover - best effort
             logger.warning("Could not write session cache %s: %s", self.path, exc)
 
