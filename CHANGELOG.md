@@ -10,6 +10,13 @@ Notable changes per release. Versions follow the tag on the default branch and
 - `int.from_bytes()` without an explicit `byteorder` is Python 3.11+; the
   chosen-generator oracle test used the default and failed on 3.10. Caught by
   the new version matrix on its first run.
+- The live-reporting client ignored `CTF_AGENTS_REPORTING_API_TOKEN`, the
+  shared token the server accepts for writes, so a client configured with only
+  that variable sent unauthenticated updates and got 401s. It now reads it
+  after `CTF_AGENTS_REPORTING_WRITE_TOKEN`. Token lookup for the client, the
+  API and `reporting_server.py` now lives in one place,
+  `core/reporting/config.py`, and a test checks that a client and server built
+  from the same environment agree.
 - Moved the mypy target from 3.10 to 3.12. numpy >= 2.5 enters the module graph
   through `openai._extras.numpy_proxy` and ships PEP 695 stubs that mypy treats
   as a fatal parse error below 3.12, ahead of any per-module override. The

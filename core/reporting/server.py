@@ -13,6 +13,7 @@ from typing import DefaultDict, Optional, Set
 from aiohttp import web
 from pydantic import ValidationError
 
+from core.reporting.config import resolve_read_token, resolve_write_token
 from core.reporting.models import ProgressUpdate
 from core.reporting.store import DEFAULT_REPORTING_DB, ReportingStore
 from core.reporting.redaction import redact_reporting_data
@@ -78,14 +79,8 @@ def create_app(
     reporting_store = store or ReportingStore(
         os.getenv("CTF_AGENTS_REPORTING_DB", DEFAULT_REPORTING_DB)
     )
-    fallback_token = api_token if api_token is not None else os.getenv("CTF_AGENTS_REPORTING_API_TOKEN")
-    write_token = write_token or os.getenv("CTF_AGENTS_REPORTING_WRITE_TOKEN") or fallback_token
-    read_token = (
-        read_token
-        or os.getenv("CTF_AGENTS_REPORTING_READ_TOKEN")
-        or fallback_token
-        or write_token
-    )
+    write_token = resolve_write_token(write_token, shared=api_token)
+    read_token = resolve_read_token(read_token, shared=api_token, write_token=write_token)
     if public_read is None:
         public_read = os.getenv("CTF_AGENTS_REPORTING_PUBLIC_READ") == "1"
     origins = allowed_origins
