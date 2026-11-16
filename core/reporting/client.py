@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from core.reporting.config import resolve_client_token
 from core.reporting.models import ProgressUpdate
 from core.reporting.redaction import redact_reporting_data
 
@@ -69,11 +70,7 @@ class HttpProgressReporter:
             timeout = 2.0
         return cls(
             endpoint,
-            token=(
-                os.getenv("CTF_AGENTS_REPORTING_WRITE_TOKEN")
-                or os.getenv("CTF_AGENTS_REPORTING_TOKEN")
-                or None
-            ),
+            token=resolve_client_token(),
             timeout_seconds=timeout,
             include_final_flag=os.getenv("CTF_AGENTS_REPORT_FINAL_FLAG") == "1",
             background=True,

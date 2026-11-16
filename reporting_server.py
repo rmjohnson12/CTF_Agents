@@ -7,6 +7,7 @@ import os
 
 from aiohttp import web
 
+from core.reporting.config import SHARED_TOKEN_ENV, WRITE_TOKEN_ENV, resolve_write_token
 from core.reporting.server import create_app
 from core.reporting.store import ReportingStore
 
@@ -18,12 +19,11 @@ def main() -> None:
     parser.add_argument("--db", default=os.getenv("CTF_AGENTS_REPORTING_DB", "logs/reporting.db"))
     args = parser.parse_args()
 
-    token = (
-        os.getenv("CTF_AGENTS_REPORTING_WRITE_TOKEN")
-        or os.getenv("CTF_AGENTS_REPORTING_API_TOKEN")
-    )
+    token = resolve_write_token()
     if args.host not in {"127.0.0.1", "localhost", "::1"} and not token:
-        parser.error("CTF_AGENTS_REPORTING_WRITE_TOKEN is required for a non-loopback bind")
+        parser.error(
+            f"{WRITE_TOKEN_ENV} (or {SHARED_TOKEN_ENV}) is required for a non-loopback bind"
+        )
 
     app = create_app(
         store=ReportingStore(args.db),

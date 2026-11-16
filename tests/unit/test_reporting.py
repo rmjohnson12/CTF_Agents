@@ -223,6 +223,61 @@ def test_background_http_reporter_flushes_without_blocking_emit(monkeypatch):
     assert [item["event_id"] for item in sent] == ["background-1"]
 
 
+def test_reporter_from_env_sends_shared_api_token_the_server_accepts(monkeypatch):
+    # The server falls back to CTF_AGENTS_REPORTING_API_TOKEN for writes; a client
+    # configured with only that variable must send it or every POST gets a 401.
+    monkeypatch.setenv("CTF_AGENTS_REPORTING_URL", "https://reports.example")
+    monkeypatch.setenv("CTF_AGENTS_REPORTING_API_TOKEN", "shared")
+
+    assert HttpProgressReporter.from_env().token == "shared"
+
+
+_REPORTING_TOKEN_ENVS = (
+    "CTF_AGENTS_REPORTING_WRITE_TOKEN",
+    "CTF_AGENTS_REPORTING_READ_TOKEN",
+    "CTF_AGENTS_REPORTING_API_TOKEN",
+    "CTF_AGENTS_REPORTING_TOKEN",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token_env",
+    [
+        {"CTF_AGENTS_REPORTING_API_TOKEN": "shared"},
+        {"CTF_AGENTS_REPORTING_WRITE_TOKEN": "write"},
+        {"CTF_AGENTS_REPORTING_WRITE_TOKEN": "write", "CTF_AGENTS_REPORTING_API_TOKEN": "shared"},
+        {"CTF_AGENTS_REPORTING_WRITE_TOKEN": "write", "CTF_AGENTS_REPORTING_READ_TOKEN": "read"},
+    ],
+    ids=["shared-only", "write-only", "write-and-shared", "write-and-read"],
+)
+async def test_client_and_server_built_from_one_env_agree_on_write_token(
+    tmp_path, monkeypatch, token_env
+):
+    # Both sides read tokens from the environment; an update the client sends must
+    # be accepted by a server configured from that same environment.
+    for name in _REPORTING_TOKEN_ENVS:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in token_env.items():
+        monkeypatch.setenv(name, value)
+
+    store = ReportingStore(str(tmp_path / "agree.db"))
+    client = TestClient(TestServer(create_app(store=store)))
+    await client.start_server()
+    try:
+        monkeypatch.setenv("CTF_AGENTS_REPORTING_URL", str(client.make_url("/")))
+        reporter = HttpProgressReporter.from_env()
+        loop = asyncio.get_running_loop()
+        # urllib blocks, so send off the event loop that is serving the request.
+        accepted = await loop.run_in_executor(
+            None, reporter._send_payload, ProgressUpdate.model_validate(_event()).model_dump(mode="json")
+        )
+        assert accepted is True
+        assert [item["event_id"] for item in store.timeline("run-1")] == ["event-1"]
+    finally:
+        await client.close()
+
+
 class CapturingReporter:
     def __init__(self):
         self.events = []
